@@ -23,12 +23,12 @@ template <typename T> struct StructuredBuffer {
   uint32_t size;
 };
 
-struct SplineState//((packed))
+struct VolumeState//((packed))
 {
   float2 distortion_parts;
   float2 cum_sum;
   float3 padding;
-  // Spline state
+  // Ray-marching state
   float t;
   float4 drgb;
 
