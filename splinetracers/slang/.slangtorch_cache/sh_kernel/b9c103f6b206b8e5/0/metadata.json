@@ -1,0 +1,74 @@
+{
+    "cpp": {
+        "options": [],
+        "deps": [
+            [
+                "E:\\projects\\multi-view-hair\\code\\volume_primitive\\ever\\splinetracers\\slang\\sh_kernel.slang",
+                1768542393.359872
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\code\\volume_primitive\\ever\\splinetracers\\slang\\safe-math.slang",
+                1768542393.3578727
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\code\\volume_primitive\\ever\\splinetracers\\slang\\tensor-util.slang",
+                1768542393.3608727
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\code\\volume_primitive\\ever\\splinetracers\\slang\\sh.slang",
+                1768542393.3588724
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\code\\volume_primitive\\ever\\splinetracers\\slang\\sh-half.slang",
+                1768542393.3588724
+            ],
+            [
+                "C:\\pixi\\envs\\volume_primitive-3714159231942262314\\envs\\default\\Lib\\site-packages\\slangtorch\\bin\\slangc.exe",
+                1768544211.0053413
+            ],
+            [
+                "C:\\pixi\\envs\\volume_primitive-3714159231942262314\\envs\\default\\Lib\\site-packages\\slangtorch\\bin\\slang.dll",
+                1768544210.9984035
+            ]
+        ],
+        "version": "1.2.8",
+        "includePaths": []
+    },
+    "cuda": {
+        "options": [],
+        "deps": [
+            [
+                "E:\\projects\\multi-view-hair\\code\\volume_primitive\\ever\\splinetracers\\slang\\sh_kernel.slang",
+                1768542393.359872
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\code\\volume_primitive\\ever\\splinetracers\\slang\\safe-math.slang",
+                1768542393.3578727
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\code\\volume_primitive\\ever\\splinetracers\\slang\\tensor-util.slang",
+                1768542393.3608727
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\code\\volume_primitive\\ever\\splinetracers\\slang\\sh.slang",
+                1768542393.3588724
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\code\\volume_primitive\\ever\\splinetracers\\slang\\sh-half.slang",
+                1768542393.3588724
+            ],
+            [
+                "C:\\pixi\\envs\\volume_primitive-3714159231942262314\\envs\\default\\Lib\\site-packages\\slangtorch\\bin\\slangc.exe",
+                1768544211.0053413
+            ],
+            [
+                "C:\\pixi\\envs\\volume_primitive-3714159231942262314\\envs\\default\\Lib\\site-packages\\slangtorch\\bin\\slang.dll",
+                1768544210.9984035
+            ]
+        ],
+        "version": "1.2.8",
+        "includePaths": []
+    },
+    "moduleName": "_slangtorch_sh_kernel_b9c103f6b206b8e5",
+    "moduleBinary": "E:\\projects\\multi-view-hair\\code\\volume_primitive\\ever\\splinetracers\\slang\\.slangtorch_cache\\sh_kernel\\b9c103f6b206b8e5\\0\\_slangtorch_sh_kernel_b9c103f6b206b8e5.pyd"
+}

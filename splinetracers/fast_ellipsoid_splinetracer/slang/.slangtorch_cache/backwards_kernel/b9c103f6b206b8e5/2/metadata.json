@@ -1,0 +1,94 @@
+{
+    "cpp": {
+        "options": [],
+        "deps": [
+            [
+                "E:\\projects\\multi-view-hair\\related\\ever_training\\ever\\splinetracers\\fast_ellipsoid_splinetracer\\slang\\backwards_kernel.slang",
+                1768542393.3478627
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\related\\ever_training\\ever\\splinetracers\\fast_ellipsoid_splinetracer\\slang\\spline-machine.slang",
+                1768542393.3498635
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\related\\ever_training\\ever\\splinetracers\\slang\\safe-math.slang",
+                1768542393.3578727
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\related\\ever_training\\ever\\splinetracers\\slang\\optix.slang",
+                1768542393.355369
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\related\\ever_training\\ever\\splinetracers\\slang\\optix-intrinsics.slang",
+                1768575165.0732732
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\related\\ever_training\\ever\\splinetracers\\fast_ellipsoid_splinetracer\\slang\\tri-intersect.slang",
+                1768542393.3508627
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\related\\ever_training\\ever\\splinetracers\\slang\\sh.slang",
+                1768542393.3588724
+            ],
+            [
+                "C:\\pixi\\envs\\ever_training-15117916568504570051\\envs\\default\\Lib\\site-packages\\slangtorch\\bin\\slangc.exe",
+                1768544211.0053413
+            ],
+            [
+                "C:\\pixi\\envs\\ever_training-15117916568504570051\\envs\\default\\Lib\\site-packages\\slangtorch\\bin\\slang.dll",
+                1768544210.9984035
+            ]
+        ],
+        "version": "1.2.8",
+        "includePaths": [
+            "E:\\projects\\multi-view-hair\\related\\ever_training\\ever\\splinetracers\\slang"
+        ]
+    },
+    "cuda": {
+        "options": [],
+        "deps": [
+            [
+                "E:\\projects\\multi-view-hair\\related\\ever_training\\ever\\splinetracers\\fast_ellipsoid_splinetracer\\slang\\backwards_kernel.slang",
+                1768542393.3478627
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\related\\ever_training\\ever\\splinetracers\\fast_ellipsoid_splinetracer\\slang\\spline-machine.slang",
+                1768542393.3498635
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\related\\ever_training\\ever\\splinetracers\\slang\\safe-math.slang",
+                1768542393.3578727
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\related\\ever_training\\ever\\splinetracers\\slang\\optix.slang",
+                1768542393.355369
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\related\\ever_training\\ever\\splinetracers\\slang\\optix-intrinsics.slang",
+                1768575165.0732732
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\related\\ever_training\\ever\\splinetracers\\fast_ellipsoid_splinetracer\\slang\\tri-intersect.slang",
+                1768542393.3508627
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\related\\ever_training\\ever\\splinetracers\\slang\\sh.slang",
+                1768542393.3588724
+            ],
+            [
+                "C:\\pixi\\envs\\ever_training-15117916568504570051\\envs\\default\\Lib\\site-packages\\slangtorch\\bin\\slangc.exe",
+                1768544211.0053413
+            ],
+            [
+                "C:\\pixi\\envs\\ever_training-15117916568504570051\\envs\\default\\Lib\\site-packages\\slangtorch\\bin\\slang.dll",
+                1768544210.9984035
+            ]
+        ],
+        "version": "1.2.8",
+        "includePaths": [
+            "E:\\projects\\multi-view-hair\\related\\ever_training\\ever\\splinetracers\\slang"
+        ]
+    },
+    "moduleName": "_slangtorch_backwards_kernel_b9c103f6b206b8e5",
+    "moduleBinary": "E:\\projects\\multi-view-hair\\related\\ever_training\\ever\\splinetracers\\fast_ellipsoid_splinetracer\\slang\\.slangtorch_cache\\backwards_kernel\\b9c103f6b206b8e5\\2\\_slangtorch_backwards_kernel_b9c103f6b206b8e5.pyd"
+}
