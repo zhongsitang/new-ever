@@ -13,7 +13,8 @@
 // limitations under the License.
 
 #pragma once
-#include "Forward.h"
+#include "TraceParams.h"
+#include "structs.h"
 
 void initialize_density(Params *params, OptixAabb *aabbs, int *d_touch_count=NULL, int *d_touch_inds=NULL);
 void initialize_density_so(Params *params);

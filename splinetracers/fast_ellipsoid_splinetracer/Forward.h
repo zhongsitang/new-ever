@@ -16,84 +16,34 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <math.h>
-#include <optix.h>
 #include <stdio.h>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include "slang-com-ptr.h"
+#include "slang-rhi.h"
 #include "structs.h"
+#include "TraceParams.h"
 
 using uint = uint32_t;
-
-// Forward declarations for embedded OptiX-IR data
-// These are defined in the generated .c files from bin2c
-extern "C" {
-extern const unsigned char shaders_optixir[];
-extern const size_t shaders_optixir_size;
-extern const unsigned char fast_shaders_optixir[];
-extern const size_t fast_shaders_optixir_size;
-}
-
-struct RayGenData
-{
-    // No data needed
-};
-struct MissData
-{
-    float3 bg_color;
-};
-typedef SbtRecord<RayGenData>     RayGenSbtRecord;
-typedef SbtRecord<MissData>       MissSbtRecord;
-
-struct HitGroupData {
-};
-typedef SbtRecord<HitGroupData> HitGroupSbtRecord;
-
-struct Params
-{
-    StructuredBuffer<float4> image;
-    StructuredBuffer<uint> iters;
-    StructuredBuffer<uint> last_face;
-    StructuredBuffer<uint> touch_count;
-    StructuredBuffer<float4> last_dirac;
-    StructuredBuffer<SplineState> last_state;
-    StructuredBuffer<int> tri_collection;
-    StructuredBuffer<float3> ray_origins;
-    StructuredBuffer<float3> ray_directions;
-    Cam camera;
-
-    StructuredBuffer<__half> half_attribs;
-
-    StructuredBuffer<float3> means;
-    StructuredBuffer<float3> scales;
-    StructuredBuffer<float4> quats;
-    StructuredBuffer<float> densities;
-    StructuredBuffer<float> features;
-
-    size_t sh_degree;
-    size_t max_iters;
-    float tmin;
-    float tmax;
-    StructuredBuffer<float4> initial_drgb;
-    float max_prim_size;
-    OptixTraversableHandle handle;
-};
 
 class Forward {
    public:
     Forward() = default;
     Forward(
-        const OptixDeviceContext &context,
-        int8_t device,
+        rhi::IDevice *device,
+        rhi::ICommandQueue *queue,
+        int8_t device_index,
         const Primitives &model,
         const bool enable_backward);
     ~Forward() noexcept(false);
-    void trace_rays(const OptixTraversableHandle &handle,
-                    const size_t num_rays,
+    void trace_rays(rhi::IAccelerationStructure *top_level_as,
+                    const size_t ray_count,
                     float3 *ray_origins,
                     float3 *ray_directions,
-                    void *image_out,
+                    void *output_image,
                     uint sh_degree,
                     float tmin,
                     float tmax,
@@ -101,31 +51,39 @@ class Forward {
                     Cam *camera=NULL,
                     const size_t max_iters=10000,
                     const float max_prim_size=3,
-                    uint *iters=NULL,
-                    uint *last_face=NULL,
-                    uint *touch_count=NULL,
-                    float4 *last_dirac=NULL,
-                    SplineState *last_state=NULL,
-                    int *tri_collection=NULL,
+                    uint *iteration_counts=NULL,
+                    uint *last_faces=NULL,
+                    uint *touch_counts=NULL,
+                    float4 *last_diracs=NULL,
+                    SplineState *last_states=NULL,
+                    int *hit_triangles=NULL,
                     int *d_touch_count=NULL,
-                    int *d_touch_inds=NULL);
+                    int *d_touch_indices=NULL);
    void reset_features(const Primitives &model);
    bool enable_backward = false;
    size_t num_prims = 0;
    private:
+    Slang::Result create_ray_tracing_pipeline();
+    Slang::Result load_shader_program(rhi::IShaderProgram **out_program) const;
+    void update_model_buffers(const Primitives &model);
+    Slang::ComPtr<rhi::IBuffer> create_buffer_from_cuda_pointer(
+        void *pointer,
+        size_t size,
+        size_t element_size,
+        rhi::BufferUsage usage,
+        rhi::ResourceState default_state) const;
+
     Params params;
-    // Context, streams, and accel structures are inherited
-    OptixDeviceContext context = nullptr;
-    int8_t device = -1;
-    const Primitives *model;
-    // Local fields used for this pipeline
-    OptixModule module = nullptr;
-    OptixShaderBindingTable sbt = {};
-    OptixPipeline pipeline = nullptr;
-    CUdeviceptr d_param = 0;
-    CUstream stream = nullptr;
-    OptixProgramGroup raygen_prog_group = nullptr;
-    OptixProgramGroup miss_prog_group = nullptr;
-    OptixProgramGroup hitgroup_prog_group = nullptr;
-    float eps = 1e-6;
+    Slang::ComPtr<rhi::IDevice> rhi_device;
+    Slang::ComPtr<rhi::ICommandQueue> queue;
+    Slang::ComPtr<rhi::IRayTracingPipeline> pipeline;
+    Slang::ComPtr<rhi::IShaderProgram> shader_program;
+    Slang::ComPtr<rhi::IShaderTable> shader_table;
+    Slang::ComPtr<rhi::IBuffer> means_buffer;
+    Slang::ComPtr<rhi::IBuffer> scales_buffer;
+    Slang::ComPtr<rhi::IBuffer> quats_buffer;
+    Slang::ComPtr<rhi::IBuffer> densities_buffer;
+    Slang::ComPtr<rhi::IBuffer> features_buffer;
+    int8_t device_index = -1;
+    const Primitives *model = nullptr;
 };

@@ -10,12 +10,8 @@
 # Target:
 #   - Pybind11 extension module: ellipsoid_splinetracer
 #
-# Shader pipeline (per slang_optixir_embed call):
-#   .slang -> .cu -> .optixir -> .c
-#
-# Generated C file contains:
-#   const unsigned char <NAME>[];
-#   const size_t <NAME>Length;
+# Shader pipeline:
+#   .slang -> runtime compilation via slang-rhi
 # =============================================================================
 
 cmake_minimum_required(VERSION 3.28 FATAL_ERROR)
@@ -53,9 +49,28 @@ list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(pybind11 REQUIRED)
 find_package(CUDAToolkit REQUIRED)
 
+include(FetchContent)
+
+set(SLANG_ENABLE_SLANG_RHI ON CACHE BOOL "" FORCE)
+set(SLANG_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+set(SLANG_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(SLANG_ENABLE_GFX OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+  slang_rhi
+  GIT_REPOSITORY https://github.com/shader-slang/slang-rhi.git
+  GIT_TAG v0.19.0
+)
+FetchContent_GetProperties(slang_rhi)
+if(NOT slang_rhi_POPULATED)
+  FetchContent_Populate(slang_rhi)
+endif()
+
+set(SLANG_OVERRIDE_SLANG_RHI_PATH "${slang_rhi_SOURCE_DIR}" CACHE PATH "" FORCE)
+add_subdirectory(slang-master EXCLUDE_FROM_ALL)
+
 include(FindOptiX)            # provides: OptiX_ROOT, OptiX_VERSION, OptiX::OptiX
 include(FindTorch)            # provides: Torch::Torch
-include(SlangOptiXIREmbed)    # provides: slang_optixir_embed()
 
 # -----------------------------------------------------------------------------
 # Project paths
@@ -63,10 +78,6 @@ include(SlangOptiXIREmbed)    # provides: slang_optixir_embed()
 set(TRACER_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/splinetracers/fast_ellipsoid_splinetracer")
 set(SLANG_DIR      "${TRACER_DIR}/slang")
 set(MAIN_SLANG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/splinetracers/slang")
-
-# Optional: override the default OptiX-IR output directory for all embed calls.
-# The embed function itself defaults to: ${CMAKE_CURRENT_BINARY_DIR}/optix_ir
-set(OPTIX_IR_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/optix_ir")
 
 # -----------------------------------------------------------------------------
 # Main pybind11 extension module
@@ -93,31 +104,6 @@ set_source_files_properties(
 )
 
 # -----------------------------------------------------------------------------
-# Shader embedding (Slang -> OptiX-IR -> C)
-# -----------------------------------------------------------------------------
-# NOTE:
-# - NAME is used as the C symbol name and must be a valid C identifier.
-# - OUT_DIR is optional; set it here to enforce a single directory globally.
-#
-slang_optixir_embed(
-  TARGET       ellipsoid_splinetracer
-  NAME         shaders_optixir
-  SLANG_FILE   ${SLANG_DIR}/shaders.slang
-  OPTIX_ROOT   ${OptiX_ROOT}
-  OUT_DIR      ${OPTIX_IR_OUT_DIR}
-  INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}
-)
-
-slang_optixir_embed(
-  TARGET       ellipsoid_splinetracer
-  NAME         fast_shaders_optixir
-  SLANG_FILE   ${SLANG_DIR}/fast_shaders.slang
-  OPTIX_ROOT   ${OptiX_ROOT}
-  OUT_DIR      ${OPTIX_IR_OUT_DIR}
-  INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}
-)
-
-# -----------------------------------------------------------------------------
 # Linking and compile options
 # -----------------------------------------------------------------------------
 target_link_libraries(ellipsoid_splinetracer PRIVATE
@@ -125,6 +111,8 @@ target_link_libraries(ellipsoid_splinetracer PRIVATE
   Torch::Torch
   CUDA::cudart
   CUDA::cuda_driver
+  slang
+  slang-rhi
 )
 
 # CUDA diagnostics (project-specific; keep minimal and explicit).
@@ -156,6 +144,5 @@ message(STATUS "  Project:            ${PROJECT_NAME} ${PROJECT_VERSION}")
 message(STATUS "  Build type:         ${CMAKE_BUILD_TYPE}")
 message(STATUS "  CUDA archs:         ${CMAKE_CUDA_ARCHITECTURES}")
 message(STATUS "  OptiX:              ${OptiX_VERSION} (${OptiX_ROOT})")
-message(STATUS "  OptiX-IR OUT_DIR:   ${OPTIX_IR_OUT_DIR}")
 message(STATUS "  Extension target:   ellipsoid_splinetracer")
 message(STATUS "========================================")
