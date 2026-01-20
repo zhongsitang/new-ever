@@ -6,6 +6,7 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 #include <torch/extension.h>
+#include <slangtorch.h>
 
 #include "Device.h"
 #include "AccelerationStructure.h"
@@ -20,11 +21,41 @@ T* tensor_ptr(torch::Tensor& t) {
     return t.data_ptr<T>();
 }
 
+// Get shader directory path
+static std::string get_shader_dir() {
+    // Try to find shaders relative to the module
+    py::module_ os = py::module_::import("os");
+    py::module_ pathlib = py::module_::import("pathlib");
+
+    py::object file_path = py::cast(__FILE__);
+    py::object parent = pathlib.attr("Path")(file_path).attr("parent").attr("parent");
+    py::object shader_dir = parent / "shaders";
+
+    return shader_dir.attr("__str__")().cast<std::string>();
+}
+
+// Static kernel module for backward pass
+static slangtorch::Module* backward_kernels = nullptr;
+
+static void ensure_backward_kernels() {
+    if (backward_kernels == nullptr) {
+        std::string shader_dir = get_shader_dir();
+        std::string shader_path = shader_dir + "/backward.slang";
+
+        std::vector<std::string> include_paths = {shader_dir};
+        backward_kernels = new slangtorch::Module(
+            slangtorch::loadModule(shader_path.c_str(), include_paths)
+        );
+    }
+}
+
 // Wrapper class for Python interface
 class GaussianRTContext {
 public:
     GaussianRTContext(int device_index = 0)
-        : device_(Device::create(device_index)) {}
+        : device_(Device::create(device_index)) {
+        ensure_backward_kernels();
+    }
 
     // Build acceleration structure from primitives
     void build_accel(
@@ -222,8 +253,51 @@ public:
         torch::Tensor dL_dinitial_drgb = torch::zeros({(int64_t)num_rays, 4}, options);
         torch::Tensor touch_count = torch::zeros({(int64_t)num_prims}, int_options);
 
-        // TODO: Launch backward compute shader here
-        // This would use the backward.slang shader
+        // Skip if no iterations recorded
+        if (iters.sum().item<int>() > 0) {
+            // Build DualModel tuple for backward kernel
+            auto dual_model = std::make_tuple(
+                means.contiguous(),
+                scales.contiguous(),
+                quats.contiguous(),
+                densities.contiguous(),
+                features.contiguous(),
+                dL_dmeans,
+                dL_dscales,
+                dL_dquats,
+                dL_ddensities,
+                dL_dfeatures,
+                dL_dray_origins,
+                dL_dray_dirs,
+                dL_dmeans2D
+            );
+
+            // Launch backward kernel
+            const int block_size = 16;
+            const int grid_size = (num_rays + block_size - 1) / block_size;
+
+            backward_kernels->operator()("backwards_kernel")
+                .set("last_state", states.contiguous())
+                .set("last_dirac", diracs.contiguous())
+                .set("iters", iters.contiguous())
+                .set("tri_collection", tri_collection.contiguous())
+                .set("ray_origins", ray_origins.contiguous())
+                .set("ray_directions", ray_directions.contiguous())
+                .set("model", dual_model)
+                .set("initial_drgb", initial_drgb.contiguous())
+                .set("dL_dinital_drgb", dL_dinitial_drgb)
+                .set("touch_count", touch_count)
+                .set("dL_doutputs", dL_doutputs.contiguous())
+                .set("wcts", wcts.contiguous())
+                .set("tmin", tmin)
+                .set("tmax", tmax)
+                .set("max_prim_size", max_prim_size)
+                .set("max_iters", (uint32_t)max_iters)
+                .launchRaw(
+                    dim3(block_size, 1, 1),
+                    dim3(grid_size, 1, 1)
+                );
+        }
 
         py::dict result;
         result["dL_dmeans"] = dL_dmeans;
