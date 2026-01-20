@@ -1,0 +1,59 @@
+[workspace]
+authors = ["tangzhongsi <tangzhongsi@qq.com>"]
+channels = ["conda-forge", "schrodinger"]
+name = "new-ever"
+platforms = ["win-64"]
+version = "0.1.0"
+
+[system-requirements]
+cuda = "12.9"
+libc = "2.31"
+
+[tasks]
+configure-ever = { cwd = "ever", cmd = "cmake -B build -DCMAKE_BUILD_TYPE=Release -DOptiX_INSTALL_DIR=\"C:/ProgramData/NVIDIA Corporation/OptiX SDK 7.4.0\" -G Ninja  ." }
+build-ever = { cwd = "ever", cmd = "cmake --build build --config Release", depends-on = [
+    "configure-ever",
+] }
+clean-ever = { cwd = "ever", cmd = "rm -rf build" }
+
+
+[dependencies]
+# compile toolchain
+git = ">=2.5.1.0,<3"
+cmake = "3.26.*"
+ninja = ">=1.13.1,<2"
+cxx-compiler = "1.10.*"
+cuda-toolkit = "12.9.*"
+shader-slang = ">=2025.18,<2026"
+
+# c++ libraries
+glm = ">=1.0.1,<2"
+unordered_dense = ">=4.8.1,<5"
+
+# python packages
+python = "3.11.*"
+pip = ">=25.2,<26"
+pytorch = { version = "2.8.*", build = "cuda*" }
+tqdm = ">=4.67.1, <5"
+icecream = ">=2.1.9, <3"
+plyfile = ">=1.1,<2"
+pyexr = ">=0.5.0,<0.6"
+imageio = ">=2.37.0,<3"
+tensorboard = ">=2.20.0,<3"
+
+[pypi-dependencies]
+slangtorch = "==1.2.8"
+
+[activation.env]
+CMAKE_EXPORT_COMPILE_COMMANDS = "ON"
+TORCH_CUDA_ARCH_LIST = "8.6;8.9"
+CUDAARCHS = "86;89"
+CUDA_HOME = "%CONDA_PREFIX%\\Library"
+CUDA_PATH = "%CONDA_PREFIX%\\Library"
+INCLUDE = "%INCLUDE%;%CONDA_PREFIX%\\Library\\include\\targets\\x64"
+CPM_SOURCE_CACHE = "%USERPROFILE%\\.cache\\CPM"
+CL = "/utf-8"
+GIT_CONFIG_COUNT = "1"
+GIT_CONFIG_KEY_0 = "core.longpaths"
+GIT_CONFIG_VALUE_0 = "true"
+KMP_DUPLICATE_LIB_OK="TRUE"
