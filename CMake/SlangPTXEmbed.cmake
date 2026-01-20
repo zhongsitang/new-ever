@@ -45,6 +45,11 @@ function(slang_ptx_embed)
   # Find slangc
   find_program(SLANGC slangc REQUIRED)
 
+  # Find CUDA toolkit for cuda_fp16.h etc.
+  if(NOT CUDAToolkit_FOUND)
+    find_package(CUDAToolkit REQUIRED)
+  endif()
+
   # Output paths
   set(_ptx "${SPE_OUT_DIR}/${SPE_NAME}.ptx")
   set(_header "${SPE_OUT_DIR}/${SPE_NAME}.ptx.h")
@@ -70,6 +75,7 @@ function(slang_ptx_embed)
       -o "${_ptx}"
       -O3
       -D SLANG_CUDA_ENABLE_OPTIX
+      -I "${CUDAToolkit_INCLUDE_DIRS}"
       ${_slang_incs}
       ${SPE_SLANG_FLAGS}
     DEPENDS ${_deps}
