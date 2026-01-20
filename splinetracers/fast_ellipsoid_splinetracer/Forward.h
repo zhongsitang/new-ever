@@ -19,9 +19,6 @@
 #include <optix.h>
 
 #include <cstdint>
-#include <memory>
-#include <string>
-#include <vector>
 
 #include "structs.h"
 
@@ -42,59 +39,40 @@ extern const size_t fast_shaders_optixir_size;
 // SBT Record Types
 // ============================================================================
 
-// Properly aligned SBT record template
 template <typename T>
 struct __align__(OPTIX_SBT_RECORD_ALIGNMENT) SbtRecord {
     char header[OPTIX_SBT_RECORD_HEADER_SIZE];
     T data;
 };
 
-// Empty SBT record (header only)
 struct __align__(OPTIX_SBT_RECORD_ALIGNMENT) EmptySbtRecord {
     char header[OPTIX_SBT_RECORD_HEADER_SIZE];
 };
 
-// Record data types
-struct RayGenData {
-    // No additional data needed
-};
-
-struct MissData {
-    float3 backgroundColor;
-};
-
-struct HitGroupData {
-    // Empty - geometry data comes from launch params
-};
+struct RayGenData {};
+struct MissData { float3 backgroundColor; };
+struct HitGroupData {};
 
 using RayGenSbtRecord   = SbtRecord<RayGenData>;
 using MissSbtRecord     = SbtRecord<MissData>;
 using HitGroupSbtRecord = SbtRecord<HitGroupData>;
 
 // ============================================================================
-// Slang-Compatible Launch Parameters
-// ============================================================================
-//
-// This structure MUST match the layout expected by Slang-compiled shaders.
-// The field order and types are determined by the global variables declared
-// in shaders.slang. DO NOT reorder fields without updating the shader.
-//
-// Memory alignment notes:
-// - StructuredBuffer is 16 bytes (pointer + size)
-// - OptixTraversableHandle is 8 bytes
-// - Cam struct should be properly aligned
+// Slang-Compatible Buffer Type
 // ============================================================================
 
-// Slang StructuredBuffer representation
 template <typename T>
 struct __align__(16) StructuredBuffer {
     T*     data;
     size_t size;
 };
 
-// Launch parameters structure - matches Slang global variable layout
+// ============================================================================
+// Launch Parameters - matches Slang shader global variables
+// ============================================================================
+
 struct __align__(128) Params {
-    // ========== Output Buffers ==========
+    // Output Buffers
     StructuredBuffer<float4>      image;
     StructuredBuffer<uint>        iters;
     StructuredBuffer<uint>        last_face;
@@ -103,105 +81,38 @@ struct __align__(128) Params {
     StructuredBuffer<SplineState> last_state;
     StructuredBuffer<int>         tri_collection;
 
-    // ========== Input Ray Buffers ==========
+    // Input Ray Buffers
     StructuredBuffer<float3>      ray_origins;
     StructuredBuffer<float3>      ray_directions;
 
-    // ========== Camera Parameters ==========
+    // Camera
     Cam camera;
 
-    // ========== Model Attribute Buffer (legacy) ==========
+    // Model Attribute Buffer (legacy)
     StructuredBuffer<__half>      half_attribs;
 
-    // ========== Model Data Buffers ==========
+    // Model Data Buffers
     StructuredBuffer<float3>      means;
     StructuredBuffer<float3>      scales;
     StructuredBuffer<float4>      quats;
     StructuredBuffer<float>       densities;
     StructuredBuffer<float>       features;
 
-    // ========== Render Parameters ==========
+    // Render Parameters
     uint   sh_degree;
     uint   max_iters;
     float  tmin;
     float  tmax;
 
-    // ========== Initial DRGB Buffer ==========
+    // Initial DRGB Buffer
     StructuredBuffer<float4>      initial_drgb;
 
-    // ========== Additional Parameters ==========
+    // Additional Parameters
     float  max_prim_size;
-    float  _padding[3];  // Align to 16 bytes
+    float  _padding[3];
 
-    // ========== Acceleration Structure Handle ==========
+    // Acceleration Structure Handle
     OptixTraversableHandle handle;
-};
-
-// ============================================================================
-// Pipeline Configuration
-// ============================================================================
-
-struct PipelineConfig {
-    // Optimization settings
-    OptixCompileOptimizationLevel optimizationLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_3;
-    OptixCompileDebugLevel        debugLevel        = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
-
-    // Pipeline limits
-    uint32_t maxTraceDepth       = 1;
-    uint32_t maxTraversableDepth = 1;
-
-    // Payload configuration
-    // Note: Modern Slang uses struct-based payloads, but we keep 32 for backward compatibility
-    uint32_t numPayloadValues    = 32;
-    uint32_t numAttributeValues  = 2;
-
-    // Exception handling (disabled by default for performance)
-    uint32_t exceptionFlags      = OPTIX_EXCEPTION_FLAG_NONE;
-
-    // Primitive type flags
-    uint32_t primitiveTypeFlags  = OPTIX_PRIMITIVE_TYPE_FLAGS_CUSTOM;
-
-    // Traversable graph flags
-    uint32_t traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
-
-    // Launch params variable name (must match Slang output)
-    const char* launchParamsName = "SLANG_globalParams";
-};
-
-// ============================================================================
-// Trace Parameters
-// ============================================================================
-
-struct TraceParams {
-    // Required
-    OptixTraversableHandle handle      = 0;
-    size_t                 numRays     = 0;
-    float3*                rayOrigins  = nullptr;
-    float3*                rayDirections = nullptr;
-    void*                  imageOut    = nullptr;
-
-    // Render settings
-    uint   shDegree    = 0;
-    float  tmin        = 0.0f;
-    float  tmax        = 1e10f;
-    float  maxPrimSize = 3.0f;
-    size_t maxIters    = 10000;
-
-    // Optional camera (nullptr = 1D dispatch by numRays)
-    Cam*   camera      = nullptr;
-
-    // Output buffers (optional, for backward pass support)
-    float4*      initialDrgb   = nullptr;
-    uint*        iters         = nullptr;
-    uint*        lastFace      = nullptr;
-    uint*        touchCount    = nullptr;
-    float4*      lastDirac     = nullptr;
-    SplineState* lastState     = nullptr;
-    int*         triCollection = nullptr;
-
-    // Density initialization helpers (optional)
-    int*         dTouchCount   = nullptr;
-    int*         dTouchInds    = nullptr;
 };
 
 // ============================================================================
@@ -210,25 +121,14 @@ struct TraceParams {
 
 class Forward {
 public:
-    // ========== Constructors & Destructor ==========
-
     Forward() = default;
 
     Forward(
         const OptixDeviceContext& context,
         int8_t device,
         const Primitives& model,
-        bool enableBackward,
-        const PipelineConfig& config = PipelineConfig{}
-    );
-
-    // Legacy constructor signature for compatibility
-    Forward(
-        const OptixDeviceContext& context,
-        int8_t device,
-        const Primitives& model,
         const bool enable_backward
-    ) : Forward(context, device, model, enable_backward, PipelineConfig{}) {}
+    );
 
     ~Forward() noexcept(false);
 
@@ -240,12 +140,7 @@ public:
     Forward(Forward&& other) noexcept;
     Forward& operator=(Forward&& other) noexcept;
 
-    // ========== Main Interface ==========
-
-    // Modern interface
-    void traceRays(const TraceParams& params);
-
-    // Legacy interface for backward compatibility
+    // Main interface
     void trace_rays(
         const OptixTraversableHandle& handle,
         size_t numRays,
@@ -269,63 +164,38 @@ public:
         int* dTouchInds = nullptr
     );
 
-    // ========== Model Updates ==========
+    void reset_features(const Primitives& model);
 
-    void resetFeatures(const Primitives& model);
-    void reset_features(const Primitives& model) { resetFeatures(model); }
-
-    // ========== Public Members (legacy compatibility) ==========
-
+    // Public members
     bool   enable_backward = false;
     size_t num_prims       = 0;
 
 private:
-    // ========== Initialization Methods ==========
-
-    void initModule(const PipelineConfig& config);
-    void initProgramGroups();
-    void initPipeline(const PipelineConfig& config);
-    void initShaderBindingTable();
-    void initLaunchParams(const Primitives& model);
-
-    // ========== Resource Management ==========
-
     void cleanup();
-
-    // ========== Launch Params Helpers ==========
-
-    void updateParams(const TraceParams& traceParams);
-    void uploadParams();
-
-    // ========== Member Variables ==========
-
-    // Configuration
-    PipelineConfig m_config;
 
     // OptiX context
     OptixDeviceContext m_context = nullptr;
     int8_t             m_device  = -1;
 
     // Model reference
-    const Primitives*  m_model    = nullptr;
+    const Primitives*  m_model = nullptr;
 
     // Pipeline objects
-    OptixModule        m_module          = nullptr;
-    OptixPipeline      m_pipeline        = nullptr;
-    OptixProgramGroup  m_raygenGroup     = nullptr;
-    OptixProgramGroup  m_missGroup       = nullptr;
-    OptixProgramGroup  m_hitGroup        = nullptr;
+    OptixModule        m_module      = nullptr;
+    OptixPipeline      m_pipeline    = nullptr;
+    OptixProgramGroup  m_raygenGroup = nullptr;
+    OptixProgramGroup  m_missGroup   = nullptr;
+    OptixProgramGroup  m_hitGroup    = nullptr;
 
     // Shader Binding Table
     OptixShaderBindingTable m_sbt = {};
 
     // Device memory
     CUdeviceptr m_dParams = 0;
-    CUstream    m_stream  = nullptr;
 
     // Host-side launch parameters
     Params m_params = {};
 
-    // Pipeline compile options (saved for logging)
+    // Pipeline compile options
     OptixPipelineCompileOptions m_pipelineOptions = {};
 };
