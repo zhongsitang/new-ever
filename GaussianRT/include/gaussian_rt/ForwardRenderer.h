@@ -3,14 +3,14 @@
 #include "Types.h"
 #include "Device.h"
 #include "AccelStruct.h"
-#include "GaussianPrimitives.h"
+#include "PrimitiveSet.h"
 
 namespace gaussian_rt {
 
 /**
  * @brief Forward ray tracing renderer
  *
- * Implements the forward pass of differentiable Gaussian rendering
+ * Implements the forward pass of differentiable volume rendering
  * using hardware-accelerated ray tracing.
  */
 class ForwardRenderer {
@@ -40,7 +40,7 @@ public:
      * @brief Execute ray tracing
      *
      * @param accel Acceleration structure
-     * @param primitives Gaussian primitives
+     * @param primitives Volume primitives
      * @param d_rayOrigins Device pointer to ray origins (float3 * numRays)
      * @param d_rayDirections Device pointer to ray directions (float3 * numRays)
      * @param numRays Number of rays to trace
@@ -50,7 +50,7 @@ public:
      */
     Result traceRays(
         const AccelStruct& accel,
-        const GaussianPrimitives& primitives,
+        const PrimitiveSet& primitives,
         void* d_rayOrigins,
         void* d_rayDirections,
         size_t numRays,

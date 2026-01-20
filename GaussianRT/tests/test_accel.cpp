@@ -4,7 +4,7 @@
  */
 
 #include "gaussian_rt/AccelStruct.h"
-#include "gaussian_rt/GaussianPrimitives.h"
+#include "gaussian_rt/PrimitiveSet.h"
 #include <cstdio>
 #include <cassert>
 #include <vector>
@@ -89,7 +89,7 @@ TEST(accel_build) {
     std::vector<float> means, scales, quats, densities, features;
     generateTestPrimitives(numPrims, means, scales, quats, densities, features);
 
-    GaussianPrimitives prims(device);
+    PrimitiveSet prims(device);
     prims.setData(numPrims, means.data(), scales.data(), quats.data(),
                   densities.data(), features.data(), 3);
 
@@ -123,7 +123,7 @@ TEST(accel_fast_build) {
     std::vector<float> means, scales, quats, densities, features;
     generateTestPrimitives(numPrims, means, scales, quats, densities, features);
 
-    GaussianPrimitives prims(device);
+    PrimitiveSet prims(device);
     prims.setData(numPrims, means.data(), scales.data(), quats.data(),
                   densities.data(), features.data(), 3);
 
@@ -153,7 +153,7 @@ TEST(accel_update) {
     std::vector<float> means, scales, quats, densities, features;
     generateTestPrimitives(numPrims, means, scales, quats, densities, features);
 
-    GaussianPrimitives prims(device);
+    PrimitiveSet prims(device);
     prims.setData(numPrims, means.data(), scales.data(), quats.data(),
                   densities.data(), features.data(), 3);
 
@@ -195,7 +195,7 @@ TEST(accel_rebuild) {
     std::vector<float> means, scales, quats, densities, features;
     generateTestPrimitives(numPrims, means, scales, quats, densities, features);
 
-    GaussianPrimitives prims(device);
+    PrimitiveSet prims(device);
     prims.setData(numPrims, means.data(), scales.data(), quats.data(),
                   densities.data(), features.data(), 3);
 
@@ -235,7 +235,7 @@ TEST(accel_move) {
     std::vector<float> means, scales, quats, densities, features;
     generateTestPrimitives(numPrims, means, scales, quats, densities, features);
 
-    GaussianPrimitives prims(device);
+    PrimitiveSet prims(device);
     prims.setData(numPrims, means.data(), scales.data(), quats.data(),
                   densities.data(), features.data(), 3);
 

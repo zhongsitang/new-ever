@@ -35,17 +35,19 @@ static const float SH_C3_5 = 1.445305721320277f;
 static const float SH_C3_6 = 0.5900435899266435f;
 
 //------------------------------------------------------------------------------
-// Gaussian Primitive
+// Ellipsoid Primitive
+// Represents an oriented ellipsoid volume with position, scale, and rotation.
+// This is the base primitive type; other types (sphere, capsule) can be added.
 //------------------------------------------------------------------------------
 
-struct GaussianPrimitive {
-    float3 mean;        // Center position
+struct EllipsoidPrimitive {
+    float3 position;    // Center position
     float density;      // Opacity/density σ
 
-    float3 scale;       // Scale factors (radii)
+    float3 scale;       // Scale factors (ellipsoid radii)
     float _pad0;
 
-    float4 quat;        // Rotation quaternion (x, y, z, w)
+    float4 orientation; // Rotation quaternion (x, y, z, w)
 };
 
 //------------------------------------------------------------------------------
@@ -78,12 +80,13 @@ struct VolumeIntegrationState : IDifferentiable {
 };
 
 //------------------------------------------------------------------------------
-// Gaussian Sample
-// Represents the contribution of a single Gaussian at a ray intersection point.
+// Volume Sample
+// Represents the contribution of a primitive at a ray intersection point.
 // Used in the discrete approximation of the volume rendering integral.
+// This is primitive-type agnostic (works with ellipsoid, sphere, etc.)
 //------------------------------------------------------------------------------
 
-struct GaussianSample : IDifferentiable {
+struct VolumeSample : IDifferentiable {
     float t;                    // Ray parameter at this sample
     float4 alphaColorProduct;   // [α, α·R, α·G, α·B] - opacity-weighted color
                                 // α = 1 - exp(-σ·Δt) is the discrete opacity
@@ -135,10 +138,10 @@ struct LaunchParams {
     StructuredBuffer<float3> rayDirections;
     uint numRays;
 
-    // Gaussian primitives
-    StructuredBuffer<float3> means;
+    // Primitives (currently ellipsoid)
+    StructuredBuffer<float3> positions;
     StructuredBuffer<float3> scales;
-    StructuredBuffer<float4> quats;
+    StructuredBuffer<float4> orientations;
     StructuredBuffer<float> densities;
     StructuredBuffer<float> features;
     uint numPrimitives;
@@ -147,7 +150,7 @@ struct LaunchParams {
     // Render parameters
     float tmin;
     float tmax;
-    uint maxSamplesPerRay;      // Maximum Gaussian intersections per ray
+    uint maxSamplesPerRay;      // Maximum primitive intersections per ray
     uint shDegree;
     float maxPrimSize;
 

@@ -87,39 +87,39 @@ public:
 
 class PyPrimitives {
 public:
-    std::unique_ptr<GaussianPrimitives> prims;
+    std::unique_ptr<PrimitiveSet> prims;
     Device* devicePtr = nullptr;
 
     PyPrimitives(PyDevice& pyDevice) {
         devicePtr = &pyDevice.device;
-        prims = std::make_unique<GaussianPrimitives>(pyDevice.device);
+        prims = std::make_unique<PrimitiveSet>(pyDevice.device);
     }
 
     bool setData(
-        py::array_t<float> means,
+        py::array_t<float> positions,
         py::array_t<float> scales,
-        py::array_t<float> quats,
+        py::array_t<float> orientations,
         py::array_t<float> densities,
         py::array_t<float> features) {
 
-        py::buffer_info meansInfo = means.request();
+        py::buffer_info positionsInfo = positions.request();
         py::buffer_info scalesInfo = scales.request();
-        py::buffer_info quatsInfo = quats.request();
+        py::buffer_info orientationsInfo = orientations.request();
         py::buffer_info densitiesInfo = densities.request();
         py::buffer_info featuresInfo = features.request();
 
-        if (meansInfo.ndim != 2 || meansInfo.shape[1] != 3) {
-            throw std::runtime_error("means must be (N, 3)");
+        if (positionsInfo.ndim != 2 || positionsInfo.shape[1] != 3) {
+            throw std::runtime_error("positions must be (N, 3)");
         }
 
-        size_t numPrims = meansInfo.shape[0];
+        size_t numPrims = positionsInfo.shape[0];
         size_t featureSize = featuresInfo.shape[1];
 
         Result result = prims->setData(
             numPrims,
-            static_cast<const float*>(meansInfo.ptr),
+            static_cast<const float*>(positionsInfo.ptr),
             static_cast<const float*>(scalesInfo.ptr),
-            static_cast<const float*>(quatsInfo.ptr),
+            static_cast<const float*>(orientationsInfo.ptr),
             static_cast<const float*>(densitiesInfo.ptr),
             static_cast<const float*>(featuresInfo.ptr),
             featureSize
@@ -130,26 +130,26 @@ public:
 
 #ifdef GAUSSIANRT_HAS_TORCH
     bool setDataFromTensors(
-        torch::Tensor means,
+        torch::Tensor positions,
         torch::Tensor scales,
-        torch::Tensor quats,
+        torch::Tensor orientations,
         torch::Tensor densities,
         torch::Tensor features) {
 
-        TORCH_CHECK(means.dim() == 2 && means.size(1) == 3, "means must be (N, 3)");
+        TORCH_CHECK(positions.dim() == 2 && positions.size(1) == 3, "positions must be (N, 3)");
         TORCH_CHECK(scales.dim() == 2 && scales.size(1) == 3, "scales must be (N, 3)");
-        TORCH_CHECK(quats.dim() == 2 && quats.size(1) == 4, "quats must be (N, 4)");
+        TORCH_CHECK(orientations.dim() == 2 && orientations.size(1) == 4, "orientations must be (N, 4)");
         TORCH_CHECK(densities.dim() == 1, "densities must be (N,)");
         TORCH_CHECK(features.dim() == 2, "features must be (N, F)");
 
-        size_t numPrims = means.size(0);
+        size_t numPrims = positions.size(0);
         size_t featureSize = features.size(1);
 
         Result result = prims->setDataFromDevice(
             numPrims,
-            tensorToDevice(means.contiguous()),
+            tensorToDevice(positions.contiguous()),
             tensorToDevice(scales.contiguous()),
-            tensorToDevice(quats.contiguous()),
+            tensorToDevice(orientations.contiguous()),
             tensorToDevice(densities.contiguous()),
             tensorToDevice(features.contiguous()),
             featureSize
@@ -350,17 +350,17 @@ public:
         }
 
         // Create output tensors
-        auto dMeansTensor = deviceToTensor(gradients.dMeans, {(int64_t)numPrims, 3}, device);
+        auto dPositionsTensor = deviceToTensor(gradients.dMeans, {(int64_t)numPrims, 3}, device);
         auto dScalesTensor = deviceToTensor(gradients.dScales, {(int64_t)numPrims, 3}, device);
-        auto dQuatsTensor = deviceToTensor(gradients.dQuats, {(int64_t)numPrims, 4}, device);
+        auto dOrientationsTensor = deviceToTensor(gradients.dQuats, {(int64_t)numPrims, 4}, device);
         auto dDensitiesTensor = deviceToTensor(gradients.dDensities, {(int64_t)numPrims}, device);
         auto dFeaturesTensor = deviceToTensor(gradients.dFeatures,
             {(int64_t)numPrims, (int64_t)featureSize}, device);
 
         return py::dict(
-            py::arg("dMeans") = dMeansTensor,
+            py::arg("dPositions") = dPositionsTensor,
             py::arg("dScales") = dScalesTensor,
-            py::arg("dQuats") = dQuatsTensor,
+            py::arg("dOrientations") = dOrientationsTensor,
             py::arg("dDensities") = dDensitiesTensor,
             py::arg("dFeatures") = dFeaturesTensor
         );
@@ -389,21 +389,21 @@ public:
     }
 
     bool setPrimitives(
-        py::array_t<float> means,
+        py::array_t<float> positions,
         py::array_t<float> scales,
-        py::array_t<float> quats,
+        py::array_t<float> orientations,
         py::array_t<float> densities,
         py::array_t<float> features) {
 
-        py::buffer_info meansInfo = means.request();
-        size_t numPrims = meansInfo.shape[0];
+        py::buffer_info positionsInfo = positions.request();
+        size_t numPrims = positionsInfo.shape[0];
         size_t featureSize = features.request().shape[1];
 
         return renderer->setPrimitives(
             numPrims,
-            static_cast<const float*>(meansInfo.ptr),
+            static_cast<const float*>(positionsInfo.ptr),
             static_cast<const float*>(scales.request().ptr),
-            static_cast<const float*>(quats.request().ptr),
+            static_cast<const float*>(orientations.request().ptr),
             static_cast<const float*>(densities.request().ptr),
             static_cast<const float*>(features.request().ptr),
             featureSize

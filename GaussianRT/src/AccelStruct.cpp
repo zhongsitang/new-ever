@@ -162,7 +162,7 @@ void AccelStruct::freeBuffers() {
     m_built = false;
 }
 
-Result AccelStruct::build(const GaussianPrimitives& primitives, bool allowUpdate, bool fastBuild) {
+Result AccelStruct::build(const PrimitiveSet& primitives, bool allowUpdate, bool fastBuild) {
     if (!primitives.isValid()) {
         return Result::ErrorInvalidArgument;
     }
@@ -194,7 +194,7 @@ Result AccelStruct::build(const GaussianPrimitives& primitives, bool allowUpdate
     return Result::Success;
 }
 
-Result AccelStruct::buildBLAS(const GaussianPrimitives& primitives, bool fastBuild) {
+Result AccelStruct::buildBLAS(const PrimitiveSet& primitives, bool fastBuild) {
     // Setup AABB build input
     OptixBuildInput buildInput = {};
     buildInput.type = OPTIX_BUILD_INPUT_TYPE_CUSTOM_PRIMITIVES;
@@ -312,7 +312,7 @@ Result AccelStruct::buildTLAS(bool fastBuild) {
     return Result::Success;
 }
 
-Result AccelStruct::update(const GaussianPrimitives& primitives) {
+Result AccelStruct::update(const PrimitiveSet& primitives) {
     if (!m_built || !m_allowUpdate) {
         return Result::ErrorInvalidArgument;
     }
@@ -363,7 +363,7 @@ Result AccelStruct::update(const GaussianPrimitives& primitives) {
     return Result::Success;
 }
 
-Result AccelStruct::rebuild(const GaussianPrimitives& primitives) {
+Result AccelStruct::rebuild(const PrimitiveSet& primitives) {
     return build(primitives, m_allowUpdate, false);
 }
 

@@ -255,7 +255,7 @@ Result BackwardPass::zeroGradients(GradientOutput& gradients) {
 Result BackwardPass::compute(
     const ForwardOutput& forwardOutput,
     void* d_dLdColor,
-    const GaussianPrimitives& primitives,
+    const PrimitiveSet& primitives,
     void* d_rayOrigins,
     void* d_rayDirections,
     size_t numRays,

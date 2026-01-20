@@ -1,4 +1,4 @@
-#include "gaussian_rt/GaussianPrimitives.h"
+#include "gaussian_rt/PrimitiveSet.h"
 
 #include <cuda_runtime.h>
 #include <cstring>
@@ -10,21 +10,21 @@ namespace gaussian_rt {
 //------------------------------------------------------------------------------
 
 __global__ void computeAABBsKernel(
-    const float* __restrict__ means,
+    const float* __restrict__ positions,
     const float* __restrict__ scales,
-    const float* __restrict__ quats,
+    const float* __restrict__ orientations,
     float* __restrict__ aabbMins,
     float* __restrict__ aabbMaxs,
     size_t numPrimitives,
-    float scaleFactor = 3.0f)  // 3-sigma coverage
+    float scaleFactor = 3.0f)  // 3-sigma coverage for Gaussian falloff
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= numPrimitives) return;
 
-    // Load mean
-    float mx = means[idx * 3 + 0];
-    float my = means[idx * 3 + 1];
-    float mz = means[idx * 3 + 2];
+    // Load position
+    float px = positions[idx * 3 + 0];
+    float py = positions[idx * 3 + 1];
+    float pz = positions[idx * 3 + 2];
 
     // Load scale
     float sx = scales[idx * 3 + 0];
@@ -32,10 +32,10 @@ __global__ void computeAABBsKernel(
     float sz = scales[idx * 3 + 2];
 
     // Load quaternion (x, y, z, w)
-    float qx = quats[idx * 4 + 0];
-    float qy = quats[idx * 4 + 1];
-    float qz = quats[idx * 4 + 2];
-    float qw = quats[idx * 4 + 3];
+    float qx = orientations[idx * 4 + 0];
+    float qy = orientations[idx * 4 + 1];
+    float qz = orientations[idx * 4 + 2];
+    float qw = orientations[idx * 4 + 3];
 
     // Compute rotation matrix columns
     float r00 = 1.0f - 2.0f * (qy * qy + qz * qz);
@@ -61,75 +61,75 @@ __global__ void computeAABBsKernel(
     float ez = fabsf(r20 * sx) + fabsf(r21 * sy) + fabsf(r22 * sz);
 
     // Write AABB
-    aabbMins[idx * 3 + 0] = mx - ex;
-    aabbMins[idx * 3 + 1] = my - ey;
-    aabbMins[idx * 3 + 2] = mz - ez;
+    aabbMins[idx * 3 + 0] = px - ex;
+    aabbMins[idx * 3 + 1] = py - ey;
+    aabbMins[idx * 3 + 2] = pz - ez;
 
-    aabbMaxs[idx * 3 + 0] = mx + ex;
-    aabbMaxs[idx * 3 + 1] = my + ey;
-    aabbMaxs[idx * 3 + 2] = mz + ez;
+    aabbMaxs[idx * 3 + 0] = px + ex;
+    aabbMaxs[idx * 3 + 1] = py + ey;
+    aabbMaxs[idx * 3 + 2] = pz + ez;
 }
 
 //------------------------------------------------------------------------------
-// GaussianPrimitives implementation
+// PrimitiveSet implementation
 //------------------------------------------------------------------------------
 
-GaussianPrimitives::GaussianPrimitives(Device& device)
+PrimitiveSet::PrimitiveSet(Device& device)
     : m_device(device) {
 }
 
-GaussianPrimitives::~GaussianPrimitives() {
+PrimitiveSet::~PrimitiveSet() {
     freeOwnedBuffers();
 }
 
-GaussianPrimitives::GaussianPrimitives(GaussianPrimitives&& other) noexcept
+PrimitiveSet::PrimitiveSet(PrimitiveSet&& other) noexcept
     : m_device(other.m_device)
     , m_numPrimitives(other.m_numPrimitives)
     , m_featureSize(other.m_featureSize)
-    , m_d_means(other.m_d_means)
+    , m_d_positions(other.m_d_positions)
     , m_d_scales(other.m_d_scales)
-    , m_d_quats(other.m_d_quats)
+    , m_d_orientations(other.m_d_orientations)
     , m_d_densities(other.m_d_densities)
     , m_d_features(other.m_d_features)
     , m_d_aabbs(other.m_d_aabbs)
-    , m_ownsMeans(other.m_ownsMeans)
+    , m_ownsPositions(other.m_ownsPositions)
     , m_ownsScales(other.m_ownsScales)
-    , m_ownsQuats(other.m_ownsQuats)
+    , m_ownsOrientations(other.m_ownsOrientations)
     , m_ownsDensities(other.m_ownsDensities)
     , m_ownsFeatures(other.m_ownsFeatures)
     , m_ownsAABBs(other.m_ownsAABBs) {
     // Clear other's pointers to prevent double-free
-    other.m_d_means = nullptr;
+    other.m_d_positions = nullptr;
     other.m_d_scales = nullptr;
-    other.m_d_quats = nullptr;
+    other.m_d_orientations = nullptr;
     other.m_d_densities = nullptr;
     other.m_d_features = nullptr;
     other.m_d_aabbs = nullptr;
     other.m_numPrimitives = 0;
 }
 
-GaussianPrimitives& GaussianPrimitives::operator=(GaussianPrimitives&& other) noexcept {
+PrimitiveSet& PrimitiveSet::operator=(PrimitiveSet&& other) noexcept {
     if (this != &other) {
         freeOwnedBuffers();
 
         m_numPrimitives = other.m_numPrimitives;
         m_featureSize = other.m_featureSize;
-        m_d_means = other.m_d_means;
+        m_d_positions = other.m_d_positions;
         m_d_scales = other.m_d_scales;
-        m_d_quats = other.m_d_quats;
+        m_d_orientations = other.m_d_orientations;
         m_d_densities = other.m_d_densities;
         m_d_features = other.m_d_features;
         m_d_aabbs = other.m_d_aabbs;
-        m_ownsMeans = other.m_ownsMeans;
+        m_ownsPositions = other.m_ownsPositions;
         m_ownsScales = other.m_ownsScales;
-        m_ownsQuats = other.m_ownsQuats;
+        m_ownsOrientations = other.m_ownsOrientations;
         m_ownsDensities = other.m_ownsDensities;
         m_ownsFeatures = other.m_ownsFeatures;
         m_ownsAABBs = other.m_ownsAABBs;
 
-        other.m_d_means = nullptr;
+        other.m_d_positions = nullptr;
         other.m_d_scales = nullptr;
-        other.m_d_quats = nullptr;
+        other.m_d_orientations = nullptr;
         other.m_d_densities = nullptr;
         other.m_d_features = nullptr;
         other.m_d_aabbs = nullptr;
@@ -138,38 +138,38 @@ GaussianPrimitives& GaussianPrimitives::operator=(GaussianPrimitives&& other) no
     return *this;
 }
 
-void GaussianPrimitives::freeOwnedBuffers() {
-    if (m_ownsMeans && m_d_means) m_device.freeBuffer(m_d_means);
+void PrimitiveSet::freeOwnedBuffers() {
+    if (m_ownsPositions && m_d_positions) m_device.freeBuffer(m_d_positions);
     if (m_ownsScales && m_d_scales) m_device.freeBuffer(m_d_scales);
-    if (m_ownsQuats && m_d_quats) m_device.freeBuffer(m_d_quats);
+    if (m_ownsOrientations && m_d_orientations) m_device.freeBuffer(m_d_orientations);
     if (m_ownsDensities && m_d_densities) m_device.freeBuffer(m_d_densities);
     if (m_ownsFeatures && m_d_features) m_device.freeBuffer(m_d_features);
     if (m_ownsAABBs && m_d_aabbs) m_device.freeBuffer(m_d_aabbs);
 
-    m_d_means = nullptr;
+    m_d_positions = nullptr;
     m_d_scales = nullptr;
-    m_d_quats = nullptr;
+    m_d_orientations = nullptr;
     m_d_densities = nullptr;
     m_d_features = nullptr;
     m_d_aabbs = nullptr;
-    m_ownsMeans = false;
+    m_ownsPositions = false;
     m_ownsScales = false;
-    m_ownsQuats = false;
+    m_ownsOrientations = false;
     m_ownsDensities = false;
     m_ownsFeatures = false;
     m_ownsAABBs = false;
 }
 
-Result GaussianPrimitives::setData(
+Result PrimitiveSet::setData(
     size_t numPrimitives,
-    const float* means,
+    const float* positions,
     const float* scales,
-    const float* quats,
+    const float* orientations,
     const float* densities,
     const float* features,
     size_t featureSize) {
 
-    if (numPrimitives == 0 || !means || !scales || !quats || !densities) {
+    if (numPrimitives == 0 || !positions || !scales || !orientations || !densities) {
         return Result::ErrorInvalidArgument;
     }
 
@@ -178,20 +178,20 @@ Result GaussianPrimitives::setData(
     m_numPrimitives = numPrimitives;
     m_featureSize = featureSize;
 
-    // Allocate and upload means (float3 * N)
-    m_d_means = m_device.createBuffer(numPrimitives * 3 * sizeof(float), means);
-    if (!m_d_means) return Result::ErrorOutOfMemory;
-    m_ownsMeans = true;
+    // Allocate and upload positions (float3 * N)
+    m_d_positions = m_device.createBuffer(numPrimitives * 3 * sizeof(float), positions);
+    if (!m_d_positions) return Result::ErrorOutOfMemory;
+    m_ownsPositions = true;
 
     // Allocate and upload scales (float3 * N)
     m_d_scales = m_device.createBuffer(numPrimitives * 3 * sizeof(float), scales);
     if (!m_d_scales) return Result::ErrorOutOfMemory;
     m_ownsScales = true;
 
-    // Allocate and upload quats (float4 * N)
-    m_d_quats = m_device.createBuffer(numPrimitives * 4 * sizeof(float), quats);
-    if (!m_d_quats) return Result::ErrorOutOfMemory;
-    m_ownsQuats = true;
+    // Allocate and upload orientations (float4 * N)
+    m_d_orientations = m_device.createBuffer(numPrimitives * 4 * sizeof(float), orientations);
+    if (!m_d_orientations) return Result::ErrorOutOfMemory;
+    m_ownsOrientations = true;
 
     // Allocate and upload densities (float * N)
     m_d_densities = m_device.createBuffer(numPrimitives * sizeof(float), densities);
@@ -209,16 +209,16 @@ Result GaussianPrimitives::setData(
     return updateAABBs();
 }
 
-Result GaussianPrimitives::setDataFromDevice(
+Result PrimitiveSet::setDataFromDevice(
     size_t numPrimitives,
-    void* d_means,
+    void* d_positions,
     void* d_scales,
-    void* d_quats,
+    void* d_orientations,
     void* d_densities,
     void* d_features,
     size_t featureSize) {
 
-    if (numPrimitives == 0 || !d_means || !d_scales || !d_quats || !d_densities) {
+    if (numPrimitives == 0 || !d_positions || !d_scales || !d_orientations || !d_densities) {
         return Result::ErrorInvalidArgument;
     }
 
@@ -228,9 +228,9 @@ Result GaussianPrimitives::setDataFromDevice(
     m_featureSize = featureSize;
 
     // Use external pointers (no ownership)
-    m_d_means = d_means;
+    m_d_positions = d_positions;
     m_d_scales = d_scales;
-    m_d_quats = d_quats;
+    m_d_orientations = d_orientations;
     m_d_densities = d_densities;
     m_d_features = d_features;
 
@@ -238,8 +238,8 @@ Result GaussianPrimitives::setDataFromDevice(
     return updateAABBs();
 }
 
-Result GaussianPrimitives::updateAABBs() {
-    if (m_numPrimitives == 0 || !m_d_means || !m_d_scales || !m_d_quats) {
+Result PrimitiveSet::updateAABBs() {
+    if (m_numPrimitives == 0 || !m_d_positions || !m_d_scales || !m_d_orientations) {
         return Result::ErrorInvalidArgument;
     }
 
@@ -259,9 +259,9 @@ Result GaussianPrimitives::updateAABBs() {
     float* aabbMaxs = aabbMins + m_numPrimitives * 3;
 
     computeAABBsKernel<<<numBlocks, blockSize, 0, static_cast<cudaStream_t>(m_device.getCudaStream())>>>(
-        static_cast<const float*>(m_d_means),
+        static_cast<const float*>(m_d_positions),
         static_cast<const float*>(m_d_scales),
-        static_cast<const float*>(m_d_quats),
+        static_cast<const float*>(m_d_orientations),
         aabbMins,
         aabbMaxs,
         m_numPrimitives
@@ -276,7 +276,7 @@ Result GaussianPrimitives::updateAABBs() {
     return Result::Success;
 }
 
-uint32_t GaussianPrimitives::getSHDegree() const {
+uint32_t PrimitiveSet::getSHDegree() const {
     // Infer SH degree from feature size
     // featureSize = (degree+1)^2 * 3
     if (m_featureSize == 3) return 0;   // DC only

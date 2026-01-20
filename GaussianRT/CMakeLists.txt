@@ -81,7 +81,7 @@ compile_slang_to_cuda(
 add_library(gaussian_rt_core STATIC
     src/Device.cpp
     src/AccelStruct.cpp
-    src/GaussianPrimitives.cpp
+    src/PrimitiveSet.cpp
     src/ForwardRenderer.cpp
     src/BackwardPass.cpp
     src/GaussianRT.cpp

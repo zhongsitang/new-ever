@@ -1,5 +1,5 @@
 // GaussianRT - Forward Ray Tracing Shaders
-// Hardware-accelerated differentiable Gaussian rendering
+// Hardware-accelerated differentiable volume rendering for ellipsoid primitives
 
 import common.types;
 import common.math;
@@ -23,11 +23,11 @@ ConstantBuffer<LaunchParams> params;
 //   Tᵢ = Πⱼ₌₁^{i-1}(1 - αⱼ)  is the accumulated transmittance
 //------------------------------------------------------------------------------
 
-// Accumulate a Gaussian sample into the integration state (differentiable)
+// Accumulate a volume sample into the integration state (differentiable)
 [Differentiable]
 VolumeIntegrationState accumulateSample(
     VolumeIntegrationState state,
-    GaussianSample sample,
+    VolumeSample sample,
     float tMax)
 {
     VolumeIntegrationState newState = state;
@@ -123,7 +123,7 @@ void __raygen__main() {
         uint numHits = min(payload.hitCount, HIT_BUFFER_SIZE);
 
         if (numHits == 0) {
-            break;  // No more Gaussian intersections
+            break;  // No more primitive intersections
         }
 
         [ForceUnroll]
@@ -143,10 +143,10 @@ void __raygen__main() {
             // Store hit ID for backward pass gradient computation
             params.hitPrimitiveIds[rayIdx * params.maxSamplesPerRay + sampleCount] = int(hitId);
 
-            // Get Gaussian primitive data
-            float3 mean = params.means[primIdx];
+            // Get primitive data
+            float3 position = params.positions[primIdx];
             float3 scale = params.scales[primIdx];
-            float4 quat = params.quats[primIdx];
+            float4 orientation = params.orientations[primIdx];
             float density = params.densities[primIdx];
 
             // Evaluate view-dependent color (SH or RGB)
@@ -154,10 +154,10 @@ void __raygen__main() {
             float3 color = evaluateColor(viewDir, params.features, primIdx,
                                         params.featureSize, params.shDegree);
 
-            // Create Gaussian sample at this intersection
-            GaussianSample sample = createGaussianSample(
+            // Create volume sample at this intersection
+            VolumeSample sample = createVolumeSample(
                 t, origin, direction,
-                mean, scale, quat, density, color,
+                position, scale, orientation, density, color,
                 isEntry
             );
 
@@ -208,25 +208,25 @@ void __miss__main(inout RayPayload payload) {
 }
 
 //------------------------------------------------------------------------------
-// Intersection Shader (Custom Ellipsoid/Gaussian)
+// Intersection Shader (Custom Ellipsoid Primitive)
 //------------------------------------------------------------------------------
 
 [shader("intersection")]
 void __intersection__ellipsoid() {
     uint primIdx = PrimitiveIndex();
 
-    // Get Gaussian primitive data
-    float3 mean = params.means[primIdx];
+    // Get primitive data
+    float3 position = params.positions[primIdx];
     float3 scale = params.scales[primIdx];
-    float4 quat = params.quats[primIdx];
+    float4 orientation = params.orientations[primIdx];
 
     // Get ray in world space
     float3 rayOrigin = WorldRayOrigin();
     float3 rayDir = WorldRayDirection();
 
     // Compute ray-ellipsoid intersection (3-sigma bounding ellipsoid)
-    IntersectResult result = rayIntersectGaussian(
-        rayOrigin, rayDir, mean, scale, quat
+    IntersectResult result = rayIntersectEllipsoidBounded(
+        rayOrigin, rayDir, position, scale, orientation
     );
 
     if (!result.hit) {
@@ -236,12 +236,12 @@ void __intersection__ellipsoid() {
     float tMin = RayTMin();
     float tMax = RayTCurrent();
 
-    // Report entry point (hitKind = 0: entering the Gaussian)
+    // Report entry point (hitKind = 0: entering the primitive)
     if (result.tNear >= tMin && result.tNear <= tMax) {
         ReportHit(result.tNear, 0, /* no attributes */);
     }
 
-    // Report exit point (hitKind = 1: exiting the Gaussian)
+    // Report exit point (hitKind = 1: exiting the primitive)
     if (result.tFar >= tMin && result.tFar <= tMax) {
         ReportHit(result.tFar, 1, /* no attributes */);
     }
@@ -249,7 +249,7 @@ void __intersection__ellipsoid() {
 
 //------------------------------------------------------------------------------
 // Any-Hit Shader (Front-to-Back Sorting)
-// Collects and sorts Gaussian intersections by distance
+// Collects and sorts primitive intersections by distance
 //------------------------------------------------------------------------------
 
 [shader("anyhit")]
@@ -286,6 +286,6 @@ void __anyhit__sorting(inout RayPayload payload, in BuiltInTriangleIntersectionA
         }
     }
 
-    // Ignore this hit to continue searching for more Gaussians
+    // Ignore this hit to continue searching for more primitives
     IgnoreHit();
 }

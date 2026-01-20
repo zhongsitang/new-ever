@@ -2,7 +2,7 @@
 
 #include "Types.h"
 #include "Device.h"
-#include "GaussianPrimitives.h"
+#include "PrimitiveSet.h"
 
 namespace gaussian_rt {
 
@@ -28,12 +28,12 @@ public:
     /**
      * @brief Build acceleration structure from primitives
      *
-     * @param primitives Gaussian primitives to build from
+     * @param primitives Volume primitives to build from
      * @param allowUpdate If true, structure can be updated later
      * @param fastBuild If true, prioritize build speed over trace speed
      * @return Result code
      */
-    Result build(const GaussianPrimitives& primitives,
+    Result build(const PrimitiveSet& primitives,
                  bool allowUpdate = true,
                  bool fastBuild = false);
 
@@ -43,14 +43,14 @@ public:
      * Only works if built with allowUpdate=true.
      * Use when primitive positions change but topology stays the same.
      */
-    Result update(const GaussianPrimitives& primitives);
+    Result update(const PrimitiveSet& primitives);
 
     /**
      * @brief Rebuild acceleration structure
      *
      * Use when primitive count changes.
      */
-    Result rebuild(const GaussianPrimitives& primitives);
+    Result rebuild(const PrimitiveSet& primitives);
 
     /**
      * @brief Check if structure is valid
@@ -99,7 +99,7 @@ private:
     size_t m_scratchSize = 0;
 
     // Internal helpers
-    Result buildBLAS(const GaussianPrimitives& primitives, bool fastBuild);
+    Result buildBLAS(const PrimitiveSet& primitives, bool fastBuild);
     Result buildTLAS(bool fastBuild);
     void freeBuffers();
 };

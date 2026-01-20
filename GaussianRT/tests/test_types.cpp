@@ -48,10 +48,10 @@ TEST(Float4_creation) {
     ASSERT_EQ(v2.w, 4.0f);
 }
 
-TEST(GaussianData_alignment) {
+TEST(PrimitiveData_alignment) {
     // Check struct size and alignment
-    ASSERT_TRUE(sizeof(GaussianData) >= 48);  // At least 12 floats
-    ASSERT_TRUE(alignof(GaussianData) == 16);
+    ASSERT_TRUE(sizeof(PrimitiveData) >= 48);  // At least 12 floats
+    ASSERT_TRUE(alignof(PrimitiveData) == 16);
 }
 
 TEST(VolumeIntegrationState_initialization) {
@@ -109,7 +109,7 @@ int main() {
 
     RUN_TEST(Float3_creation);
     RUN_TEST(Float4_creation);
-    RUN_TEST(GaussianData_alignment);
+    RUN_TEST(PrimitiveData_alignment);
     RUN_TEST(VolumeIntegrationState_initialization);
     RUN_TEST(RenderParams_defaults);
     RUN_TEST(sh_coeffs_count);

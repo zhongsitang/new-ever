@@ -209,9 +209,9 @@ class GaussianRayTrace(Function):
                 ctx.params['sh_degree']
             )
 
-            grad_means = grads['dMeans'].clamp(-1e3, 1e3)
+            grad_means = grads['dPositions'].clamp(-1e3, 1e3)
             grad_scales = grads['dScales'].clamp(-1e3, 1e3)
-            grad_quats = grads['dQuats'].clamp(-1e3, 1e3)
+            grad_quats = grads['dOrientations'].clamp(-1e3, 1e3)
             grad_densities = grads['dDensities'].clamp(-50, 50)
             grad_features = grads['dFeatures'].clamp(-1e3, 1e3)
         else:

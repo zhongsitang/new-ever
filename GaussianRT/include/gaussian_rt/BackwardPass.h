@@ -2,14 +2,14 @@
 
 #include "Types.h"
 #include "Device.h"
-#include "GaussianPrimitives.h"
+#include "PrimitiveSet.h"
 
 namespace gaussian_rt {
 
 /**
  * @brief Backward pass for differentiable rendering
  *
- * Computes gradients for all Gaussian parameters using the
+ * Computes gradients for all primitive parameters using the
  * forward pass output and loss gradients.
  */
 class BackwardPass {
@@ -39,7 +39,7 @@ public:
      *
      * @param forwardOutput Output from forward pass
      * @param d_dLdColor Device pointer to loss gradients w.r.t. color (float4 * numRays)
-     * @param primitives Gaussian primitives
+     * @param primitives Volume primitives
      * @param d_rayOrigins Device pointer to ray origins
      * @param d_rayDirections Device pointer to ray directions
      * @param numRays Number of rays
@@ -50,7 +50,7 @@ public:
     Result compute(
         const ForwardOutput& forwardOutput,
         void* d_dLdColor,
-        const GaussianPrimitives& primitives,
+        const PrimitiveSet& primitives,
         void* d_rayOrigins,
         void* d_rayDirections,
         size_t numRays,

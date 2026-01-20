@@ -8,7 +8,7 @@ namespace gaussian_rt {
 // Forward declarations
 class Device;
 class AccelStruct;
-class GaussianPrimitives;
+class PrimitiveSet;
 class ForwardRenderer;
 class BackwardPass;
 
@@ -44,17 +44,18 @@ struct alignas(16) Float4 {
 };
 
 //------------------------------------------------------------------------------
-// Gaussian primitive data structure (shared with shaders)
+// Primitive data structure (shared with shaders)
+// Represents an ellipsoid volume primitive with position, orientation, scale
 //------------------------------------------------------------------------------
 
-struct alignas(16) GaussianData {
-    Float3 mean;        // Center position
-    float density;      // Opacity/density
+struct alignas(16) PrimitiveData {
+    Float3 position;    // Center position
+    float density;      // Opacity/density σ
 
-    Float3 scale;       // Scale factors
+    Float3 scale;       // Scale factors (ellipsoid radii)
     float _pad0;
 
-    Float4 quat;        // Rotation quaternion (x, y, z, w)
+    Float4 orientation; // Rotation quaternion (x, y, z, w)
 };
 
 //------------------------------------------------------------------------------
@@ -80,21 +81,16 @@ struct alignas(16) VolumeIntegrationState {
     Float4 accumulatedAlphaRGB; // Running sum of [Σα, Σ(α·R), Σ(α·G), Σ(α·B)]
 };
 
-// Legacy alias for compatibility
-using SplineState = VolumeIntegrationState;
-
 //------------------------------------------------------------------------------
-// Gaussian Sample: represents a ray-Gaussian intersection point
+// Volume Sample: represents a ray-primitive intersection point
 // Used for accumulating contributions during volume rendering
+// Independent of specific primitive type (ellipsoid, sphere, etc.)
 //------------------------------------------------------------------------------
 
-struct alignas(16) GaussianSample {
+struct alignas(16) VolumeSample {
     float t;                    // Ray parameter at intersection
     Float4 alphaColorProduct;   // [α, α·R, α·G, α·B] - density-weighted color contribution
 };
-
-// Legacy alias for compatibility
-using ControlPoint = GaussianSample;
 
 //------------------------------------------------------------------------------
 // Render parameters
@@ -119,7 +115,7 @@ struct ForwardOutput {
     void* stateBuffer = nullptr;            // Final integration states (VolumeIntegrationState * numRays)
     void* triCollectionBuffer = nullptr;    // Visited primitives (int * numRays * maxIters)
     void* itersBuffer = nullptr;            // Iterations per ray (uint * numRays)
-    void* lastSampleBuffer = nullptr;       // Last Gaussian sample (float4 * numRays)
+    void* lastSampleBuffer = nullptr;       // Last volume sample (float4 * numRays)
 
     size_t numRays = 0;
     size_t maxIters = 0;

@@ -14,16 +14,16 @@ import common.intersect;
 
 struct GradientModel {
     // Forward data (read-only)
-    StructuredBuffer<float3> means;
+    StructuredBuffer<float3> positions;
     StructuredBuffer<float3> scales;
-    StructuredBuffer<float4> quats;
+    StructuredBuffer<float4> orientations;
     StructuredBuffer<float> densities;
     StructuredBuffer<float> features;
 
     // Gradient outputs (read-write with atomics)
-    RWStructuredBuffer<float> dMeans;       // [numPrims * 3]
+    RWStructuredBuffer<float> dPositions;   // [numPrims * 3]
     RWStructuredBuffer<float> dScales;      // [numPrims * 3]
-    RWStructuredBuffer<float> dQuats;       // [numPrims * 4]
+    RWStructuredBuffer<float> dOrientations;// [numPrims * 4]
     RWStructuredBuffer<float> dDensities;   // [numPrims]
     RWStructuredBuffer<float> dFeatures;    // [numPrims * featureSize]
     RWStructuredBuffer<float> dRayOrigins;  // [numRays * 3]
@@ -92,7 +92,7 @@ void atomicAddFloat4(RWStructuredBuffer<float> buffer, uint idx, float4 val) {
 [Differentiable]
 VolumeIntegrationState forwardIntegrationStep(
     VolumeIntegrationState state,
-    GaussianSample sample,
+    VolumeSample sample,
     float tMax)
 {
     VolumeIntegrationState newState = state;
@@ -117,24 +117,24 @@ VolumeIntegrationState forwardIntegrationStep(
     return newState;
 }
 
-// Compute Gaussian sample with differentiable operations
+// Compute volume sample with differentiable operations
 [Differentiable]
-GaussianSample computeGaussianSample(
+VolumeSample computeVolumeSample(
     float t,
     float3 rayOrigin,
     float3 rayDir,
-    float3 mean,
+    float3 position,
     float3 scale,
-    float4 quat,
+    float4 orientation,
     float density,
     float3 color,
     bool isEntry)
 {
-    GaussianSample sample;
+    VolumeSample sample;
     sample.t = t;
 
-    // Evaluate Gaussian density at intersection point
-    float sigma = evaluateGaussianAlongRay(rayOrigin, rayDir, t, mean, scale, quat, density);
+    // Evaluate ellipsoid density at intersection point
+    float sigma = evaluateEllipsoidAlongRay(rayOrigin, rayDir, t, position, scale, orientation, density);
 
     float sign = isEntry ? 1.0f : -1.0f;
 
@@ -187,7 +187,7 @@ void backwardKernel(
     // This is necessary for correct gradient computation
 
     VolumeIntegrationState states[64];  // Max samples supported
-    GaussianSample samples[64];
+    VolumeSample samples[64];
     uint primIndices[64];
     bool isEntries[64];
 
@@ -207,13 +207,13 @@ void backwardKernel(
         isEntries[i] = isEntry;
 
         // Get primitive data
-        float3 mean = params.model.means[primIdx];
+        float3 position = params.model.positions[primIdx];
         float3 scale = params.model.scales[primIdx];
-        float4 quat = params.model.quats[primIdx];
+        float4 orientation = params.model.orientations[primIdx];
         float density = params.model.densities[primIdx];
 
         // Recompute intersection t
-        IntersectResult intersect = rayIntersectGaussian(rayOrigin, rayDir, mean, scale, quat);
+        IntersectResult intersect = rayIntersectEllipsoidBounded(rayOrigin, rayDir, position, scale, orientation);
         float t = isEntry ? intersect.tNear : intersect.tFar;
 
         // Get color at this point
@@ -221,9 +221,9 @@ void backwardKernel(
         float3 color = evaluateColor(viewDir, params.model.features, primIdx,
                                     params.featureSize, params.shDegree);
 
-        // Compute Gaussian sample
-        samples[i] = computeGaussianSample(
-            t, rayOrigin, rayDir, mean, scale, quat, density, color, isEntry
+        // Compute volume sample
+        samples[i] = computeVolumeSample(
+            t, rayOrigin, rayDir, position, scale, orientation, density, color, isEntry
         );
 
         // Forward step to get next state
@@ -245,13 +245,13 @@ void backwardKernel(
     for (int i = int(numSamples) - 1; i >= 0; i--) {
         uint primIdx = primIndices[i];
         bool isEntry = isEntries[i];
-        GaussianSample sample = samples[i];
+        VolumeSample sample = samples[i];
         VolumeIntegrationState prevState = states[i];
 
         // Get primitive data
-        float3 mean = params.model.means[primIdx];
+        float3 position = params.model.positions[primIdx];
         float3 scale = params.model.scales[primIdx];
-        float4 quat = params.model.quats[primIdx];
+        float4 orientation = params.model.orientations[primIdx];
         float density = params.model.densities[primIdx];
 
         // Compute gradients using chain rule for volume rendering equation:
@@ -299,13 +299,13 @@ void backwardKernel(
             atomicAddFloat3(params.model.dFeatures, primIdx, dLdColorFeature);
         }
 
-        // Gradient for position (mean): dL/dμ
+        // Gradient for position: dL/dμ
         // Approximation: gradient points toward/away from ray based on density contribution
         float3 rayPoint = rayOrigin + sample.t * rayDir;
-        float3 diff = rayPoint - mean;
-        float3 dLdMean = dLdDensity * diff * density * 0.01f;
+        float3 diff = rayPoint - position;
+        float3 dLdPosition = dLdDensity * diff * density * 0.01f;
 
-        atomicAddFloat3(params.model.dMeans, primIdx, dLdMean);
+        atomicAddFloat3(params.model.dPositions, primIdx, dLdPosition);
 
         // Gradient for scale: dL/ds
         float3 dLdScale = dLdDensity * scale * 0.001f;

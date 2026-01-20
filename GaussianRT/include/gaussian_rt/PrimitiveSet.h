@@ -7,35 +7,38 @@
 namespace gaussian_rt {
 
 /**
- * @brief Manages Gaussian primitive data on GPU
+ * @brief Manages primitive data on GPU
  *
- * Stores and manages the 3D Gaussian splat primitives including:
- * - Position (mean)
- * - Scale
- * - Rotation (quaternion)
+ * Stores and manages volume primitives (currently ellipsoids) including:
+ * - Position (center)
+ * - Scale (radii)
+ * - Orientation (quaternion)
  * - Density/opacity
  * - Features (RGB or spherical harmonics coefficients)
+ *
+ * This class is primitive-type agnostic and can be extended to support
+ * different primitive types (sphere, capsule, etc.)
  */
-class GaussianPrimitives {
+class PrimitiveSet {
 public:
-    GaussianPrimitives(Device& device);
-    ~GaussianPrimitives();
+    PrimitiveSet(Device& device);
+    ~PrimitiveSet();
 
     // Non-copyable
-    GaussianPrimitives(const GaussianPrimitives&) = delete;
-    GaussianPrimitives& operator=(const GaussianPrimitives&) = delete;
+    PrimitiveSet(const PrimitiveSet&) = delete;
+    PrimitiveSet& operator=(const PrimitiveSet&) = delete;
 
     // Movable
-    GaussianPrimitives(GaussianPrimitives&&) noexcept;
-    GaussianPrimitives& operator=(GaussianPrimitives&&) noexcept;
+    PrimitiveSet(PrimitiveSet&&) noexcept;
+    PrimitiveSet& operator=(PrimitiveSet&&) noexcept;
 
     /**
      * @brief Set primitive data from raw pointers
      *
      * @param numPrimitives Number of primitives
-     * @param means Center positions (float3 * N)
+     * @param positions Center positions (float3 * N)
      * @param scales Scale factors (float3 * N)
-     * @param quats Rotation quaternions (float4 * N)
+     * @param orientations Rotation quaternions (float4 * N)
      * @param densities Opacity values (float * N)
      * @param features Color/SH features (float * N * featureSize)
      * @param featureSize Size of features per primitive
@@ -43,9 +46,9 @@ public:
      */
     Result setData(
         size_t numPrimitives,
-        const float* means,
+        const float* positions,
         const float* scales,
-        const float* quats,
+        const float* orientations,
         const float* densities,
         const float* features,
         size_t featureSize);
@@ -57,9 +60,9 @@ public:
      */
     Result setDataFromDevice(
         size_t numPrimitives,
-        void* d_means,
+        void* d_positions,
         void* d_scales,
-        void* d_quats,
+        void* d_orientations,
         void* d_densities,
         void* d_features,
         size_t featureSize);
@@ -79,18 +82,22 @@ public:
     size_t getFeatureSize() const { return m_featureSize; }
 
     // Device pointers
-    void* getMeansDevice() const { return m_d_means; }
+    void* getPositionsDevice() const { return m_d_positions; }
     void* getScalesDevice() const { return m_d_scales; }
-    void* getQuatsDevice() const { return m_d_quats; }
+    void* getOrientationsDevice() const { return m_d_orientations; }
     void* getDensitiesDevice() const { return m_d_densities; }
     void* getFeaturesDevice() const { return m_d_features; }
     void* getAABBsDevice() const { return m_d_aabbs; }
+
+    // Legacy accessors for compatibility
+    void* getMeansDevice() const { return m_d_positions; }
+    void* getQuatsDevice() const { return m_d_orientations; }
 
     // Get spherical harmonics degree based on feature size
     uint32_t getSHDegree() const;
 
     // Check if data is valid
-    bool isValid() const { return m_numPrimitives > 0 && m_d_means != nullptr; }
+    bool isValid() const { return m_numPrimitives > 0 && m_d_positions != nullptr; }
 
 private:
     Device& m_device;
@@ -99,17 +106,17 @@ private:
     size_t m_featureSize = 0;
 
     // Device pointers (owned or external)
-    void* m_d_means = nullptr;
+    void* m_d_positions = nullptr;
     void* m_d_scales = nullptr;
-    void* m_d_quats = nullptr;
+    void* m_d_orientations = nullptr;
     void* m_d_densities = nullptr;
     void* m_d_features = nullptr;
     void* m_d_aabbs = nullptr;
 
     // Ownership flags
-    bool m_ownsMeans = false;
+    bool m_ownsPositions = false;
     bool m_ownsScales = false;
-    bool m_ownsQuats = false;
+    bool m_ownsOrientations = false;
     bool m_ownsDensities = false;
     bool m_ownsFeatures = false;
     bool m_ownsAABBs = false;
@@ -117,5 +124,8 @@ private:
     // Helper to free owned buffers
     void freeOwnedBuffers();
 };
+
+// Legacy alias for compatibility
+using GaussianPrimitives = PrimitiveSet;
 
 } // namespace gaussian_rt

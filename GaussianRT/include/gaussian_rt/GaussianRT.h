@@ -23,8 +23,8 @@
  * initializeGlobalDevice(0);  // CUDA device 0
  *
  * // Create primitives
- * GaussianPrimitives prims(getGlobalDevice());
- * prims.setData(numPrims, means, scales, quats, densities, features, featureSize);
+ * PrimitiveSet prims(getGlobalDevice());
+ * prims.setData(numPrims, positions, scales, orientations, densities, features, featureSize);
  *
  * // Build acceleration structure
  * AccelStruct accel(getGlobalDevice());
@@ -50,7 +50,7 @@
 
 #include "Types.h"
 #include "Device.h"
-#include "GaussianPrimitives.h"
+#include "PrimitiveSet.h"
 #include "AccelStruct.h"
 #include "ForwardRenderer.h"
 #include "BackwardPass.h"
@@ -92,13 +92,13 @@ public:
     Result initialize(int cudaDeviceId = 0, bool enableBackward = true);
 
     /**
-     * @brief Set Gaussian primitive data
+     * @brief Set volume primitive data
      */
     Result setPrimitives(
         size_t numPrimitives,
-        const float* means,
+        const float* positions,
         const float* scales,
-        const float* quats,
+        const float* orientations,
         const float* densities,
         const float* features,
         size_t featureSize);
@@ -108,9 +108,9 @@ public:
      */
     Result setPrimitivesDevice(
         size_t numPrimitives,
-        void* d_means,
+        void* d_positions,
         void* d_scales,
-        void* d_quats,
+        void* d_orientations,
         void* d_densities,
         void* d_features,
         size_t featureSize);
@@ -145,17 +145,17 @@ public:
      * @brief Compute gradients
      *
      * @param d_dLdColor Device pointer to loss gradients
-     * @param d_dMeans Output: gradients for means
+     * @param d_dPositions Output: gradients for positions
      * @param d_dScales Output: gradients for scales
-     * @param d_dQuats Output: gradients for quats
+     * @param d_dOrientations Output: gradients for orientations
      * @param d_dDensities Output: gradients for densities
      * @param d_dFeatures Output: gradients for features
      */
     Result backward(
         void* d_dLdColor,
-        void* d_dMeans,
+        void* d_dPositions,
         void* d_dScales,
-        void* d_dQuats,
+        void* d_dOrientations,
         void* d_dDensities,
         void* d_dFeatures);
 
@@ -166,14 +166,14 @@ public:
 
     // Accessors
     Device& getDevice() { return *m_device; }
-    GaussianPrimitives& getPrimitives() { return *m_primitives; }
+    PrimitiveSet& getPrimitives() { return *m_primitives; }
     AccelStruct& getAccelStruct() { return *m_accel; }
     ForwardRenderer& getForwardRenderer() { return *m_forward; }
     BackwardPass& getBackwardPass() { return *m_backward; }
 
 private:
     std::unique_ptr<Device> m_device;
-    std::unique_ptr<GaussianPrimitives> m_primitives;
+    std::unique_ptr<PrimitiveSet> m_primitives;
     std::unique_ptr<AccelStruct> m_accel;
     std::unique_ptr<ForwardRenderer> m_forward;
     std::unique_ptr<BackwardPass> m_backward;

@@ -3,7 +3,7 @@
  * @brief Unit tests for GaussianPrimitives class
  */
 
-#include "gaussian_rt/GaussianPrimitives.h"
+#include "gaussian_rt/PrimitiveSet.h"
 #include <cstdio>
 #include <cassert>
 #include <vector>
@@ -76,7 +76,7 @@ TEST(primitives_creation) {
         return;
     }
 
-    GaussianPrimitives prims(device);
+    PrimitiveSet prims(device);
     assert(!prims.isValid());
     assert(prims.getNumPrimitives() == 0);
 
@@ -91,7 +91,7 @@ TEST(primitives_set_data) {
         return;
     }
 
-    GaussianPrimitives prims(device);
+    PrimitiveSet prims(device);
 
     // Generate test data
     size_t numPrims = 100;
@@ -136,7 +136,7 @@ TEST(primitives_sh_degree) {
 
     // Test SH degree inference
     {
-        GaussianPrimitives prims(device);
+        PrimitiveSet prims(device);
         size_t numPrims = 10;
         std::vector<float> means, scales, quats, densities, features;
         generateTestPrimitives(numPrims, means, scales, quats, densities, features, 3);
@@ -146,7 +146,7 @@ TEST(primitives_sh_degree) {
     }
 
     {
-        GaussianPrimitives prims(device);
+        PrimitiveSet prims(device);
         size_t numPrims = 10;
         std::vector<float> means, scales, quats, densities, features;
         generateTestPrimitives(numPrims, means, scales, quats, densities, features, 12);
@@ -156,7 +156,7 @@ TEST(primitives_sh_degree) {
     }
 
     {
-        GaussianPrimitives prims(device);
+        PrimitiveSet prims(device);
         size_t numPrims = 10;
         std::vector<float> means, scales, quats, densities, features;
         generateTestPrimitives(numPrims, means, scales, quats, densities, features, 27);
@@ -166,7 +166,7 @@ TEST(primitives_sh_degree) {
     }
 
     {
-        GaussianPrimitives prims(device);
+        PrimitiveSet prims(device);
         size_t numPrims = 10;
         std::vector<float> means, scales, quats, densities, features;
         generateTestPrimitives(numPrims, means, scales, quats, densities, features, 48);
@@ -186,7 +186,7 @@ TEST(primitives_update_aabbs) {
         return;
     }
 
-    GaussianPrimitives prims(device);
+    PrimitiveSet prims(device);
 
     size_t numPrims = 100;
     std::vector<float> means, scales, quats, densities, features;
@@ -215,12 +215,12 @@ TEST(primitives_move) {
     std::vector<float> means, scales, quats, densities, features;
     generateTestPrimitives(numPrims, means, scales, quats, densities, features);
 
-    GaussianPrimitives prims1(device);
+    PrimitiveSet prims1(device);
     prims1.setData(numPrims, means.data(), scales.data(), quats.data(),
                    densities.data(), features.data(), 3);
 
     // Move
-    GaussianPrimitives prims2 = std::move(prims1);
+    PrimitiveSet prims2 = std::move(prims1);
 
     assert(!prims1.isValid());
     assert(prims2.isValid());

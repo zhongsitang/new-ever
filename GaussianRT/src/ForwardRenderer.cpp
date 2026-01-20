@@ -453,7 +453,7 @@ void ForwardRenderer::freeOutput(ForwardOutput& output) {
 
 Result ForwardRenderer::traceRays(
     const AccelStruct& accel,
-    const GaussianPrimitives& primitives,
+    const PrimitiveSet& primitives,
     void* d_rayOrigins,
     void* d_rayDirections,
     size_t numRays,

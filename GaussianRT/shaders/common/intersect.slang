@@ -1,5 +1,5 @@
 // GaussianRT - Ray-Ellipsoid intersection
-// Differentiable intersection for 3D Gaussians
+// Differentiable intersection for ellipsoid volume primitives
 
 module intersect;
 
@@ -68,38 +68,40 @@ IntersectResult rayIntersectEllipsoid(
     return result;
 }
 
-// Simplified intersection for AABB-based primitives
-// Uses the fact that Gaussian is ~3-sigma bounded
+// Bounded ellipsoid intersection for volume primitives
+// Uses sigma bound to define the effective radius (e.g., 3-sigma for Gaussian falloff)
 [Differentiable]
-IntersectResult rayIntersectGaussian(
+IntersectResult rayIntersectEllipsoidBounded(
     float3 rayOrigin,
     float3 rayDir,
-    float3 mean,
+    float3 position,
     float3 scale,
-    float4 quat,
+    float4 orientation,
     float sigmaBound = 3.0f)
 {
     // Scale by sigma bound for effective radius
     float3 effectiveScale = scale * sigmaBound;
-    return rayIntersectEllipsoid(rayOrigin, rayDir, mean, effectiveScale, quat);
+    return rayIntersectEllipsoid(rayOrigin, rayDir, position, effectiveScale, orientation);
 }
 
 //------------------------------------------------------------------------------
-// Gaussian Density Evaluation
+// Ellipsoid Density Evaluation
+// Uses Gaussian falloff for smooth density field
 //------------------------------------------------------------------------------
 
-// Evaluate Gaussian density at a point (differentiable)
+// Evaluate ellipsoid density at a point (differentiable)
+// Uses Gaussian falloff: density * exp(-0.5 * mahalanobis_dist^2)
 [Differentiable]
-float evaluateGaussianDensity(
+float evaluateEllipsoidDensity(
     float3 point,
-    float3 mean,
+    float3 position,
     float3 scale,
-    float4 quat,
+    float4 orientation,
     float density)
 {
     // Transform point to local coordinates
-    float3 localPoint = point - mean;
-    float3x3 R = quatToMatrix(quat);
+    float3 localPoint = point - position;
+    float3x3 R = quatToMatrix(orientation);
     float3x3 Rt = transpose3x3(R);
     localPoint = mulMat3Vec(Rt, localPoint);
 
@@ -109,51 +111,50 @@ float evaluateGaussianDensity(
     // Compute squared Mahalanobis distance
     float dist2 = dot3(normalizedPoint, normalizedPoint);
 
-    // Gaussian: exp(-0.5 * dist^2)
+    // Gaussian falloff: exp(-0.5 * dist^2)
     return density * safeExp(-0.5f * dist2);
 }
 
-// Evaluate Gaussian along ray at parameter t
+// Evaluate ellipsoid density along ray at parameter t
 [Differentiable]
-float evaluateGaussianAlongRay(
+float evaluateEllipsoidAlongRay(
     float3 rayOrigin,
     float3 rayDir,
     float t,
-    float3 mean,
+    float3 position,
     float3 scale,
-    float4 quat,
+    float4 orientation,
     float density)
 {
     float3 point = rayOrigin + t * rayDir;
-    return evaluateGaussianDensity(point, mean, scale, quat, density);
+    return evaluateEllipsoidDensity(point, position, scale, orientation, density);
 }
 
 //------------------------------------------------------------------------------
-// Gaussian Sample Generation
-// Creates a sample for volume rendering integration at a ray-Gaussian intersection
+// Volume Sample Generation
+// Creates a sample for volume rendering integration at a ray-primitive intersection
+// This is primitive-type agnostic - works with any ellipsoid-based primitive
 //------------------------------------------------------------------------------
 
-// Generate a Gaussian sample for volume rendering
-// This represents the contribution of a Gaussian at the intersection point
-// for use in the discrete volume rendering equation:
+// Create a volume sample for the discrete volume rendering equation:
 //   C = Σᵢ αᵢ · cᵢ · Πⱼ₌₁^{i-1}(1 - αⱼ)
 [Differentiable]
-GaussianSample createGaussianSample(
+VolumeSample createVolumeSample(
     float t,                    // Ray parameter at intersection
     float3 rayOrigin,
     float3 rayDir,
-    float3 mean,
+    float3 position,
     float3 scale,
-    float4 quat,
+    float4 orientation,
     float density,              // Base opacity σ
     float3 color,               // RGB color at this point
-    bool isEntry)               // true if entering Gaussian, false if exiting
+    bool isEntry)               // true if entering primitive, false if exiting
 {
-    GaussianSample sample;
+    VolumeSample sample;
     sample.t = t;
 
-    // Evaluate the Gaussian density σ(t) at the intersection point
-    float sigma = evaluateGaussianAlongRay(rayOrigin, rayDir, t, mean, scale, quat, density);
+    // Evaluate the density σ(t) at the intersection point
+    float sigma = evaluateEllipsoidAlongRay(rayOrigin, rayDir, t, position, scale, orientation, density);
 
     // For the discrete volume rendering formulation:
     // - Entry points contribute positively (add to accumulated density)
