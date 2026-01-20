@@ -1,103 +1,15 @@
 // Backward gradient computation for GaussianRT
-// Uses Slang automatic differentiation for volume rendering gradients
+// Uses Slang automatic differentiation to generate CUDA backward kernels
 
 import common;
 
 // ============================================================================
-// Kernel Parameters (passed via uniform buffer)
+// Differentiable Volume Rendering Core
 // ============================================================================
 
-struct BackwardParams {
-    uint num_rays;
-    uint max_samples;
-    uint sh_degree;
-    uint feature_dim;
-    float t_min;
-    float t_max;
-};
-
-ConstantBuffer<BackwardParams> params;
-
-// ============================================================================
-// Data Buffers
-// ============================================================================
-
-// Forward pass outputs (read-only)
-StructuredBuffer<float> final_states;          // [num_rays * 11]
-StructuredBuffer<float> last_points;           // [num_rays * 5]
-StructuredBuffer<int> sample_counts;           // [num_rays]
-StructuredBuffer<int> sample_indices;          // [num_rays * max_samples]
-
-// Scene data (read-only)
-StructuredBuffer<float> positions;             // [N * 3]
-StructuredBuffer<float> scales;                // [N * 3]
-StructuredBuffer<float> rotations;             // [N * 4]
-StructuredBuffer<float> opacities;             // [N]
-StructuredBuffer<float> features;              // [N * feature_dim]
-
-// Ray data (read-only)
-StructuredBuffer<float> ray_origins;           // [num_rays * 3]
-StructuredBuffer<float> ray_directions;        // [num_rays * 3]
-
-// Upstream gradients (read-only)
-StructuredBuffer<float> grad_colors;           // [num_rays * 4]
-StructuredBuffer<float> grad_depths;           // [num_rays]
-StructuredBuffer<float> grad_distortions;      // [num_rays]
-
-// Gradient outputs (write, atomic add)
-RWStructuredBuffer<float> grad_positions;      // [N * 3]
-RWStructuredBuffer<float> grad_scales;         // [N * 3]
-RWStructuredBuffer<float> grad_rotations;      // [N * 4]
-RWStructuredBuffer<float> grad_opacities;      // [N]
-RWStructuredBuffer<float> grad_features;       // [N * feature_dim]
-RWStructuredBuffer<float> grad_ray_origins;    // [num_rays * 3]
-RWStructuredBuffer<float> grad_ray_directions; // [num_rays * 3]
-
-// ============================================================================
-// Helper Functions for Data Loading
-// ============================================================================
-
-float3 load_float3_buffer(StructuredBuffer<float> buffer, uint idx) {
-    uint base = idx * 3;
-    return float3(buffer[base], buffer[base + 1], buffer[base + 2]);
-}
-
-float4 load_float4_buffer(StructuredBuffer<float> buffer, uint idx) {
-    uint base = idx * 4;
-    return float4(buffer[base], buffer[base + 1], buffer[base + 2], buffer[base + 3]);
-}
-
-void load_sh_coefficients_buffer(uint element_id, out float3 coeffs[SH_COEFF_COUNT]) {
-    uint base_offset = element_id * params.feature_dim;
-    for (uint i = 0; i < SH_COEFF_COUNT; ++i) {
-        uint offset = base_offset + i * 3;
-        coeffs[i] = float3(features[offset], features[offset + 1], features[offset + 2]);
-    }
-}
-
-RenderState load_render_state_buffer(uint ray_idx) {
-    uint base = ray_idx * 11;
-    RenderState state;
-    state.log_transmittance = final_states[base + 0];
-    state.accumulated_color = float3(
-        final_states[base + 1],
-        final_states[base + 2],
-        final_states[base + 3]
-    );
-    state.accumulated_depth = final_states[base + 4];
-    state.depth_weight = final_states[base + 5];
-    state.t_current = final_states[base + 6];
-    state.distortion_accum = float2(final_states[base + 7], final_states[base + 8]);
-    state.weight_accum = float2(final_states[base + 9], final_states[base + 10]);
-    return state;
-}
-
-// ============================================================================
-// Differentiable Volume Rendering Functions
-// ============================================================================
-
+// Ray-ellipsoid intersection (differentiable)
 [Differentiable]
-float2 compute_ray_ellipsoid_intersection(
+float2 intersect_ellipsoid(
     float3 ray_origin,
     float3 ray_direction,
     float3 center,
@@ -124,221 +36,261 @@ float2 compute_ray_ellipsoid_intersection(
     return float2(t_near, t_far);
 }
 
+// Compute sample contribution to accumulated color (differentiable)
 [Differentiable]
-float3 compute_sh_color(float3 direction, float3 coeffs[SH_COEFF_COUNT], uint sh_degree) {
-    return eval_sh_color(direction, coeffs, sh_degree);
-}
-
-// Compute contribution from a single sample to the final color
-// This is the core function we need to differentiate
-[Differentiable]
-float4 compute_sample_contribution(
+float4 compute_contribution(
     float prev_log_transmittance,
     float prev_t,
-    float sample_t,
+    float t_sample,
     float sigma,
     float3 color
 ) {
-    float dt = max(sample_t - prev_t, 1e-6f);
-    float tau = sigma * dt;  // optical thickness
+    float dt = max(t_sample - prev_t, 1e-6f);
+    float tau = sigma * dt;
     float alpha = 1.0f - safe_exp(-tau);
     float transmittance = safe_exp(prev_log_transmittance);
     float weight = alpha * transmittance;
 
-    // Returns: (color_contribution.xyz, new_log_transmittance)
-    return float4(weight * color, prev_log_transmittance - tau);
+    float3 color_contrib = weight * color;
+    float new_log_T = prev_log_transmittance - tau;
+
+    return float4(color_contrib, new_log_T);
+}
+
+// Evaluate SH color (differentiable, simplified to DC for now)
+[Differentiable]
+float3 eval_sh_dc(float3 coeff0) {
+    // DC term only: color = sigmoid(SH_C0 * coeff0)
+    float3 raw = SH_C0 * coeff0;
+    return float3(
+        1.0f / (1.0f + exp(-raw.x)),
+        1.0f / (1.0f + exp(-raw.y)),
+        1.0f / (1.0f + exp(-raw.z))
+    );
 }
 
 // ============================================================================
-// Backward Kernel Implementation
+// Complete differentiable forward for a single sample
 // ============================================================================
 
-[shader("compute")]
-[numthreads(256, 1, 1)]
-void backward_main(uint3 dispatch_id : SV_DispatchThreadID) {
-    uint ray_idx = dispatch_id.x;
-    if (ray_idx >= params.num_rays) return;
+[Differentiable]
+float4 render_single_sample(
+    float3 ray_origin,
+    float3 ray_direction,
+    float3 center,
+    float3 scale,
+    float4 rotation,
+    float opacity,
+    float3 sh_coeff0,  // DC coefficient only for simplicity
+    float prev_log_T,
+    float prev_t
+) {
+    // Compute intersection
+    float2 t_vals = intersect_ellipsoid(ray_origin, ray_direction, center, scale, rotation);
+    float t_sample = (t_vals.x + t_vals.y) * 0.5f;
 
-    // Load upstream gradients
-    uint grad_base = ray_idx * 4;
-    float4 dL_dcolor = float4(
-        grad_colors[grad_base],
-        grad_colors[grad_base + 1],
-        grad_colors[grad_base + 2],
-        grad_colors[grad_base + 3]
-    );
-    float dL_ddepth = grad_depths[ray_idx];
-    float dL_ddistortion = grad_distortions[ray_idx];
+    // Compute color from SH
+    float3 color = eval_sh_dc(sh_coeff0);
 
-    // Load ray data
-    float3 ray_origin = load_float3_buffer(ray_origins, ray_idx);
-    float3 ray_direction = load_float3_buffer(ray_directions, ray_idx);
+    // Compute contribution
+    return compute_contribution(prev_log_T, prev_t, t_sample, opacity, color);
+}
+
+// ============================================================================
+// CUDA Kernel for backward pass
+// ============================================================================
+
+// Buffer declarations for CUDA kernel
+// Input buffers (read-only)
+StructuredBuffer<float> g_final_states;      // [num_rays * 11]
+StructuredBuffer<int> g_sample_counts;       // [num_rays]
+StructuredBuffer<int> g_sample_indices;      // [num_rays * max_samples]
+
+StructuredBuffer<float> g_positions;         // [N * 3]
+StructuredBuffer<float> g_scales;            // [N * 3]
+StructuredBuffer<float> g_rotations;         // [N * 4]
+StructuredBuffer<float> g_opacities;         // [N]
+StructuredBuffer<float> g_features;          // [N * feature_dim]
+
+StructuredBuffer<float> g_ray_origins;       // [num_rays * 3]
+StructuredBuffer<float> g_ray_directions;    // [num_rays * 3]
+
+StructuredBuffer<float> g_grad_colors;       // [num_rays * 4]
+StructuredBuffer<float> g_grad_depths;       // [num_rays]
+
+// Output buffers (atomic add)
+RWStructuredBuffer<float> g_grad_positions;  // [N * 3]
+RWStructuredBuffer<float> g_grad_scales;     // [N * 3]
+RWStructuredBuffer<float> g_grad_rotations;  // [N * 4]
+RWStructuredBuffer<float> g_grad_opacities;  // [N]
+RWStructuredBuffer<float> g_grad_features;   // [N * feature_dim]
+RWStructuredBuffer<float> g_grad_ray_origins;    // [num_rays * 3]
+RWStructuredBuffer<float> g_grad_ray_directions; // [num_rays * 3]
+
+// Parameters
+uniform uint g_num_rays;
+uniform uint g_max_samples;
+uniform uint g_feature_dim;
+uniform float g_t_min;
+
+// Helper to load float3 from buffer
+float3 load_float3(StructuredBuffer<float> buf, uint idx) {
+    uint base = idx * 3;
+    return float3(buf[base], buf[base + 1], buf[base + 2]);
+}
+
+float4 load_float4(StructuredBuffer<float> buf, uint idx) {
+    uint base = idx * 4;
+    return float4(buf[base], buf[base + 1], buf[base + 2], buf[base + 3]);
+}
+
+// Atomic add helpers
+void atomic_add_float3(RWStructuredBuffer<float> buf, uint idx, float3 val) {
+    uint base = idx * 3;
+    InterlockedAddF32(buf, base + 0, val.x);
+    InterlockedAddF32(buf, base + 1, val.y);
+    InterlockedAddF32(buf, base + 2, val.z);
+}
+
+void atomic_add_float4(RWStructuredBuffer<float> buf, uint idx, float4 val) {
+    uint base = idx * 4;
+    InterlockedAddF32(buf, base + 0, val.x);
+    InterlockedAddF32(buf, base + 1, val.y);
+    InterlockedAddF32(buf, base + 2, val.z);
+    InterlockedAddF32(buf, base + 3, val.w);
+}
+
+// Main backward kernel
+[CUDAKernel]
+void backward_kernel(uint3 tid : SV_DispatchThreadID) {
+    uint ray_idx = tid.x;
+    if (ray_idx >= g_num_rays) return;
+
+    // Load upstream gradient
+    float4 dL_dcolor = load_float4(g_grad_colors, ray_idx);
+    float dL_ddepth = g_grad_depths[ray_idx];
+
+    // Load ray
+    float3 ray_origin = load_float3(g_ray_origins, ray_idx);
+    float3 ray_direction = load_float3(g_ray_directions, ray_idx);
 
     // Load sample count
-    int num_samples = sample_counts[ray_idx];
+    int num_samples = g_sample_counts[ray_idx];
     if (num_samples == 0) return;
 
-    // Load final state for reference
-    RenderState final_state = load_render_state_buffer(ray_idx);
+    // Load final state
+    uint state_base = ray_idx * 11;
+    float final_log_T = g_final_states[state_base + 0];
+    float final_depth = g_final_states[state_base + 4];
+    float final_depth_weight = max(g_final_states[state_base + 5], 1e-6f);
 
-    // Gradient accumulators for ray
+    // Gradient accumulators
     float3 dL_dray_origin_accum = float3(0.0f);
     float3 dL_dray_direction_accum = float3(0.0f);
 
-    // For backward pass, we need to reconstruct intermediate states
-    // and propagate gradients from output to inputs
-
-    // Gradient w.r.t. final accumulated color
+    // Gradient w.r.t. accumulated color (from output)
     float3 dL_daccum_color = dL_dcolor.xyz;
 
-    // Gradient w.r.t. depth (depth = accumulated_depth / depth_weight)
-    float depth_weight_safe = max(final_state.depth_weight, 1e-6f);
-    float dL_daccum_depth = dL_ddepth / depth_weight_safe;
-    float dL_ddepth_weight = -dL_ddepth * final_state.accumulated_depth /
-                             (depth_weight_safe * depth_weight_safe);
+    // Gradient w.r.t. alpha (from output)
+    float dL_dalpha_out = dL_dcolor.w;
 
-    // Backward through samples in reverse order
-    // We need to track log_transmittance as we go backward
-    float current_log_T = final_state.log_transmittance;
-    float current_t = final_state.t_current;
+    // Track state for backward iteration
+    float current_log_T = final_log_T;
 
-    // Gradient w.r.t. log_transmittance (from alpha output)
-    float dL_dlog_T = dL_dcolor.w * (-safe_exp(final_state.log_transmittance));
-
+    // Process samples in reverse order
     for (int i = num_samples - 1; i >= 0; --i) {
-        int element_id = sample_indices[ray_idx * params.max_samples + i];
+        int element_id = g_sample_indices[ray_idx * g_max_samples + i];
         if (element_id < 0) continue;
 
         // Load element data
-        float3 center = load_float3_buffer(positions, element_id);
-        float3 scale = load_float3_buffer(scales, element_id);
-        float4 rotation = load_float4_buffer(rotations, element_id);
-        float opacity = opacities[element_id];
+        float3 center = load_float3(g_positions, element_id);
+        float3 scale = load_float3(g_scales, element_id);
+        float4 rotation = load_float4(g_rotations, element_id);
+        float opacity = g_opacities[element_id];
 
-        float3 sh_coeffs[SH_COEFF_COUNT];
-        load_sh_coefficients_buffer(element_id, sh_coeffs);
-
-        // Recompute intersection and sample point
-        float2 t_vals = compute_ray_ellipsoid_intersection(
-            ray_origin, ray_direction, center, scale, rotation
+        // Load DC SH coefficient
+        uint feat_base = element_id * g_feature_dim;
+        float3 sh_coeff0 = float3(
+            g_features[feat_base + 0],
+            g_features[feat_base + 1],
+            g_features[feat_base + 2]
         );
+
+        // Estimate prev_t (approximation for reconstruction)
+        float prev_t = g_t_min;
+
+        // ---- Forward recomputation for this sample ----
+        float2 t_vals = intersect_ellipsoid(ray_origin, ray_direction, center, scale, rotation);
         float t_sample = (t_vals.x + t_vals.y) * 0.5f;
+        float3 color = eval_sh_dc(sh_coeff0);
 
-        // Recompute color
-        float3 sample_color = compute_sh_color(-ray_direction, sh_coeffs, params.sh_degree);
-
-        // Estimate previous state (before this sample)
-        // prev_t is the t value before this sample
-        float prev_t = (i > 0) ? t_sample - 0.01f : params.t_min;  // Approximation
-
-        // Compute this sample's contribution parameters
         float dt = max(t_sample - prev_t, 1e-6f);
         float tau = opacity * dt;
         float alpha = 1.0f - safe_exp(-tau);
-        float prev_log_T = current_log_T + tau;  // Reconstruct previous log_T
+        float prev_log_T = current_log_T + tau;
         float prev_transmittance = safe_exp(prev_log_T);
         float weight = alpha * prev_transmittance;
 
-        // -------- Compute gradients --------
+        // ---- Compute output gradient for this sample ----
+        // Output of render_single_sample is float4(weight * color, new_log_T)
+        // We need gradient w.r.t. this output
+        float4 dL_doutput;
+        dL_doutput.xyz = dL_daccum_color;  // gradient flows to color contribution
+        dL_doutput.w = 0.0f;  // Will be updated through chain rule
 
-        // Gradient of color contribution: contrib = weight * sample_color
-        // dL/d(sample_color) = weight * dL/d(accum_color)
-        float3 dL_dsample_color = weight * dL_daccum_color;
+        // ---- Use autodiff to compute parameter gradients ----
+        // Create differential pairs for inputs
+        var dp_ray_origin = diffPair(ray_origin, float3(0.0f));
+        var dp_ray_direction = diffPair(ray_direction, float3(0.0f));
+        var dp_center = diffPair(center, float3(0.0f));
+        var dp_scale = diffPair(scale, float3(0.0f));
+        var dp_rotation = diffPair(rotation, float4(0.0f));
+        var dp_opacity = diffPair(opacity, 0.0f);
+        var dp_sh_coeff0 = diffPair(sh_coeff0, float3(0.0f));
+        var dp_prev_log_T = diffPair(prev_log_T, 0.0f);
+        var dp_prev_t = diffPair(prev_t, 0.0f);
 
-        // dL/d(weight) = dot(sample_color, dL/d(accum_color)) + t_sample * dL/d(depth) + dL/d(depth_weight)
-        float dL_dweight = dot(sample_color, dL_daccum_color) +
-                           t_sample * dL_daccum_depth +
-                           dL_ddepth_weight;
-
-        // weight = alpha * transmittance = alpha * exp(prev_log_T)
-        // dL/d(alpha) = transmittance * dL/d(weight)
-        float dL_dalpha = prev_transmittance * dL_dweight;
-
-        // dL/d(prev_log_T) from weight = alpha * exp(prev_log_T)
-        float dL_dprev_log_T_from_weight = weight * dL_dweight;
-
-        // alpha = 1 - exp(-tau) => d(alpha)/d(tau) = exp(-tau) = 1 - alpha
-        // dL/d(tau) = (1 - alpha) * dL/d(alpha)
-        float dL_dtau = (1.0f - alpha) * dL_dalpha;
-
-        // tau = opacity * dt
-        // dL/d(opacity) = dt * dL/d(tau)
-        float dL_dopacity = dt * dL_dtau;
-
-        // dL/d(dt) = opacity * dL/d(tau)
-        float dL_ddt = opacity * dL_dtau;
-
-        // dt = t_sample - prev_t
-        // dL/d(t_sample) = dL/d(dt) + weight * dL/d(depth)
-        float dL_dt_sample = dL_ddt + weight * dL_daccum_depth;
-
-        // -------- Backward through intersection --------
-
-        // Use autodiff for intersection gradients
-        var center_dp = diffPair(center, float3(0.0f));
-        var scale_dp = diffPair(scale, float3(0.0f));
-        var rotation_dp = diffPair(rotation, float4(0.0f));
-        var ray_origin_dp = diffPair(ray_origin, float3(0.0f));
-        var ray_direction_dp = diffPair(ray_direction, float3(0.0f));
-
-        // t_sample = (t_near + t_far) / 2
-        // dL/d(t_near) = dL/d(t_sample) * 0.5
-        // dL/d(t_far) = dL/d(t_sample) * 0.5
-        float2 dL_dt_vals = float2(dL_dt_sample * 0.5f, dL_dt_sample * 0.5f);
-
-        bwd_diff(compute_ray_ellipsoid_intersection)(
-            ray_origin_dp, ray_direction_dp,
-            center_dp, scale_dp, rotation_dp,
-            dL_dt_vals
+        // Call backward differentiation
+        bwd_diff(render_single_sample)(
+            dp_ray_origin,
+            dp_ray_direction,
+            dp_center,
+            dp_scale,
+            dp_rotation,
+            dp_opacity,
+            dp_sh_coeff0,
+            dp_prev_log_T,
+            dp_prev_t,
+            dL_doutput
         );
 
-        // -------- Backward through SH color --------
+        // ---- Accumulate gradients ----
+        atomic_add_float3(g_grad_positions, element_id, dp_center.d);
+        atomic_add_float3(g_grad_scales, element_id, dp_scale.d);
+        atomic_add_float4(g_grad_rotations, element_id, dp_rotation.d);
+        InterlockedAddF32(g_grad_opacities, element_id, dp_opacity.d);
 
-        // Simplified SH gradient (DC term dominates)
-        // For DC: color = sigmoid(SH_C0 * coeff[0])
-        // Full SH backward would require more complex handling
-        float3 dL_dcoeff0 = dL_dsample_color * SH_C0;
-
-        // -------- Accumulate gradients --------
-
-        // Element gradients (atomic add)
-        InterlockedAdd(grad_positions, element_id * 3 + 0, center_dp.d.x);
-        InterlockedAdd(grad_positions, element_id * 3 + 1, center_dp.d.y);
-        InterlockedAdd(grad_positions, element_id * 3 + 2, center_dp.d.z);
-
-        InterlockedAdd(grad_scales, element_id * 3 + 0, scale_dp.d.x);
-        InterlockedAdd(grad_scales, element_id * 3 + 1, scale_dp.d.y);
-        InterlockedAdd(grad_scales, element_id * 3 + 2, scale_dp.d.z);
-
-        InterlockedAdd(grad_rotations, element_id * 4 + 0, rotation_dp.d.x);
-        InterlockedAdd(grad_rotations, element_id * 4 + 1, rotation_dp.d.y);
-        InterlockedAdd(grad_rotations, element_id * 4 + 2, rotation_dp.d.z);
-        InterlockedAdd(grad_rotations, element_id * 4 + 3, rotation_dp.d.w);
-
-        InterlockedAdd(grad_opacities, element_id, dL_dopacity);
-
-        // SH coefficient gradients (simplified - DC term only)
-        uint feat_base = element_id * params.feature_dim;
-        InterlockedAdd(grad_features, feat_base + 0, dL_dcoeff0.x);
-        InterlockedAdd(grad_features, feat_base + 1, dL_dcoeff0.y);
-        InterlockedAdd(grad_features, feat_base + 2, dL_dcoeff0.z);
+        // SH coefficient gradient
+        InterlockedAddF32(g_grad_features, feat_base + 0, dp_sh_coeff0.d.x);
+        InterlockedAddF32(g_grad_features, feat_base + 1, dp_sh_coeff0.d.y);
+        InterlockedAddF32(g_grad_features, feat_base + 2, dp_sh_coeff0.d.z);
 
         // Ray gradients
-        dL_dray_origin_accum += ray_origin_dp.d;
-        dL_dray_direction_accum += ray_direction_dp.d;
+        dL_dray_origin_accum += dp_ray_origin.d;
+        dL_dray_direction_accum += dp_ray_direction.d;
 
-        // Update for next iteration (going backward)
+        // Update for next iteration
         current_log_T = prev_log_T;
-        current_t = prev_t;
-        dL_dlog_T += dL_dprev_log_T_from_weight;
     }
 
     // Store ray gradients
-    InterlockedAdd(grad_ray_origins, ray_idx * 3 + 0, dL_dray_origin_accum.x);
-    InterlockedAdd(grad_ray_origins, ray_idx * 3 + 1, dL_dray_origin_accum.y);
-    InterlockedAdd(grad_ray_origins, ray_idx * 3 + 2, dL_dray_origin_accum.z);
+    atomic_add_float3(g_grad_ray_origins, ray_idx, dL_dray_origin_accum);
+    atomic_add_float3(g_grad_ray_directions, ray_idx, dL_dray_direction_accum);
+}
 
-    InterlockedAdd(grad_ray_directions, ray_idx * 3 + 0, dL_dray_direction_accum.x);
-    InterlockedAdd(grad_ray_directions, ray_idx * 3 + 1, dL_dray_direction_accum.y);
-    InterlockedAdd(grad_ray_directions, ray_idx * 3 + 2, dL_dray_direction_accum.z);
+// Entry point for compilation
+[CUDAKernel]
+[CudaDeviceExport]
+void gaussianrt_backward(uint3 tid : SV_DispatchThreadID) {
+    backward_kernel(tid);
 }

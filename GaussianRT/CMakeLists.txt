@@ -33,9 +33,11 @@ find_package(Torch REQUIRED)
 # Include directories
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/slang
     ${SLANG_INCLUDE_DIR}
     ${CUDAToolkit_INCLUDE_DIRS}
     ${TORCH_INCLUDE_DIRS}
+    ${CMAKE_CURRENT_BINARY_DIR}  # For generated files
 )
 
 # Link directories
@@ -44,7 +46,34 @@ link_directories(${SLANG_LIB_DIR})
 # Slang libraries
 set(SLANG_LIBS slang slang-rhi)
 
+# ============================================================================
+# Compile Slang backward shader to CUDA
+# ============================================================================
+
+set(BACKWARD_SLANG ${CMAKE_CURRENT_SOURCE_DIR}/slang/backward.slang)
+set(BACKWARD_CU ${CMAKE_CURRENT_BINARY_DIR}/backward_generated.cu)
+
+add_custom_command(
+    OUTPUT ${BACKWARD_CU}
+    COMMAND ${SLANGC}
+        -target cuda
+        -profile sm_75
+        -o ${BACKWARD_CU}
+        -I ${CMAKE_CURRENT_SOURCE_DIR}/slang
+        ${BACKWARD_SLANG}
+    DEPENDS
+        ${BACKWARD_SLANG}
+        ${CMAKE_CURRENT_SOURCE_DIR}/slang/common.slang
+    COMMENT "Compiling backward.slang to CUDA with autodiff"
+    VERBATIM
+)
+
+add_custom_target(backward_slang_cuda DEPENDS ${BACKWARD_CU})
+
+# ============================================================================
 # Core library sources
+# ============================================================================
+
 set(CORE_SOURCES
     src/device.cpp
     src/acceleration_structure.cpp
@@ -52,23 +81,31 @@ set(CORE_SOURCES
     src/volume_renderer.cpp
 )
 
-# CUDA sources
+# CUDA sources (manual + generated)
 set(CUDA_SOURCES
     src/cuda/aabb_builder.cu
     src/cuda/initialize_state.cu
-    src/cuda/backward_kernel.cu
+    src/cuda/backward_launcher.cu
 )
 
 # Build core library
 add_library(gaussian_rt_core SHARED
     ${CORE_SOURCES}
     ${CUDA_SOURCES}
+    ${BACKWARD_CU}
 )
+
+add_dependencies(gaussian_rt_core backward_slang_cuda)
 
 target_link_libraries(gaussian_rt_core
     ${SLANG_LIBS}
     CUDA::cudart
     ${TORCH_LIBRARIES}
+)
+
+# Set CUDA architecture
+set_target_properties(gaussian_rt_core PROPERTIES
+    CUDA_ARCHITECTURES "75;80;86"
 )
 
 # Python module
