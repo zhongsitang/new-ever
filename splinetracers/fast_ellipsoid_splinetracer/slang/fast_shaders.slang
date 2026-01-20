@@ -242,7 +242,7 @@ void rg_float() {
             payload[2 * i] = asuint(1e10f);
         }
 
-        optixTraceP32(
+        traceRayWithPayload(
             traversable,
             origin,
             direction,

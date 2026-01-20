@@ -262,7 +262,7 @@ void rg_float() {
         }
 
         // Trace ray and collect sorted intersections
-        optixTraceP32(
+        traceRayWithPayload(
             traversable,
             origin,
             direction,
