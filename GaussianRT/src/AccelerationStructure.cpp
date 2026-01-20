@@ -1,15 +1,15 @@
-// Modern Splinetracer - Acceleration Structure Implementation
+// GaussianRT - Acceleration Structure Implementation
 // Apache License 2.0
 
 #include "AccelerationStructure.h"
 #include <stdexcept>
 #include <cstring>
 
-#ifndef SPLINETRACER_NO_CUDA
+#ifndef GAUSSIANRT_NO_CUDA
 #include <cuda_runtime.h>
 #endif
 
-namespace splinetracer {
+namespace gaussianrt {
 
 std::unique_ptr<AccelerationStructure> AccelerationStructure::build(
     const Device& device,
@@ -52,7 +52,7 @@ std::unique_ptr<AccelerationStructure> AccelerationStructure::build_from_gpu(
         throw std::invalid_argument("Invalid AABB data");
     }
 
-#ifndef SPLINETRACER_NO_CUDA
+#ifndef GAUSSIANRT_NO_CUDA
     // Copy from GPU to create proper RHI buffer
     std::vector<AABB> aabbs(count);
     cudaMemcpy(aabbs.data(), d_aabbs, count * sizeof(AABB), cudaMemcpyDeviceToHost);
@@ -236,4 +236,4 @@ void AccelerationStructure::build_tlas(const Device& device) {
     device.submit_and_wait(encoder.get());
 }
 
-} // namespace splinetracer
+} // namespace gaussianrt

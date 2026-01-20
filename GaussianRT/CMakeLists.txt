@@ -1,5 +1,5 @@
 # =============================================================================
-# Modern Splinetracer - Clean slang-rhi Ray Tracing Implementation
+# GaussianRT - Clean slang-rhi Ray Tracing Implementation
 # =============================================================================
 # A modern, well-structured implementation of ellipsoid volume rendering
 # using slang-rhi hardware ray tracing.
@@ -10,7 +10,7 @@
 #   cmake --build .
 #
 # Test:
-#   ./bin/splinetracer_test
+#   ./bin/gaussianrt_test
 # =============================================================================
 
 cmake_minimum_required(VERSION 3.20 FATAL_ERROR)
@@ -20,14 +20,14 @@ include(CheckLanguage)
 check_language(CUDA)
 
 if(CMAKE_CUDA_COMPILER)
-    project(modern-splinetracer
+    project(gaussianrt
         VERSION 1.0.0
         DESCRIPTION "Modern slang-rhi ray tracing for ellipsoid volume rendering"
         LANGUAGES C CXX CUDA
     )
     set(HAVE_CUDA TRUE)
 else()
-    project(modern-splinetracer
+    project(gaussianrt
         VERSION 1.0.0
         DESCRIPTION "Modern slang-rhi ray tracing for ellipsoid volume rendering"
         LANGUAGES C CXX
@@ -295,20 +295,20 @@ endif()
 # -----------------------------------------------------------------------------
 # Source Files
 # -----------------------------------------------------------------------------
-set(SPLINETRACER_HEADERS
+set(GAUSSIANRT_HEADERS
     include/Types.h
     include/Device.h
     include/AccelerationStructure.h
     include/RayTracer.h
 )
 
-set(SPLINETRACER_SOURCES
+set(GAUSSIANRT_SOURCES
     src/Device.cpp
     src/AccelerationStructure.cpp
     src/RayTracer.cpp
 )
 
-set(SPLINETRACER_SHADERS
+set(GAUSSIANRT_SHADERS
     shaders/safe_math.slang
     shaders/sh.slang
     shaders/volume.slang
@@ -319,32 +319,32 @@ set(SPLINETRACER_SHADERS
 # -----------------------------------------------------------------------------
 # Main Library
 # -----------------------------------------------------------------------------
-add_library(splinetracer STATIC
-    ${SPLINETRACER_HEADERS}
-    ${SPLINETRACER_SOURCES}
+add_library(gaussianrt STATIC
+    ${GAUSSIANRT_HEADERS}
+    ${GAUSSIANRT_SOURCES}
 )
 
-target_include_directories(splinetracer
+target_include_directories(gaussianrt
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
 )
 
-target_link_libraries(splinetracer
+target_link_libraries(gaussianrt
     PUBLIC
         slang
         slang-rhi
 )
 
 if(HAVE_CUDA)
-    target_link_libraries(splinetracer PUBLIC CUDA::cudart CUDA::cuda_driver)
+    target_link_libraries(gaussianrt PUBLIC CUDA::cudart CUDA::cuda_driver)
 else()
     # Define stubs for CUDA functions when CUDA is not available
-    target_compile_definitions(splinetracer PUBLIC SPLINETRACER_NO_CUDA)
+    target_compile_definitions(gaussianrt PUBLIC GAUSSIANRT_NO_CUDA)
 endif()
 
 # Copy shaders to build directory
-add_custom_command(TARGET splinetracer POST_BUILD
+add_custom_command(TARGET gaussianrt POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
         "${CMAKE_BINARY_DIR}/shaders"
@@ -354,32 +354,32 @@ add_custom_command(TARGET splinetracer POST_BUILD
 # -----------------------------------------------------------------------------
 # Test Executable
 # -----------------------------------------------------------------------------
-add_executable(splinetracer_test
+add_executable(gaussianrt_test
     test/main.cpp
 )
 
-target_link_libraries(splinetracer_test
+target_link_libraries(gaussianrt_test
     PRIVATE
-        splinetracer
+        gaussianrt
 )
 
 # Ensure shaders are available for tests
-add_dependencies(splinetracer_test splinetracer)
+add_dependencies(gaussianrt_test gaussianrt)
 
 # -----------------------------------------------------------------------------
 # Compiler Flags
 # -----------------------------------------------------------------------------
 if(MSVC)
-    target_compile_options(splinetracer PRIVATE /W4)
-    target_compile_options(splinetracer_test PRIVATE /W4)
+    target_compile_options(gaussianrt PRIVATE /W4)
+    target_compile_options(gaussianrt_test PRIVATE /W4)
 else()
-    target_compile_options(splinetracer PRIVATE -Wall -Wextra -Wno-unused-parameter)
-    target_compile_options(splinetracer_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
+    target_compile_options(gaussianrt PRIVATE -Wall -Wextra -Wno-unused-parameter)
+    target_compile_options(gaussianrt_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
 endif()
 
 # CUDA specific flags
 if(HAVE_CUDA AND CMAKE_CUDA_COMPILER)
-    target_compile_options(splinetracer PRIVATE
+    target_compile_options(gaussianrt PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
     )
 endif()
@@ -387,19 +387,19 @@ endif()
 # -----------------------------------------------------------------------------
 # Installation
 # -----------------------------------------------------------------------------
-install(TARGETS splinetracer
-    EXPORT splinetracer-targets
+install(TARGETS gaussianrt
+    EXPORT gaussianrt-targets
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION bin
 )
 
 install(DIRECTORY include/
-    DESTINATION include/splinetracer
+    DESTINATION include/gaussianrt
 )
 
 install(DIRECTORY shaders/
-    DESTINATION share/splinetracer/shaders
+    DESTINATION share/gaussianrt/shaders
 )
 
 # -----------------------------------------------------------------------------
@@ -407,7 +407,7 @@ install(DIRECTORY shaders/
 # -----------------------------------------------------------------------------
 message(STATUS "")
 message(STATUS "========================================")
-message(STATUS "Modern Splinetracer Configuration")
+message(STATUS "GaussianRT Configuration")
 message(STATUS "========================================")
 message(STATUS "  Version:        ${PROJECT_VERSION}")
 message(STATUS "  Build type:     ${CMAKE_BUILD_TYPE}")

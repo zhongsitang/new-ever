@@ -1,10 +1,10 @@
-# Modern Splinetracer
+# GaussianRT
 
-A modern, clean reimplementation of ellipsoid-based volume rendering using slang-rhi hardware ray tracing.
+Hardware-accelerated ray tracing for Gaussian/ellipsoid volume rendering using slang-rhi.
 
 ## Overview
 
-This project is a complete rewrite of the legacy splinetracer using modern slang-rhi patterns. The core ray tracing pipeline (`Forward::trace_rays`) has been reimplemented with:
+GaussianRT is a modern reimplementation of ellipsoid-based volume rendering using slang-rhi hardware ray tracing. The core ray tracing pipeline has been designed with:
 
 - Clean C++ class hierarchy
 - Modern slang shaders with proper module structure
@@ -14,7 +14,7 @@ This project is a complete rewrite of the legacy splinetracer using modern slang
 ## Architecture
 
 ```
-modern-splinetracer/
+GaussianRT/
 ├── include/
 │   ├── Types.h              # Core data types (float2/3/4, AABB, Camera, etc.)
 │   ├── Device.h             # RHI device wrapper
@@ -68,19 +68,15 @@ modern-splinetracer/
 
 ### Build Steps
 ```bash
-cd modern-splinetracer
+cd GaussianRT
 mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 cmake --build .
 ```
 
-### Integration with Parent Project
-When building as part of the main repository:
+### Run Tests
 ```bash
-cd /path/to/new-ever
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build .
+./bin/gaussianrt_test
 ```
 
 ## Core Algorithm
@@ -108,15 +104,20 @@ The ray tracing follows this flow:
    - Stop when transmittance drops below threshold (logT > LOG_CUTOFF)
    - Or when max iterations reached
 
-## Differences from Legacy Code
+## Namespace
 
-| Aspect | Legacy | Modern |
-|--------|--------|--------|
-| API | OptiX 7.x direct | slang-rhi abstraction |
-| Shaders | CUDA + OptiX | Slang |
-| Buffer Management | Manual CUDA | RHI wrappers |
-| Pipeline | OptiX programs | Slang shader tables |
-| Portability | NVIDIA only | Cross-platform (via RHI) |
+All C++ code is in the `gaussianrt` namespace:
+
+```cpp
+#include "Device.h"
+#include "AccelerationStructure.h"
+#include "RayTracer.h"
+
+using namespace gaussianrt;
+
+auto device = Device::create(0);
+auto accel = AccelerationStructure::build(*device, aabbs);
+```
 
 ## License
 

@@ -1,4 +1,4 @@
-// Modern Splinetracer - Ray Tracing Pipeline
+// GaussianRT - Ray Tracing Pipeline
 // Core ray tracing implementation using slang-rhi
 // Apache License 2.0
 
@@ -14,7 +14,7 @@
 #include "Device.h"
 #include "AccelerationStructure.h"
 
-namespace splinetracer {
+namespace gaussianrt {
 
 // Ray tracer configuration
 struct RayTracerConfig {
@@ -84,4 +84,4 @@ private:
     size_t feature_size_ = 0;
 };
 
-} // namespace splinetracer
+} // namespace gaussianrt

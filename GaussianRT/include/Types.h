@@ -1,5 +1,5 @@
-// Modern Splinetracer - Type Definitions
-// Using slang-rhi for hardware ray tracing
+// GaussianRT - Type Definitions
+// Hardware ray tracing for Gaussian/ellipsoid volume rendering
 // Apache License 2.0
 
 #pragma once
@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <cstddef>
 
-namespace splinetracer {
+namespace gaussianrt {
 
 using uint = uint32_t;
 
@@ -98,4 +98,4 @@ struct RenderOutput {
     VolumeState* states;    // Final volume states
 };
 
-} // namespace splinetracer
+} // namespace gaussianrt

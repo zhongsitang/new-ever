@@ -1,4 +1,4 @@
-// Modern Splinetracer - RHI Device Management
+// GaussianRT - RHI Device Management
 // Clean abstraction over slang-rhi device creation
 // Apache License 2.0
 
@@ -9,7 +9,7 @@
 #include "slang-com-ptr.h"
 #include "slang-rhi.h"
 
-namespace splinetracer {
+namespace gaussianrt {
 
 // RAII wrapper for slang-rhi device and queue
 class Device {
@@ -59,4 +59,4 @@ public:
     explicit DeviceError(const std::string& msg) : std::runtime_error(msg) {}
 };
 
-} // namespace splinetracer
+} // namespace gaussianrt

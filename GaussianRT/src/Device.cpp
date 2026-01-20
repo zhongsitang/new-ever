@@ -1,17 +1,17 @@
-// Modern Splinetracer - Device Implementation
+// GaussianRT - Device Implementation
 // Apache License 2.0
 
 #include "Device.h"
 
-#ifndef SPLINETRACER_NO_CUDA
+#ifndef GAUSSIANRT_NO_CUDA
 #include <cuda_runtime.h>
 #endif
 
-namespace splinetracer {
+namespace gaussianrt {
 
 namespace {
 
-#ifndef SPLINETRACER_NO_CUDA
+#ifndef GAUSSIANRT_NO_CUDA
 void check_cuda(cudaError_t result, const char* msg) {
     if (result != cudaSuccess) {
         throw DeviceError(std::string(msg) + ": " + cudaGetErrorString(result));
@@ -22,7 +22,7 @@ void check_cuda(cudaError_t result, const char* msg) {
 } // namespace
 
 Device::Device(int cuda_device_index) : cuda_device_index_(cuda_device_index) {
-#ifndef SPLINETRACER_NO_CUDA
+#ifndef GAUSSIANRT_NO_CUDA
     // Initialize CUDA device
     check_cuda(cudaSetDevice(cuda_device_index), "Failed to set CUDA device");
     check_cuda(cudaFree(nullptr), "Failed to initialize CUDA context");
@@ -95,4 +95,4 @@ Slang::ComPtr<rhi::IBuffer> Device::create_structured_buffer(
     return Slang::ComPtr<rhi::IBuffer>(device_->createBuffer(desc, initial_data));
 }
 
-} // namespace splinetracer
+} // namespace gaussianrt

@@ -1,10 +1,10 @@
-// Modern Splinetracer - Ray Tracer Implementation
+// GaussianRT - Ray Tracer Implementation
 // Apache License 2.0
 
 #include "RayTracer.h"
 #include <stdexcept>
 
-namespace splinetracer {
+namespace gaussianrt {
 
 namespace {
 
@@ -363,4 +363,4 @@ void RayTracer::render(
     device.submit_and_wait(encoder);
 }
 
-} // namespace splinetracer
+} // namespace gaussianrt

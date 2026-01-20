@@ -1,4 +1,4 @@
-// Modern Splinetracer - Acceleration Structure Builder
+// GaussianRT - Acceleration Structure Builder
 // BLAS/TLAS construction using slang-rhi
 // Apache License 2.0
 
@@ -12,7 +12,7 @@
 #include "Types.h"
 #include "Device.h"
 
-namespace splinetracer {
+namespace gaussianrt {
 
 // Build flags for acceleration structures
 struct AccelBuildOptions {
@@ -65,4 +65,4 @@ private:
     size_t primitive_count_ = 0;
 };
 
-} // namespace splinetracer
+} // namespace gaussianrt

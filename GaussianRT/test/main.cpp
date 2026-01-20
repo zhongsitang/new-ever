@@ -1,4 +1,4 @@
-// Modern Splinetracer - Test Program
+// GaussianRT - Test Program
 // Verifies the ray tracing implementation compiles and basic structures work
 // Apache License 2.0
 
@@ -13,7 +13,7 @@
 #include "AccelerationStructure.h"
 #include "RayTracer.h"
 
-using namespace splinetracer;
+using namespace gaussianrt;
 
 // Generate test AABBs
 std::vector<AABB> generate_test_aabbs(size_t count) {
@@ -122,7 +122,7 @@ bool test_aabb_generation() {
     return true;
 }
 
-#ifndef SPLINETRACER_NO_CUDA
+#ifndef GAUSSIANRT_NO_CUDA
 // Test device creation (only with CUDA)
 bool test_device_creation() {
     std::cout << "Testing device creation... ";
@@ -243,9 +243,9 @@ int main(int argc, char* argv[]) {
     (void)argv;
 
     std::cout << "========================================\n";
-    std::cout << "Modern Splinetracer Test Suite\n";
+    std::cout << "GaussianRT Test Suite\n";
     std::cout << "========================================\n";
-#ifdef SPLINETRACER_NO_CUDA
+#ifdef GAUSSIANRT_NO_CUDA
     std::cout << "Mode: Compile-only (no CUDA)\n";
 #else
     std::cout << "Mode: Full (with CUDA)\n";
@@ -268,7 +268,7 @@ int main(int argc, char* argv[]) {
     run_test(test_aabb_generation);
     run_test(test_shader_files);
 
-#ifndef SPLINETRACER_NO_CUDA
+#ifndef GAUSSIANRT_NO_CUDA
     // GPU tests (only with CUDA)
     run_test(test_device_creation);
     run_test(test_acceleration_structure);
