@@ -6,7 +6,8 @@ include_guard(GLOBAL)
 #   SLANG_FILE   <file.slang>       # Input Slang file
 #   OPTIX_ROOT   <path>             # OptiX SDK root (REQUIRED; must contain include/)
 #   OUT_DIR      <dir>              # Optional output directory
-#   INCLUDE_DIRS <dir;...>          # Extra include dirs for slangc
+#   INCLUDE_DIRS <dir;...>          # Extra include dirs for slangc (-I)
+#   NVRTC_DIRS   <dir;...>          # Extra include dirs for nvrtc (-Xnvrtc -I)
 #   DEPENDS      <file;...>         # Extra dependencies
 #   SLANG_FLAGS  <flag;...>         # Extra slangc flags
 # )
@@ -18,7 +19,7 @@ include_guard(GLOBAL)
 #
 function(slang_ptx_embed)
   set(_one TARGET NAME SLANG_FILE OPTIX_ROOT OUT_DIR)
-  set(_multi INCLUDE_DIRS DEPENDS SLANG_FLAGS)
+  set(_multi INCLUDE_DIRS NVRTC_DIRS DEPENDS SLANG_FLAGS)
   cmake_parse_arguments(SPE "" "${_one}" "${_multi}" ${ARGN})
 
   # Validate required arguments
@@ -51,12 +52,18 @@ function(slang_ptx_embed)
   set(_cpp "${SPE_OUT_DIR}/${SPE_NAME}.cpp")
   set(_script "${SPE_OUT_DIR}/${SPE_NAME}_embed.cmake")
 
-  # Build include args for slangc
+  # Build include args for slangc (-I)
   set(_slang_incs "")
   foreach(_d IN LISTS SPE_INCLUDE_DIRS)
     list(APPEND _slang_incs -I "${_d}")
   endforeach()
   list(APPEND _slang_incs -I "${SPE_OPTIX_ROOT}/include")
+
+  # Build nvrtc include args (-Xnvrtc -I)
+  set(_nvrtc_incs "")
+  foreach(_d IN LISTS SPE_NVRTC_DIRS)
+    list(APPEND _nvrtc_incs -Xnvrtc -I "${_d}")
+  endforeach()
 
   # Dependencies
   set(_deps "${SPE_SLANG_FILE}")
@@ -71,6 +78,7 @@ function(slang_ptx_embed)
       -target ptx
       -o "${_ptx}"
       ${_slang_incs}
+      ${_nvrtc_incs}
       ${SPE_SLANG_FLAGS}
     DEPENDS ${_deps}
     COMMENT "slangc: ${SPE_NAME}.slang -> ${SPE_NAME}.ptx"

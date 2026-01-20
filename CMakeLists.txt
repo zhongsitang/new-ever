@@ -89,6 +89,7 @@ slang_ptx_embed(
   OPTIX_ROOT   ${OptiX_ROOT}
   OUT_DIR      ${PTX_OUT_DIR}
   INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}
+  NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS}
 )
 
 slang_ptx_embed(
@@ -98,6 +99,7 @@ slang_ptx_embed(
   OPTIX_ROOT   ${OptiX_ROOT}
   OUT_DIR      ${PTX_OUT_DIR}
   INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}
+  NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS}
 )
 
 # -----------------------------------------------------------------------------
