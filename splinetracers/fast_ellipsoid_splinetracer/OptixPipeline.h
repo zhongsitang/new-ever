@@ -14,6 +14,13 @@
 
 #pragma once
 
+// Prevent Windows min/max macros from interfering with std::min/std::max
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#endif
+
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <optix.h>
@@ -151,7 +158,10 @@ using MissRecord = SbtRecord<MissData>;
 using HitGroupRecord = SbtRecord<HitGroupData>;
 
 // =============================================================================
-// OptixPipeline - Modern, simplified OptiX pipeline management
+// RTPipeline - Modern, simplified OptiX pipeline management
+//
+// NOTE: Named RTPipeline (not OptixPipeline) to avoid conflict with
+// OptiX SDK's OptixPipeline typedef in optix_types.h
 //
 // Key improvements over the old Forward class:
 // 1. Clear separation of initialization phases (module, program groups, pipeline, SBT)
@@ -159,9 +169,9 @@ using HitGroupRecord = SbtRecord<HitGroupData>;
 // 3. Simplified error handling
 // 4. Clean resource management with RAII
 // =============================================================================
-class OptixPipeline {
+class RTPipeline {
 public:
-    OptixPipeline() = default;
+    RTPipeline() = default;
 
     // Initialize with context and device
     // backward_mode: true uses shaders.slang (with gradient tracking)
@@ -171,15 +181,15 @@ public:
     // Clean up resources
     void destroy();
 
-    ~OptixPipeline();
+    ~RTPipeline();
 
     // Non-copyable
-    OptixPipeline(const OptixPipeline&) = delete;
-    OptixPipeline& operator=(const OptixPipeline&) = delete;
+    RTPipeline(const RTPipeline&) = delete;
+    RTPipeline& operator=(const RTPipeline&) = delete;
 
     // Move semantics
-    OptixPipeline(OptixPipeline&& other) noexcept;
-    OptixPipeline& operator=(OptixPipeline&& other) noexcept;
+    RTPipeline(RTPipeline&& other) noexcept;
+    RTPipeline& operator=(RTPipeline&& other) noexcept;
 
     // Launch ray tracing
     void launch(const LaunchParams& params, uint32_t width, uint32_t height, CUstream stream = nullptr);

@@ -40,7 +40,7 @@ namespace {
 // Lifecycle
 // =============================================================================
 
-void OptixPipeline::init(OptixDeviceContext ctx, int device_id, bool backward_mode) {
+void RTPipeline::init(OptixDeviceContext ctx, int device_id, bool backward_mode) {
     m_context = ctx;
     m_device_id = device_id;
     m_backward_mode = backward_mode;
@@ -60,7 +60,7 @@ void OptixPipeline::init(OptixDeviceContext ctx, int device_id, bool backward_mo
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&m_d_params), sizeof(LaunchParams)));
 }
 
-void OptixPipeline::destroy() {
+void RTPipeline::destroy() {
     CUDA_CHECK(cudaSetDevice(m_device_id));
 
     // Free SBT records
@@ -108,13 +108,13 @@ void OptixPipeline::destroy() {
     m_sbt = {};
 }
 
-OptixPipeline::~OptixPipeline() {
+RTPipeline::~OptixPipeline() {
     if (m_device_id >= 0) {
         destroy();
     }
 }
 
-OptixPipeline::OptixPipeline(OptixPipeline&& other) noexcept
+RTPipeline::OptixPipeline(OptixPipeline&& other) noexcept
     : m_context(std::exchange(other.m_context, nullptr))
     , m_module(std::exchange(other.m_module, nullptr))
     , m_pipeline(std::exchange(other.m_pipeline, nullptr))
@@ -131,7 +131,7 @@ OptixPipeline::OptixPipeline(OptixPipeline&& other) noexcept
     , m_pipeline_compile_options(other.m_pipeline_compile_options)
 {}
 
-OptixPipeline& OptixPipeline::operator=(OptixPipeline&& other) noexcept {
+OptixPipeline& RTPipeline::operator=(OptixPipeline&& other) noexcept {
     if (this != &other) {
         destroy();
         m_context = std::exchange(other.m_context, nullptr);
@@ -156,7 +156,7 @@ OptixPipeline& OptixPipeline::operator=(OptixPipeline&& other) noexcept {
 // Module Creation - OptiX 7.7+ API
 // =============================================================================
 
-void OptixPipeline::createModule(const unsigned char* ir_data, size_t ir_size) {
+void RTPipeline::createModule(const unsigned char* ir_data, size_t ir_size) {
     // Module compile options
     OptixModuleCompileOptions module_options = {};
     module_options.maxRegisterCount = OPTIX_COMPILE_DEFAULT_MAX_REGISTER_COUNT;
@@ -192,7 +192,7 @@ void OptixPipeline::createModule(const unsigned char* ir_data, size_t ir_size) {
 // Program Groups
 // =============================================================================
 
-void OptixPipeline::createProgramGroups() {
+void RTPipeline::createProgramGroups() {
     char log[4096];
     size_t log_size;
 
@@ -245,7 +245,7 @@ void OptixPipeline::createProgramGroups() {
 // Pipeline
 // =============================================================================
 
-void OptixPipeline::createPipeline() {
+void RTPipeline::createPipeline() {
     OptixProgramGroup program_groups[] = { m_raygen_pg, m_miss_pg, m_hitgroup_pg };
     const int num_program_groups = sizeof(program_groups) / sizeof(program_groups[0]);
 
@@ -296,7 +296,7 @@ void OptixPipeline::createPipeline() {
 // Shader Binding Table
 // =============================================================================
 
-void OptixPipeline::createSBT() {
+void RTPipeline::createSBT() {
     // Ray generation record
     {
         RayGenRecord record = {};
@@ -354,7 +354,7 @@ void OptixPipeline::createSBT() {
 // Launch
 // =============================================================================
 
-void OptixPipeline::launch(const LaunchParams& params, uint32_t width, uint32_t height, CUstream stream) {
+void RTPipeline::launch(const LaunchParams& params, uint32_t width, uint32_t height, CUstream stream) {
     CUDA_CHECK(cudaSetDevice(m_device_id));
 
     // Upload params to device

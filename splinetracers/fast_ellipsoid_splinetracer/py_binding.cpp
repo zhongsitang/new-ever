@@ -184,12 +184,12 @@ public:
 };
 
 // =============================================================================
-// Forward Wrapper - Uses new OptixPipeline class
+// Forward Wrapper - Uses new RTPipeline class
 // Keeps the same Python API as before for backward compatibility
 // =============================================================================
 class PyForward {
 public:
-    OptixPipeline pipeline;
+    RTPipeline pipeline;
     torch::Device device;
     size_t num_prims;
     uint32_t sh_degree;
@@ -328,7 +328,7 @@ PYBIND11_MODULE(ellipsoid_splinetracer, m) {
         .def(py::init<const PyOptixContext&, const torch::Device&,
                       const PyPrimitives&, bool, bool, bool>());
 
-    // Forward class - uses new OptixPipeline internally
+    // Forward class - uses new RTPipeline internally
     py::class_<PyForward>(m, "Forward")
         .def(py::init<const PyOptixContext&, const torch::Device&,
                       const PyPrimitives&, bool>())
