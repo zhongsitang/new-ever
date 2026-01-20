@@ -97,21 +97,50 @@ set_source_files_properties(
 # -----------------------------------------------------------------------------
 # NOTE:
 # - NAME is used as the C symbol name and must be a valid C identifier.
+# - ENTRY specifies the entry point to compile (one module per entry).
 # - OUT_DIR is optional; set it here to enforce a single directory globally.
 #
+# Compile each shader entry point separately for modular loading
+
+# Ray generation shader
 slang_optixir_embed(
   TARGET       ellipsoid_splinetracer
-  NAME         shaders_optixir
+  NAME         shader_raygen_optixir
   SLANG_FILE   ${SLANG_DIR}/shaders.slang
+  ENTRY        rg_float
   OPTIX_ROOT   ${OptiX_ROOT}
   OUT_DIR      ${OPTIX_IR_OUT_DIR}
   INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}
 )
 
+# Miss shader
 slang_optixir_embed(
   TARGET       ellipsoid_splinetracer
-  NAME         fast_shaders_optixir
-  SLANG_FILE   ${SLANG_DIR}/fast_shaders.slang
+  NAME         shader_miss_optixir
+  SLANG_FILE   ${SLANG_DIR}/shaders.slang
+  ENTRY        ms
+  OPTIX_ROOT   ${OptiX_ROOT}
+  OUT_DIR      ${OPTIX_IR_OUT_DIR}
+  INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}
+)
+
+# Intersection shader (ellipsoid)
+slang_optixir_embed(
+  TARGET       ellipsoid_splinetracer
+  NAME         shader_intersection_optixir
+  SLANG_FILE   ${SLANG_DIR}/shaders.slang
+  ENTRY        ellipsoid
+  OPTIX_ROOT   ${OptiX_ROOT}
+  OUT_DIR      ${OPTIX_IR_OUT_DIR}
+  INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}
+)
+
+# Any-hit shader
+slang_optixir_embed(
+  TARGET       ellipsoid_splinetracer
+  NAME         shader_anyhit_optixir
+  SLANG_FILE   ${SLANG_DIR}/shaders.slang
+  ENTRY        ah
   OPTIX_ROOT   ${OptiX_ROOT}
   OUT_DIR      ${OPTIX_IR_OUT_DIR}
   INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}

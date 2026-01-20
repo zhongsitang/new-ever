@@ -4,6 +4,7 @@ include_guard(GLOBAL)
 #   TARGET       <target>           # Target to add the generated .c source to
 #   NAME         <symbol>           # C symbol name (MUST be a valid C identifier)
 #   SLANG_FILE   <file.slang>       # Input Slang file
+#   ENTRY        <entry_name>       # Optional entry point name (if specified, compiles only this entry)
 #   OPTIX_ROOT   <path>             # OptiX SDK root (REQUIRED; must contain include/)
 #   OUT_DIR      <dir>              # Optional output directory (default: ${CMAKE_CURRENT_BINARY_DIR}/optix_ir)
 #   INCLUDE_DIRS <dir;...>          # Extra include dirs for slangc
@@ -25,7 +26,7 @@ include_guard(GLOBAL)
 #   const size_t <NAME>_size;
 #
 function(slang_optixir_embed)
-  set(_one TARGET NAME SLANG_FILE OPTIX_ROOT OUT_DIR)
+  set(_one TARGET NAME SLANG_FILE ENTRY OPTIX_ROOT OUT_DIR)
   set(_multi INCLUDE_DIRS DEPENDS SLANG_FLAGS NVCC_FLAGS)
   cmake_parse_arguments(SOE "" "${_one}" "${_multi}" ${ARGN})
 
@@ -84,6 +85,12 @@ function(slang_optixir_embed)
   endforeach()
   list(APPEND _slang_incs -I "${SOE_OPTIX_ROOT}/include")
 
+  # ---- Build entry args for slangc ------------------------------------------
+  set(_entry_args "")
+  if(SOE_ENTRY)
+    list(APPEND _entry_args -entry "${SOE_ENTRY}")
+  endif()
+
   # ---- 1) Slang -> CUDA ------------------------------------------------------
   set(_deps "${SOE_SLANG_FILE}")
   if(SOE_DEPENDS)
@@ -96,6 +103,7 @@ function(slang_optixir_embed)
       -target cuda
       -o "${_cu}"
       ${_slang_incs}
+      ${_entry_args}
       ${SOE_SLANG_FLAGS}
     DEPENDS ${_deps}
     COMMENT "slangc: ${SOE_NAME}.slang -> ${SOE_NAME}.cu"

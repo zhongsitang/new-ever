@@ -110,32 +110,39 @@ Forward::Forward(const OptixDeviceContext &context, int8_t device,
     module_compile_options.optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_3;
     module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
 
-    // Load OptiX-IR data
-    const unsigned char* inputData = nullptr;
-    size_t inputSize = 0;
-
-    if (enable_backward) {
-      inputData = shaders_optixir;
-      inputSize = shaders_optixir_size;
-    } else {
-      inputData = fast_shaders_optixir;
-      inputSize = fast_shaders_optixir_size;
-    }
-
-    // Create a single module from OptiX-IR containing all programs
+    // Create separate modules from per-entry OptiX-IR binaries
+    // Ray generation module
     OPTIX_CHECK_LOG(optixModuleCreate(
         context, &module_compile_options, &pipeline_compile_options,
-        reinterpret_cast<const char*>(inputData), inputSize,
-        log, &sizeof_log, &module));
+        reinterpret_cast<const char*>(shader_raygen_optixir), shader_raygen_optixir_size,
+        log, &sizeof_log, &module_raygen));
+
+    // Miss module
+    OPTIX_CHECK_LOG(optixModuleCreate(
+        context, &module_compile_options, &pipeline_compile_options,
+        reinterpret_cast<const char*>(shader_miss_optixir), shader_miss_optixir_size,
+        log, &sizeof_log, &module_miss));
+
+    // Intersection module
+    OPTIX_CHECK_LOG(optixModuleCreate(
+        context, &module_compile_options, &pipeline_compile_options,
+        reinterpret_cast<const char*>(shader_intersection_optixir), shader_intersection_optixir_size,
+        log, &sizeof_log, &module_intersection));
+
+    // Any-hit module
+    OPTIX_CHECK_LOG(optixModuleCreate(
+        context, &module_compile_options, &pipeline_compile_options,
+        reinterpret_cast<const char*>(shader_anyhit_optixir), shader_anyhit_optixir_size,
+        log, &sizeof_log, &module_anyhit));
   }
   //
-  // Create program groups
+  // Create program groups (using per-entry modules)
   //
   {
     OptixProgramGroupOptions program_group_options = {}; // Initialize to zeros
     OptixProgramGroupDesc raygen_prog_group_desc = {};   //
     raygen_prog_group_desc.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
-    raygen_prog_group_desc.raygen.module = module;
+    raygen_prog_group_desc.raygen.module = module_raygen;
     raygen_prog_group_desc.raygen.entryFunctionName = "__raygen__rg_float";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(context, &raygen_prog_group_desc,
                                             1, // num program groups
@@ -143,7 +150,7 @@ Forward::Forward(const OptixDeviceContext &context, int8_t device,
                                             &sizeof_log, &raygen_prog_group));
     OptixProgramGroupDesc miss_prog_group_desc = {};
     miss_prog_group_desc.kind = OPTIX_PROGRAM_GROUP_KIND_MISS;
-    miss_prog_group_desc.miss.module = module;
+    miss_prog_group_desc.miss.module = module_miss;
     miss_prog_group_desc.miss.entryFunctionName = "__miss__ms";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(context, &miss_prog_group_desc,
                                             1, // num program groups
@@ -151,9 +158,9 @@ Forward::Forward(const OptixDeviceContext &context, int8_t device,
                                             &sizeof_log, &miss_prog_group));
     OptixProgramGroupDesc hitgroup_prog_group_desc = {};
     hitgroup_prog_group_desc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-    hitgroup_prog_group_desc.hitgroup.moduleAH = module;
+    hitgroup_prog_group_desc.hitgroup.moduleAH = module_anyhit;
     hitgroup_prog_group_desc.hitgroup.entryFunctionNameAH = "__anyhit__ah";
-    hitgroup_prog_group_desc.hitgroup.moduleIS = module;
+    hitgroup_prog_group_desc.hitgroup.moduleIS = module_intersection;
     hitgroup_prog_group_desc.hitgroup.entryFunctionNameIS = "__intersection__ellipsoid";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(context, &hitgroup_prog_group_desc,
                                             1, // num program groups
@@ -289,6 +296,13 @@ Forward::~Forward() noexcept(false) {
   if (hitgroup_prog_group != nullptr)
     OPTIX_CHECK(
         optixProgramGroupDestroy(std::exchange(hitgroup_prog_group, nullptr)));
-  if (module != nullptr)
-    OPTIX_CHECK(optixModuleDestroy(std::exchange(module, nullptr)));
+  // Destroy all per-entry modules
+  if (module_raygen != nullptr)
+    OPTIX_CHECK(optixModuleDestroy(std::exchange(module_raygen, nullptr)));
+  if (module_miss != nullptr)
+    OPTIX_CHECK(optixModuleDestroy(std::exchange(module_miss, nullptr)));
+  if (module_intersection != nullptr)
+    OPTIX_CHECK(optixModuleDestroy(std::exchange(module_intersection, nullptr)));
+  if (module_anyhit != nullptr)
+    OPTIX_CHECK(optixModuleDestroy(std::exchange(module_anyhit, nullptr)));
 }

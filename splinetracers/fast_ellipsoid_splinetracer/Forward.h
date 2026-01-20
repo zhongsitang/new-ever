@@ -26,13 +26,17 @@
 
 using uint = uint32_t;
 
-// Forward declarations for embedded OptiX-IR data
+// Forward declarations for embedded OptiX-IR data (per-entry modules)
 // These are defined in the generated .c files from bin2c
 extern "C" {
-extern const unsigned char shaders_optixir[];
-extern const size_t shaders_optixir_size;
-extern const unsigned char fast_shaders_optixir[];
-extern const size_t fast_shaders_optixir_size;
+extern const unsigned char shader_raygen_optixir[];
+extern const size_t shader_raygen_optixir_size;
+extern const unsigned char shader_miss_optixir[];
+extern const size_t shader_miss_optixir_size;
+extern const unsigned char shader_intersection_optixir[];
+extern const size_t shader_intersection_optixir_size;
+extern const unsigned char shader_anyhit_optixir[];
+extern const size_t shader_anyhit_optixir_size;
 }
 
 struct RayGenData
@@ -118,8 +122,11 @@ class Forward {
     OptixDeviceContext context = nullptr;
     int8_t device = -1;
     const Primitives *model;
-    // Local fields used for this pipeline
-    OptixModule module = nullptr;
+    // Local fields used for this pipeline - multiple modules for per-entry compilation
+    OptixModule module_raygen = nullptr;
+    OptixModule module_miss = nullptr;
+    OptixModule module_intersection = nullptr;
+    OptixModule module_anyhit = nullptr;
     OptixShaderBindingTable sbt = {};
     OptixPipeline pipeline = nullptr;
     CUdeviceptr d_param = 0;
