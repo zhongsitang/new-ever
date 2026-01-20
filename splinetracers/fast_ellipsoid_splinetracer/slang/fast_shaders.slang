@@ -24,6 +24,7 @@
 
 // Import modules
 import spline_machine;
+import optix;
 import optix_intrinsics;
 import tri_intersect;
 import safe_math;
@@ -150,7 +151,7 @@ void ah() {
     float t = RayTCurrent();
     float other_t = asfloat(optixGetAttribute_0());
     uint ind = PrimitiveIndex();
-    uint hitkind = HitKind();
+    uint hitkind = optixGetHitKind();
 
     if (hitkind == 0) {
         float temp_t = other_t;
