@@ -51,13 +51,8 @@ Forward::Forward(
 {
     CUDA_CHECK(cudaSetDevice(device));
 
-    char log[16384];
-    size_t logSize;
-
     // ========== Module Creation ==========
     {
-        logSize = sizeof(log);
-
         OptixModuleCompileOptions moduleOptions = {};
         moduleOptions.maxRegisterCount = OPTIX_COMPILE_DEFAULT_MAX_REGISTER_COUNT;
         moduleOptions.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_3;
@@ -87,7 +82,6 @@ Forward::Forward(
 
     // Ray Generation
     {
-        logSize = sizeof(log);
         OptixProgramGroupDesc desc = {};
         desc.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
         desc.raygen.module            = m_module;
@@ -100,7 +94,6 @@ Forward::Forward(
 
     // Miss
     {
-        logSize = sizeof(log);
         OptixProgramGroupDesc desc = {};
         desc.kind = OPTIX_PROGRAM_GROUP_KIND_MISS;
         desc.miss.module            = m_module;
@@ -113,7 +106,6 @@ Forward::Forward(
 
     // Hit Group
     {
-        logSize = sizeof(log);
         OptixProgramGroupDesc desc = {};
         desc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
         desc.hitgroup.moduleCH            = m_module;
@@ -130,8 +122,6 @@ Forward::Forward(
 
     // ========== Pipeline Creation ==========
     {
-        logSize = sizeof(log);
-
         OptixProgramGroup programGroups[] = { m_raygenGroup, m_missGroup, m_hitGroup };
 
         OptixPipelineLinkOptions linkOptions = {};
