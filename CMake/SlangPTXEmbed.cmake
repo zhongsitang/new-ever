@@ -45,10 +45,10 @@ function(slang_ptx_embed)
     list(APPEND _slang_incs -I "${_d}")
   endforeach()
 
-  # Build -Xnvrtc -I args
+  # Build -Xnvrtc -I<path> args (no space after -I)
   set(_nvrtc_incs "")
   foreach(_d IN LISTS SPE_NVRTC_DIRS)
-    list(APPEND _nvrtc_incs -Xnvrtc -I "${_d}")
+    list(APPEND _nvrtc_incs -Xnvrtc "-I${_d}")
   endforeach()
 
   set(_deps "${SPE_SLANG_FILE}")
