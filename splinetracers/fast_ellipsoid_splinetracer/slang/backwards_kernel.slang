@@ -222,7 +222,7 @@ run_update(in SplineState old_dual_state,
 ControlPoint load_ctrl_pt(in uint older_tri_ind, in DualModel model, in float3 origin, float3 direction, uint sh_degree, bool skip_close)
 {
     let older_prim_ind = (uint)floor(older_tri_ind / tri_per_g);
-    let older_face_id = mod(older_tri_ind, tri_per_g);
+    let older_face_id = older_tri_ind % tri_per_g;
 
 
     let older_mean = get_float3(model.means, older_prim_ind);
@@ -342,7 +342,7 @@ void backwards_kernel(
                 old_ctrl_pt,
                 ctrl_pt,
                 (uint)floor(tri_ind / tri_per_g),
-                mod(tri_ind, tri_per_g),
+                tri_ind % tri_per_g,
                 ray_ind,
                 deriv_state,
                 origin, direction, tmin, tmax, sh_degree, max_prim_size,
