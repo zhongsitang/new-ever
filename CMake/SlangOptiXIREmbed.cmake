@@ -103,6 +103,11 @@ function(slang_optixir_embed)
   )
 
   # ---- 2) CUDA -> OptiX-IR ---------------------------------------------------
+  # Suppress warnings:
+  #   177: variable declared but never referenced
+  #   550: variable set but never used
+  #   20044: extern declaration of the entity treated as static definition
+  #          (expected for SLANG_globalParams with OptiX)
   add_custom_command(
     OUTPUT "${_ir}"
     COMMAND "${CUDAToolkit_NVCC_EXECUTABLE}"
@@ -111,7 +116,7 @@ function(slang_optixir_embed)
       --std=${_nvcc_std}
       -I "${SOE_OPTIX_ROOT}/include"
       -D SLANG_CUDA_ENABLE_OPTIX
-      --diag-suppress=177,550
+      --diag-suppress=177,550,20044
       ${SOE_NVCC_FLAGS}
       -o "${_ir}" "${_cu}"
     DEPENDS "${_cu}"
