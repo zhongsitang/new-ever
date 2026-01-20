@@ -12,7 +12,7 @@ from torch.autograd import Function
 
 # Import the compiled extension
 try:
-    import gaussianrt_cuda
+    import gaussianrt_ext
 except ImportError:
     raise ImportError(
         "GaussianRT CUDA extension not found. "
@@ -21,18 +21,18 @@ except ImportError:
 
 
 # Global context (created on first use)
-_context: Optional[gaussianrt_cuda.Context] = None
+_context: Optional[gaussianrt_ext.Context] = None
 _current_device: int = -1
 
 
-def _get_context(device: torch.device) -> gaussianrt_cuda.Context:
+def _get_context(device: torch.device) -> gaussianrt_ext.Context:
     """Get or create the GaussianRT context for the given device."""
     global _context, _current_device
 
     device_index = device.index if device.index is not None else 0
 
     if _context is None or _current_device != device_index:
-        _context = gaussianrt_cuda.Context(device_index)
+        _context = gaussianrt_ext.Context(device_index)
         _current_device = device_index
 
     return _context

@@ -247,7 +247,7 @@ private:
     size_t num_prims_ = 0;
 };
 
-PYBIND11_MODULE(gaussianrt_cuda, m) {
+PYBIND11_MODULE(gaussianrt_ext, m) {
     m.doc() = "GaussianRT - Hardware ray tracing for Gaussian volume rendering";
 
     py::class_<GaussianRTContext>(m, "Context")

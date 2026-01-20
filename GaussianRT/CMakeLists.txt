@@ -190,28 +190,28 @@ if(BUILD_PYTHON_BINDINGS)
         find_package(Torch QUIET)
 
         if(Torch_FOUND)
-            pybind11_add_module(gaussianrt_cuda
+            pybind11_add_module(gaussianrt_ext
                 python/bindings.cpp
             )
 
-            target_link_libraries(gaussianrt_cuda
+            target_link_libraries(gaussianrt_ext
                 PRIVATE
                     gaussianrt
                     ${TORCH_LIBRARIES}
             )
 
-            target_include_directories(gaussianrt_cuda
+            target_include_directories(gaussianrt_ext
                 PRIVATE
                     ${TORCH_INCLUDE_DIRS}
             )
 
-            target_compile_definitions(gaussianrt_cuda
+            target_compile_definitions(gaussianrt_ext
                 PRIVATE
-                    TORCH_EXTENSION_NAME=gaussianrt_cuda
+                    TORCH_EXTENSION_NAME=gaussianrt_ext
             )
 
             # Copy Python files to build directory
-            add_custom_command(TARGET gaussianrt_cuda POST_BUILD
+            add_custom_command(TARGET gaussianrt_ext POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy
                     "${CMAKE_CURRENT_SOURCE_DIR}/python/gaussianrt.py"
                     "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/gaussianrt.py"
