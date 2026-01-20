@@ -12,18 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Modern OptiX 9.1 / Slang Ray Tracing Shaders
+// Uses standard HLSL ray tracing intrinsics that map directly to OptiX
+
 #define RT_EPS 0
 #define tri_per_g 2
 #define LOG_CUTOFF 5.54
 #define BUFFER_SIZE 16
+
 import spline_machine;
-import optix;
-import optix_intrinsics;
 import tri_intersect;
 import safe_math;
 import sh;
 
-struct Camera {
+// ============================================================================
+// Structures
+// ============================================================================
+
+struct Camera
+{
     float fx, fy;
     int height;
     int width;
@@ -31,95 +38,183 @@ struct Camera {
     float3 eye;
 };
 
+// Hit entry for multi-hit tracking
+struct HitEntry
+{
+    float t;
+    uint triIndex;
+};
 
-// LaunchParams
+// Ray payload for multi-hit collection
+struct MultiHitPayload
+{
+    HitEntry hits[BUFFER_SIZE];
+};
+
+// Custom attributes passed from intersection to hit shaders
+struct EllipsoidHitAttributes
+{
+    float otherT;  // The other intersection t value
+};
+
+// ============================================================================
+// Global Resources
+// ============================================================================
+
+// Launch params / global resources
 RWStructuredBuffer<float4>      image;
 RWStructuredBuffer<uint>        iters;
 RWStructuredBuffer<uint>        last_face;
 RWStructuredBuffer<uint>        touch_count;
 RWStructuredBuffer<float4>      last_dirac;
 RWStructuredBuffer<SplineState> last_state;
-RWStructuredBuffer<int> tri_collection;
-StructuredBuffer<float3>      ray_origins;
-StructuredBuffer<float3>      ray_directions;
+RWStructuredBuffer<int>         tri_collection;
+StructuredBuffer<float3>        ray_origins;
+StructuredBuffer<float3>        ray_directions;
 Camera camera;
 
-RWStructuredBuffer<float> half_attribs;
-
+RWStructuredBuffer<float>  half_attribs;
 RWStructuredBuffer<float3> means;
 RWStructuredBuffer<float3> scales;
 RWStructuredBuffer<float4> quats;
-RWStructuredBuffer<float> densities;
-RWStructuredBuffer<float> features;
+RWStructuredBuffer<float>  densities;
+RWStructuredBuffer<float>  features;
 
-size_t sh_degree;
-size_t max_iters;
+uint sh_degree;
+uint max_iters;
 float tmin;
 float tmax;
 RWStructuredBuffer<float4> initial_drgb;
 float max_prim_size;
 RaytracingAccelerationStructure traversable;
 
+// ============================================================================
+// Helper Functions
+// ============================================================================
 
-ControlPoint get_ctrl_pt(uint tri, float t) {
+ControlPoint get_ctrl_pt(uint tri, float t)
+{
     ControlPoint ctrl_pt;
-    let prim_ind = tri / 2;
-    let hitkind = tri % 2;
-    let height = densities[prim_ind];
-    let dirac_height = height * ((hitkind == 1) ? 1 : -1);
+    uint prim_ind = tri / 2;
+    uint hitkind = tri % 2;
+    float height = densities[prim_ind];
+    float dirac_height = height * ((hitkind == 1) ? 1.0f : -1.0f);
+
     Features feat;
-    SHFeatures sh_feats = {prim_ind, sh_degree, features};
+    SHFeatures sh_feats = { int(prim_ind), int(sh_degree), features };
     feat.f0 = get_sh(sh_feats, 0);
-    float3 rayd = {0, 0, 1};
-    let color = eval_sh_col0(rayd, feat);
+
+    float3 rayd = float3(0, 0, 1);
+    float3 color = eval_sh_col0(rayd, feat);
+
     ctrl_pt.t = t;
     ctrl_pt.dirac.x = dirac_height;
     ctrl_pt.dirac.y = dirac_height * color.x;
     ctrl_pt.dirac.z = dirac_height * color.y;
     ctrl_pt.dirac.w = dirac_height * color.z;
+
     return ctrl_pt;
 }
 
+// Initialize hit buffer with maximum t values
+void initHitBuffer(inout MultiHitPayload payload)
+{
+    [ForceUnroll]
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        payload.hits[i].t = 1e10f;
+        payload.hits[i].triIndex = 0xFFFFFFFF;
+    }
+}
+
+// Insert a hit into the sorted buffer
+void insertHit(inout MultiHitPayload payload, float t, uint triIndex)
+{
+    float h_t = t;
+    uint h_i = triIndex;
+
+    [ForceUnroll]
+    for (int i = 0; i < BUFFER_SIZE; i++)
+    {
+        if (h_t < payload.hits[i].t)
+        {
+            float temp_t = payload.hits[i].t;
+            uint temp_i = payload.hits[i].triIndex;
+            payload.hits[i].t = h_t;
+            payload.hits[i].triIndex = h_i;
+            h_t = temp_t;
+            h_i = temp_i;
+        }
+    }
+}
+
+// ============================================================================
+// Intersection Shader - Ellipsoid Ray Intersection
+// ============================================================================
+
 [shader("intersection")]
-void ellipsoid() {
+void ellipsoid()
+{
     uint prim_ind = PrimitiveIndex();
 
     float3 rayd = WorldRayDirection();
     float3 rayo = WorldRayOrigin();
 
-    let mean = means[prim_ind];
-    let scale = scales[prim_ind];
-    let quat = quats[prim_ind];
+    float3 mean = means[prim_ind];
+    float3 scale = scales[prim_ind];
+    float4 quat = quats[prim_ind];
+
     float2 minmaxt = ray_intersect_ellipsoid(rayo - mean, rayd, scale, quat);
 
     float cur_t = RayTMin();
-    if ((minmaxt.y < cur_t)) {
+
+    if (minmaxt.y < cur_t)
+    {
         return;
-    } else {
-        bool use_min = cur_t < minmaxt.x;
-        if (use_min) {
-            optixReportHit(minmaxt.x, 1u, asuint( minmaxt.y ));
-        } else if (cur_t < minmaxt.y){
-            optixReportHit(minmaxt.y, 0u, asuint( minmaxt.x ));
-        }
+    }
+
+    bool use_min = cur_t < minmaxt.x;
+
+    // Create attributes to pass the other t value
+    EllipsoidHitAttributes attr;
+
+    if (use_min)
+    {
+        attr.otherT = minmaxt.y;
+        ReportHit(minmaxt.x, 1u, attr);
+    }
+    else if (cur_t < minmaxt.y)
+    {
+        attr.otherT = minmaxt.x;
+        ReportHit(minmaxt.y, 0u, attr);
     }
 }
 
+// ============================================================================
+// Closest Hit Shader
+// ============================================================================
+
 [shader("closesthit")]
-void ch(
-    inout uint2 garbage : SV_RayPayload,
-)
+void ch(inout MultiHitPayload payload, in EllipsoidHitAttributes attr)
 {
+    // Empty - we use anyhit for multi-hit collection
 }
 
+// ============================================================================
+// Any Hit Shader - Multi-Hit Collection
+// ============================================================================
+
 [shader("anyhit")]
-void ah()
+void ah(inout MultiHitPayload payload, in EllipsoidHitAttributes attr)
 {
     float t = RayTCurrent();
-    float other_t = asfloat(optixGetAttribute_0());
+    float other_t = attr.otherT;
     uint ind = PrimitiveIndex();
-    uint hitkind = optixGetHitKind();
-    if (hitkind == 0) {
+    uint hitkind = HitKind();
+
+    // Swap if needed based on hit kind
+    if (hitkind == 0)
+    {
         float temp_t = other_t;
         other_t = t;
         t = temp_t;
@@ -127,107 +222,127 @@ void ah()
 
     float cur_t = RayTMin();
 
-    float h_t;
-    uint h_i;
-
-    float test_t;
-    uint test_i;
-
-    for (int n=0; n<2; n++) {
-        if (n == 0) {
-            h_t = t;
-            h_i = 2 * ind + 1;
-        } else {
-            h_t = other_t;
-            h_i = 2 * ind;
-        }
-        if (h_t > cur_t) {
-            [ForceUnroll]
-            for (int i=0; i<BUFFER_SIZE; i++) {
-                test_t = asfloat(get_payload(i*2));
-                if (h_t < test_t) {
-                    set_payload(i*2, asuint(h_t));
-                    test_i = get_payload(i*2+1);
-                    set_payload(i*2+1, h_i);
-                    h_i = test_i;
-                    h_t = test_t;
-                }
-            }
-        }
+    // Insert both hits into the buffer
+    // Hit kind 1 = entry (min t), Hit kind 0 = exit (max t)
+    if (t > cur_t)
+    {
+        insertHit(payload, t, 2 * ind + 1);  // Entry hit
     }
 
-    if (t < asfloat(get_payload(2*(BUFFER_SIZE-1)))) {
+    if (other_t > cur_t)
+    {
+        insertHit(payload, other_t, 2 * ind);  // Exit hit
+    }
+
+    // Continue traversal if we might find closer hits
+    if (t < payload.hits[BUFFER_SIZE - 1].t)
+    {
         IgnoreHit();
     }
 }
 
+// ============================================================================
+// Miss Shader
+// ============================================================================
+
 [shader("miss")]
-void ms()
+void ms(inout MultiHitPayload payload)
 {
+    // Nothing to do on miss
 }
+
+// ============================================================================
+// Ray Generation Shader
+// ============================================================================
 
 [shader("raygeneration")]
 void rg_float()
 {
-    let FAST_MODE = false;
+    uint3 idx = DispatchRaysIndex();
+    uint3 dim = DispatchRaysDimensions();
 
-    const uint3 idx = DispatchRaysIndex();
-    const uint3 dim = DispatchRaysDimensions();
     float3 direction = l2_normalize(ray_directions[idx.x]);
     float3 origin = ray_origins[idx.x] + tmin * ray_directions[idx.x];
+
     SplineState state = make_empty_state();
     state.t = 0;
     state.drgb = initial_drgb[idx.x];
 
-    let start_id = idx.x * max_iters;
-    
+    uint start_id = idx.x * max_iters;
+
     ControlPoint ctrl_pt = {};
-    uint last_tri = -1;
+    uint last_tri = 0xFFFFFFFF;
     float prev_t = state.t;
-    uint next_tri = -1;
-    float next_t = 1e20;
+    uint next_tri = 0xFFFFFFFF;
+    float next_t = 1e20f;
 
     uint tri;
-
     int iter = 0;
-    while (state.logT < LOG_CUTOFF && iter < max_iters)
-    {
-        let start_t = abs(state.t);
-        uint payload[2*BUFFER_SIZE];
-        for (int i=0; i<BUFFER_SIZE; i++) {
-            payload[2*i] = asuint(1e10f);
-        }
 
-        optixTraceP32(
-                traversable,
-                origin,
-                direction,
-                start_t,
-                tmax,
-                payload);
-        bool end = false;
-        for (int i=0; i<BUFFER_SIZE; i++) {
-            ctrl_pt.t = asfloat(payload[2*i]);
-            tri = payload[2*i+1];
-            if (ctrl_pt.t > 1e9) {
-                end = true;
+    while (state.logT < LOG_CUTOFF && iter < int(max_iters))
+    {
+        float start_t = abs(state.t);
+
+        // Initialize payload
+        MultiHitPayload payload;
+        initHitBuffer(payload);
+
+        // Create ray descriptor
+        RayDesc ray;
+        ray.Origin = origin;
+        ray.Direction = direction;
+        ray.TMin = start_t;
+        ray.TMax = tmax;
+
+        // Trace ray using standard HLSL API
+        TraceRay(
+            traversable,           // Acceleration structure
+            RAY_FLAG_NONE,         // Ray flags
+            0xFF,                  // Instance inclusion mask
+            0,                     // Ray contribution to hit group index
+            1,                     // Multiplier for geometry contribution to hit group index
+            0,                     // Miss shader index
+            ray,                   // Ray descriptor
+            payload                // Payload
+        );
+
+        bool endLoop = false;
+
+        for (int i = 0; i < BUFFER_SIZE; i++)
+        {
+            ctrl_pt.t = payload.hits[i].t;
+            tri = payload.hits[i].triIndex;
+
+            if (ctrl_pt.t > 1e9f)
+            {
+                endLoop = true;
                 break;
             }
+
             ctrl_pt = get_ctrl_pt(tri, ctrl_pt.t);
             state = update(state, ctrl_pt, tmin, tmax, max_prim_size);
             touch_count[tri / tri_per_g]++;
-            tri_collection[idx.x + iter * dim.x] = tri;
+            tri_collection[idx.x + iter * dim.x] = int(tri);
             iter++;
-            if (!(state.logT < LOG_CUTOFF && iter < max_iters)) break;
-        }
-        if (end) break;
 
+            if (!(state.logT < LOG_CUTOFF && iter < int(max_iters)))
+            {
+                break;
+            }
+        }
+
+        if (endLoop)
+        {
+            break;
+        }
     }
-    let output = extract_color(state, tmin);
-    image[idx.x] = {output.C.x, output.C.y, output.C.z, output.depth};
-    let dual_state = to_dual(state, ctrl_pt);
+
+    SplineOutput output = extract_color(state, tmin);
+    image[idx.x] = float4(output.C.x, output.C.y, output.C.z, output.depth);
+
+    SplineState dual_state = to_dual(state, ctrl_pt);
     last_state[idx.x] = dual_state;
     last_dirac[idx.x] = ctrl_pt.dirac;
     last_face[idx.x] = last_tri;
-    iters[idx.x] = iter;
+    iters[idx.x] = uint(iter);
 }
