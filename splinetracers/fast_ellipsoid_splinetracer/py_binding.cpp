@@ -268,7 +268,11 @@ public:
         params.camera = {};
 
         // Primitive data from cached primitives
-        params.half_attribs = {cached_prims.half_attribs, num_prims};
+        // NOTE: half_attribs contains __half data but slang declares it as RWStructuredBuffer<float>
+        // The cast is safe because StructuredBuffer is just {ptr, count} - the pointer
+        // type doesn't affect the binary layout, only how slang interprets the data.
+        // Since slang never actually reads from half_attribs, this is fine.
+        params.half_attribs = {reinterpret_cast<float*>(cached_prims.half_attribs), num_prims * 10};  // 10 = mean(3)+scale(3)+quat(4)
         params.means = {cached_prims.means, num_prims};
         params.scales = {cached_prims.scales, num_prims};
         params.quats = {cached_prims.quats, num_prims};

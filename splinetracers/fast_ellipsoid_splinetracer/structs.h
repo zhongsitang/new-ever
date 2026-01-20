@@ -25,10 +25,13 @@ struct SbtRecord
     T data;
 };
 
+// StructuredBuffer<T> must match slang's (RW)StructuredBuffer layout
+// Slang generates: { T* data, size_t count } = 16 bytes on 64-bit
 template <typename T> struct StructuredBuffer {
   T *data;
   size_t size;
 };
+static_assert(sizeof(StructuredBuffer<float>) == 16, "StructuredBuffer size must be 16 bytes");
 
 
 struct HitData {
@@ -38,8 +41,17 @@ struct HitData {
     float height;
 };
 
-struct SplineState//((packed))
-{
+// SplineState must match slang spline-machine.slang layout EXACTLY
+// Layout verified:
+//   offset 0:  float2 distortion_parts (8 bytes)
+//   offset 8:  float2 cum_sum (8 bytes)
+//   offset 16: float3 padding (12 bytes)
+//   offset 28: float t (4 bytes)
+//   offset 32: float4 drgb (16 bytes) - naturally 16-byte aligned
+//   offset 48: float logT (4 bytes)
+//   offset 52: float3 C (12 bytes)
+//   Total: 64 bytes
+struct SplineState {
   float2 distortion_parts;
   float2 cum_sum;
   float3 padding;
@@ -51,6 +63,8 @@ struct SplineState//((packed))
   float logT;
   float3 C;
 };
+static_assert(sizeof(SplineState) == 64, "SplineState size must be 64 bytes to match slang");
+static_assert(offsetof(SplineState, drgb) == 32, "SplineState::drgb must be at offset 32");
 
 // Always on GPU
 struct Primitives {

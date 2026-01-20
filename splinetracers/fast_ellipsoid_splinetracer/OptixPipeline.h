@@ -34,46 +34,110 @@ extern const size_t fast_shaders_optixir_size;
 }
 
 // =============================================================================
-// LaunchParams - Must match global variables in slang shaders exactly
-// Slang generates SLANG_globalParams struct from global shader variables
-// The order and types must match the slang global declarations
+// LaunchParams - Must match global variables in slang shaders EXACTLY
+//
+// CRITICAL: Memory alignment between C++ and Slang
+// - Slang generates SLANG_globalParams struct from global shader variables
+// - The order, types, and alignment must match the slang global declarations
+// - StructuredBuffer<T> in both C++ and Slang is {T* data, size_t count} = 16 bytes
+// - Use explicit padding to ensure alignment matches across compilers
+//
+// Slang global declarations (shaders.slang lines 36-61):
+//   RWStructuredBuffer<float4>      image;
+//   RWStructuredBuffer<uint>        iters;
+//   RWStructuredBuffer<uint>        last_face;
+//   RWStructuredBuffer<uint>        touch_count;
+//   RWStructuredBuffer<float4>      last_dirac;
+//   RWStructuredBuffer<SplineState> last_state;
+//   RWStructuredBuffer<int>         tri_collection;
+//   StructuredBuffer<float3>        ray_origins;
+//   StructuredBuffer<float3>        ray_directions;
+//   Camera camera;
+//   RWStructuredBuffer<float>       half_attribs;  // NOTE: float in slang!
+//   RWStructuredBuffer<float3>      means;
+//   RWStructuredBuffer<float3>      scales;
+//   RWStructuredBuffer<float4>      quats;
+//   RWStructuredBuffer<float>       densities;
+//   RWStructuredBuffer<float>       features;
+//   size_t sh_degree;
+//   size_t max_iters;
+//   float tmin;
+//   float tmax;
+//   RWStructuredBuffer<float4>      initial_drgb;
+//   float max_prim_size;
+//   RaytracingAccelerationStructure traversable;
 // =============================================================================
-struct LaunchParams {
-    // Output buffers (RWStructuredBuffer in slang)
-    StructuredBuffer<float4> image;
-    StructuredBuffer<uint32_t> iters;
-    StructuredBuffer<uint32_t> last_face;
-    StructuredBuffer<uint32_t> touch_count;
-    StructuredBuffer<float4> last_dirac;
-    StructuredBuffer<SplineState> last_state;
-    StructuredBuffer<int32_t> tri_collection;
+
+// Camera struct - must match slang Camera exactly
+// Layout: fx(4) + fy(4) + height(4) + width(4) + U(12) + V(12) + W(12) + eye(12) = 64 bytes
+struct alignas(8) Camera {
+    float fx, fy;           // offset 0-7
+    int32_t height;         // offset 8-11
+    int32_t width;          // offset 12-15
+    float3 U, V, W;         // offset 16-51 (3 x 12 bytes)
+    float3 eye;             // offset 52-63
+};
+static_assert(sizeof(Camera) == 64, "Camera struct size mismatch");
+
+struct alignas(8) LaunchParams {
+    // Output buffers (RWStructuredBuffer in slang) - each 16 bytes
+    StructuredBuffer<float4> image;              // offset 0
+    StructuredBuffer<uint32_t> iters;            // offset 16
+    StructuredBuffer<uint32_t> last_face;        // offset 32
+    StructuredBuffer<uint32_t> touch_count;      // offset 48
+    StructuredBuffer<float4> last_dirac;         // offset 64
+    StructuredBuffer<SplineState> last_state;    // offset 80
+    StructuredBuffer<int32_t> tri_collection;    // offset 96
 
     // Input buffers (StructuredBuffer in slang)
-    StructuredBuffer<float3> ray_origins;
-    StructuredBuffer<float3> ray_directions;
+    StructuredBuffer<float3> ray_origins;        // offset 112
+    StructuredBuffer<float3> ray_directions;     // offset 128
 
-    // Camera struct
-    Cam camera;
+    // Camera struct - 64 bytes
+    Camera camera;                               // offset 144
 
     // Primitive attributes (RWStructuredBuffer)
-    StructuredBuffer<__half> half_attribs;
-    StructuredBuffer<float3> means;
-    StructuredBuffer<float3> scales;
-    StructuredBuffer<float4> quats;
-    StructuredBuffer<float> densities;
-    StructuredBuffer<float> features;
+    // NOTE: slang declares half_attribs as RWStructuredBuffer<float>, not half!
+    // The buffer contains half data but slang interface uses float for simplicity
+    // StructuredBuffer<T> layout is {T*, size_t}, pointer type doesn't affect layout
+    StructuredBuffer<float> half_attribs;        // offset 208 (changed from __half)
+    StructuredBuffer<float3> means;              // offset 224
+    StructuredBuffer<float3> scales;             // offset 240
+    StructuredBuffer<float4> quats;              // offset 256
+    StructuredBuffer<float> densities;           // offset 272
+    StructuredBuffer<float> features;            // offset 288
 
-    // Scalar parameters
-    size_t sh_degree;
-    size_t max_iters;
-    float tmin;
-    float tmax;
-    StructuredBuffer<float4> initial_drgb;
-    float max_prim_size;
+    // Scalar parameters - alignment analysis:
+    // offset 304: sh_degree (8 bytes) - 304 % 8 == 0, OK
+    // offset 312: max_iters (8 bytes) - 312 % 8 == 0, OK
+    // offset 320: tmin (4 bytes)
+    // offset 324: tmax (4 bytes)
+    // offset 328: initial_drgb needs 8-byte alignment, 328 % 8 == 0, OK - NO PADDING NEEDED
+    // offset 344: max_prim_size (4 bytes)
+    // offset 348: need 4 bytes padding for handle (8-byte alignment)
+    // offset 352: handle (8 bytes) - 352 % 8 == 0, OK
+    uint64_t sh_degree;                          // offset 304
+    uint64_t max_iters;                          // offset 312
+    float tmin;                                  // offset 320
+    float tmax;                                  // offset 324
+    StructuredBuffer<float4> initial_drgb;       // offset 328 (8-byte aligned: 328/8=41)
+    float max_prim_size;                         // offset 344
+    uint32_t _pad0;                              // offset 348 - padding for 8-byte alignment of handle
 
-    // Acceleration structure handle
-    OptixTraversableHandle handle;
+    // Acceleration structure handle (OptixTraversableHandle = uint64_t)
+    OptixTraversableHandle handle;               // offset 352
 };
+
+// Verify critical layout assumptions at compile time
+static_assert(sizeof(StructuredBuffer<float4>) == 16, "StructuredBuffer size mismatch");
+static_assert(alignof(StructuredBuffer<float4>) == 8, "StructuredBuffer alignment mismatch");
+static_assert(offsetof(LaunchParams, camera) == 144, "Camera offset mismatch");
+static_assert(offsetof(LaunchParams, half_attribs) == 208, "half_attribs offset mismatch");
+static_assert(offsetof(LaunchParams, sh_degree) == 304, "sh_degree offset mismatch");
+static_assert(offsetof(LaunchParams, initial_drgb) == 328, "initial_drgb offset mismatch");
+static_assert(offsetof(LaunchParams, max_prim_size) == 344, "max_prim_size offset mismatch");
+static_assert(offsetof(LaunchParams, handle) == 352, "handle offset mismatch");
+static_assert(sizeof(LaunchParams) == 360, "LaunchParams total size mismatch");
 
 // =============================================================================
 // SBT Record Types (simplified)
