@@ -14,7 +14,7 @@
 
 #define TRI_PER_G 4
 #define PT_PER_G 4
-#include "Forward.h"
+#include "TraceParams.h"
 #include "exception.h"
 #include "glm/glm.hpp"
 #include "initialize_density.h"
@@ -154,8 +154,8 @@ void initialize_density(Params *params, OptixAabb *aabbs,
   const size_t block_size = 1024;
   const size_t ray_block_size = 64;
   const size_t second_block_size = 16;
-  int num_prims = params->means.size;
-  int num_rays = params->initial_drgb.size;
+  uint32_t num_prims = params->means.size;
+  uint32_t num_rays = params->initial_drgb.size;
 
   dim3 grid_dim (
     (num_prims + block_size - 1) / block_size,

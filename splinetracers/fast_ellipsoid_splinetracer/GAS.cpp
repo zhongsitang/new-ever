@@ -12,143 +12,182 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <optix_stubs.h>
-#include "glm/glm.hpp"
 #include "GAS.h"
+
 #include <chrono>
+#include <stdexcept>
 
-#ifndef __DEFINED_OUTPUT_BUFFERS__
-CUdeviceptr D_GAS_OUTPUT_BUFFER = 0;
-size_t OUTPUT_BUFFER_SIZE = 0;
-CUdeviceptr D_TEMP_BUFFER_GAS = 0;
-size_t TEMP_BUFFER_SIZE = 0;
-CUdeviceptr D_COMPACT_GAS_BUFFER = 0;
-size_t COMPACT_GAS_BUFFER_SIZE = 0;
-#define __DEFINED_OUTPUT_BUFFERS__ 0
-#endif
+#include "exception.h"
 
-using namespace std::chrono;
-
-GAS::GAS() noexcept
-    : device(-1),
-      context(nullptr),
-      gas_handle(0) {}
-
+using namespace rhi;
 
 GAS::GAS(GAS &&other) noexcept
-    : device(std::exchange(other.device, -1)),
-      context(std::exchange(other.context, nullptr)),
-      gas_handle(std::exchange(other.gas_handle, 0))
-{}
+    : device(std::exchange(other.device, nullptr)),
+      queue(std::exchange(other.queue, nullptr)),
+      aabb_buffer(std::exchange(other.aabb_buffer, nullptr)),
+      instance_buffer(std::exchange(other.instance_buffer, nullptr)),
+      blas(std::exchange(other.blas, nullptr)),
+      tlas(std::exchange(other.tlas, nullptr)),
+      device_index(std::exchange(other.device_index, -1)),
+      enable_anyhit(std::exchange(other.enable_anyhit, false)),
+      fast_build(std::exchange(other.fast_build, false)) {}
 
 void GAS::release() {
-    bool device_set = false;
-    gas_handle = 0;
+  aabb_buffer = nullptr;
+  instance_buffer = nullptr;
+  blas = nullptr;
+  tlas = nullptr;
 }
 
 GAS::~GAS() noexcept(false) {
-    if (this->device != -1) {
-        release();
-    }
-    const auto device = std::exchange(this->device, -1);
+  release();
+  device = nullptr;
+  queue = nullptr;
 }
 
 void GAS::build(const Primitives &model) {
-    auto start = high_resolution_clock::now();
-    auto full_start = high_resolution_clock::now();
-    release();
+  release();
+  CUDA_CHECK(cudaSetDevice(device_index));
 
-    CUDA_CHECK(cudaSetDevice(device));
-    OptixAccelBuildOptions accel_options = {};
-    accel_options.buildFlags = OPTIX_BUILD_FLAG_PREFER_FAST_TRACE | OPTIX_BUILD_FLAG_ALLOW_COMPACTION;
-    accel_options.operation  = OPTIX_BUILD_OPERATION_BUILD;
+  std::vector<OptixAabb> aabbs(model.num_prims);
+  CUDA_CHECK(cudaMemcpy(aabbs.data(), model.aabbs,
+                        model.num_prims * sizeof(OptixAabb), cudaMemcpyDeviceToHost));
 
-    uint32_t aabb_input_flags[1];
-    aabb_input_flags[0] = OPTIX_GEOMETRY_FLAG_NONE;
+  BufferDesc aabb_buffer_desc = {};
+  aabb_buffer_desc.size = aabbs.size() * sizeof(OptixAabb);
+  aabb_buffer_desc.defaultState = ResourceState::AccelerationStructureBuildInput;
+  aabb_buffer_desc.usage =
+      BufferUsage::AccelerationStructureBuildInput | BufferUsage::ShaderResource;
+  aabb_buffer = device->createBuffer(aabb_buffer_desc, aabbs.data());
 
-    CUdeviceptr d_aabbs = (CUdeviceptr)model.aabbs;
-    OptixBuildInput aabb_input = {};
-    aabb_input.type                        = OPTIX_BUILD_INPUT_TYPE_CUSTOM_PRIMITIVES;
-    aabb_input.customPrimitiveArray.aabbBuffers   = &d_aabbs;
-    aabb_input.customPrimitiveArray.numPrimitives = model.num_prims;
+  AccelerationStructureBuildInput build_input = {};
+  build_input.type = AccelerationStructureBuildInputType::ProceduralPrimitives;
+  build_input.proceduralPrimitives.aabbBuffer = BufferOffsetPair(aabb_buffer, 0);
+  build_input.proceduralPrimitives.primitiveCount = model.num_prims;
+  build_input.proceduralPrimitives.aabbStride = sizeof(OptixAabb);
+  build_input.proceduralPrimitives.flags =
+      enable_anyhit ? AccelerationStructureGeometryFlags::None
+                    : AccelerationStructureGeometryFlags::Opaque;
 
-    aabb_input.customPrimitiveArray.flags         = aabb_input_flags;
-    aabb_input.customPrimitiveArray.numSbtRecords = 1;
+  AccelerationStructureBuildDesc build_desc = {};
+  build_desc.inputs = &build_input;
+  build_desc.inputCount = 1;
+  build_desc.flags = AccelerationStructureBuildFlags::AllowCompaction |
+                     (fast_build ? AccelerationStructureBuildFlags::PreferFastBuild
+                                 : AccelerationStructureBuildFlags::PreferFastTrace);
 
-    OptixAccelBufferSizes gas_buffer_sizes;
-    OPTIX_CHECK( optixAccelComputeMemoryUsage(
-                context,
-                &accel_options,
-                &aabb_input,
-                1, // Number of build inputs
-                &gas_buffer_sizes
-                ) );
+  AccelerationStructureSizes sizes;
+  if (SLANG_FAILED(device->getAccelerationStructureSizes(build_desc, &sizes))) {
+    throw std::runtime_error("Failed to query BLAS build sizes.");
+  }
 
-    // Handle allocation of the GAS
-    if (OUTPUT_BUFFER_SIZE <= gas_buffer_sizes.outputSizeInBytes) {
-        if (D_GAS_OUTPUT_BUFFER != 0) {
-            CUDA_CHECK( cudaFree( reinterpret_cast<void*>( D_GAS_OUTPUT_BUFFER ) ) );
-        }
-        OUTPUT_BUFFER_SIZE = size_t(gas_buffer_sizes.outputSizeInBytes);
-        CUDA_CHECK( cudaMalloc(
-                    reinterpret_cast<void**>( &D_GAS_OUTPUT_BUFFER ),
-                    OUTPUT_BUFFER_SIZE
-                    ) );
-    }
+  BufferDesc scratch_buffer_desc = {};
+  scratch_buffer_desc.defaultState = ResourceState::UnorderedAccess;
+  scratch_buffer_desc.size = sizes.scratchSize;
+  scratch_buffer_desc.usage = BufferUsage::UnorderedAccess;
+  auto scratch_buffer = device->createBuffer(scratch_buffer_desc);
 
-    if (TEMP_BUFFER_SIZE <= gas_buffer_sizes.tempSizeInBytes) {
-        if (D_TEMP_BUFFER_GAS != 0) {
-            CUDA_CHECK( cudaFree( reinterpret_cast<void*>( D_TEMP_BUFFER_GAS ) ) );
-        }
-        TEMP_BUFFER_SIZE = size_t(gas_buffer_sizes.tempSizeInBytes);
-        CUDA_CHECK( cudaMalloc(
-                    reinterpret_cast<void**>( &D_TEMP_BUFFER_GAS ),
-                    TEMP_BUFFER_SIZE
-                    ) );
-    }
+  ComPtr<IQueryPool> compacted_size_query;
+  QueryPoolDesc query_pool_desc = {};
+  query_pool_desc.count = 1;
+  query_pool_desc.type = QueryType::AccelerationStructureCompactedSize;
+  if (SLANG_FAILED(device->createQueryPool(query_pool_desc, compacted_size_query.writeRef()))) {
+    throw std::runtime_error("Failed to create acceleration structure query pool.");
+  }
 
-    size_t *d_compactedSize;
-    CUDA_CHECK( cudaMalloc(
-                reinterpret_cast<void**>( &d_compactedSize ),
-                sizeof(size_t)
-                ) );
-    OptixAccelEmitDesc property = {};
-    property.type = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE;
-    property.result = ( CUdeviceptr )d_compactedSize;
-    
-    OPTIX_CHECK( optixAccelBuild(
-                context,
-                0,                  // CUDA stream
-                &accel_options,
-                &aabb_input,
-                1,                  // num build inputs
-                D_TEMP_BUFFER_GAS,
-                gas_buffer_sizes.tempSizeInBytes,
-                D_GAS_OUTPUT_BUFFER,
-                gas_buffer_sizes.outputSizeInBytes,
-                &gas_handle,
-                &property,            // emitted property list
-                1                   // num emitted properties
-                ) );
+  ComPtr<IAccelerationStructure> draft_as;
+  AccelerationStructureDesc draft_create_desc = {};
+  draft_create_desc.size = sizes.accelerationStructureSize;
+  if (SLANG_FAILED(device->createAccelerationStructure(draft_create_desc, draft_as.writeRef()))) {
+    throw std::runtime_error("Failed to create draft BLAS.");
+  }
 
-    size_t compactedSize;
-    cudaMemcpy(&compactedSize, d_compactedSize,
-        sizeof(size_t),
-        cudaMemcpyDeviceToHost);
+  compacted_size_query->reset();
+  auto command_encoder = queue->createCommandEncoder();
+  AccelerationStructureQueryDesc compacted_query_desc = {};
+  compacted_query_desc.queryPool = compacted_size_query;
+  compacted_query_desc.queryType = QueryType::AccelerationStructureCompactedSize;
+  command_encoder->buildAccelerationStructure(
+      build_desc, draft_as, nullptr, BufferOffsetPair(scratch_buffer, 0), 1,
+      &compacted_query_desc);
+  queue->submit(command_encoder->finish());
+  queue->waitOnHost();
 
-    if (compactedSize < gas_buffer_sizes.outputSizeInBytes) {
+  uint64_t compacted_size = 0;
+  compacted_size_query->getResult(0, 1, &compacted_size);
 
-        if (COMPACT_GAS_BUFFER_SIZE <= compactedSize) {
-            if (D_COMPACT_GAS_BUFFER != 0) {
-                CUDA_CHECK( cudaFree( reinterpret_cast<void*>( D_COMPACT_GAS_BUFFER ) ) );
-            }
-            COMPACT_GAS_BUFFER_SIZE = compactedSize;
-            CUDA_CHECK( cudaMalloc(
-                        reinterpret_cast<void**>( &D_COMPACT_GAS_BUFFER ),
-                        COMPACT_GAS_BUFFER_SIZE
-                        ) );
-            OPTIX_CHECK( optixAccelCompact( context, 0, gas_handle, D_COMPACT_GAS_BUFFER, COMPACT_GAS_BUFFER_SIZE, &gas_handle ) );
-        }
+  AccelerationStructureDesc create_desc = {};
+  create_desc.size = compacted_size;
+  if (SLANG_FAILED(device->createAccelerationStructure(create_desc, blas.writeRef()))) {
+    throw std::runtime_error("Failed to create compacted BLAS.");
+  }
 
-    }
+  command_encoder = queue->createCommandEncoder();
+  command_encoder->copyAccelerationStructure(blas, draft_as,
+                                             AccelerationStructureCopyMode::Compact);
+  queue->submit(command_encoder->finish());
+  queue->waitOnHost();
+
+  AccelerationStructureInstanceDescType native_instance_desc_type =
+      getAccelerationStructureInstanceDescType(device);
+  Size native_instance_desc_size =
+      getAccelerationStructureInstanceDescSize(native_instance_desc_type);
+
+  std::vector<AccelerationStructureInstanceDescGeneric> instance_descs(1);
+  float transform_matrix[] =
+      {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
+  memcpy(&instance_descs[0].transform[0][0], transform_matrix, sizeof(float) * 12);
+  instance_descs[0].instanceID = 0;
+  instance_descs[0].instanceMask = 0xFF;
+  instance_descs[0].instanceContributionToHitGroupIndex = 0;
+  instance_descs[0].flags = AccelerationStructureInstanceFlags::TriangleFacingCullDisable;
+  instance_descs[0].accelerationStructure = blas->getHandle();
+
+  std::vector<uint8_t> native_instance_descs(instance_descs.size() * native_instance_desc_size);
+  convertAccelerationStructureInstanceDescs(
+      instance_descs.size(),
+      native_instance_desc_type,
+      native_instance_descs.data(),
+      native_instance_desc_size,
+      instance_descs.data(),
+      sizeof(AccelerationStructureInstanceDescGeneric));
+
+  BufferDesc instance_buffer_desc = {};
+  instance_buffer_desc.size = native_instance_descs.size();
+  instance_buffer_desc.defaultState = ResourceState::ShaderResource;
+  instance_buffer_desc.usage = BufferUsage::ShaderResource;
+  instance_buffer = device->createBuffer(instance_buffer_desc, native_instance_descs.data());
+
+  AccelerationStructureBuildInput tlas_build_input = {};
+  tlas_build_input.type = AccelerationStructureBuildInputType::Instances;
+  tlas_build_input.instances.instanceBuffer = BufferOffsetPair(instance_buffer, 0);
+  tlas_build_input.instances.instanceCount = 1;
+  tlas_build_input.instances.instanceStride = native_instance_desc_size;
+
+  AccelerationStructureBuildDesc tlas_build_desc = {};
+  tlas_build_desc.inputs = &tlas_build_input;
+  tlas_build_desc.inputCount = 1;
+
+  AccelerationStructureSizes tlas_sizes;
+  if (SLANG_FAILED(device->getAccelerationStructureSizes(tlas_build_desc, &tlas_sizes))) {
+    throw std::runtime_error("Failed to query TLAS build sizes.");
+  }
+
+  BufferDesc tlas_scratch_desc = {};
+  tlas_scratch_desc.defaultState = ResourceState::UnorderedAccess;
+  tlas_scratch_desc.size = tlas_sizes.scratchSize;
+  tlas_scratch_desc.usage = BufferUsage::UnorderedAccess;
+  auto tlas_scratch_buffer = device->createBuffer(tlas_scratch_desc);
+
+  AccelerationStructureDesc tlas_create_desc = {};
+  tlas_create_desc.size = tlas_sizes.accelerationStructureSize;
+  if (SLANG_FAILED(device->createAccelerationStructure(tlas_create_desc, tlas.writeRef()))) {
+    throw std::runtime_error("Failed to create TLAS.");
+  }
+
+  command_encoder = queue->createCommandEncoder();
+  command_encoder->buildAccelerationStructure(
+      tlas_build_desc, tlas, nullptr, BufferOffsetPair(tlas_scratch_buffer, 0), 0, nullptr);
+  queue->submit(command_encoder->finish());
+  queue->waitOnHost();
 }

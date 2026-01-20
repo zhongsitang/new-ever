@@ -17,12 +17,12 @@ import safe_math;
 #define PRE_MULTI 1000
 #define LADDER_P -0.1
 
-struct SplineState : IDifferentiable
+struct VolumeState : IDifferentiable
 {
   float2 distortion_parts;
   float2 cum_sum;
   float3 padding;
-  // Spline state
+  // Ray-marching state
   float t;
   float4 drgb;
 
@@ -31,7 +31,7 @@ struct SplineState : IDifferentiable
   float3 C;
 };
 
-SplineState make_empty_state() {
+VolumeState make_empty_volume_state() {
   return {
     float2(0.f),
     float2(0.f),
@@ -44,7 +44,7 @@ SplineState make_empty_state() {
   };
 }
 
-struct ControlPoint : IDifferentiable
+struct VolumeSample : IDifferentiable
 {
   float t;
   float4 dirac;
@@ -56,30 +56,30 @@ bool AlmostEqualRelative(float A, float B,
     return abs(A - B) <= max(abs(A), abs(B)) * maxRelDiff;
 }
 
-SplineState to_dual(in SplineState state, in ControlPoint ctrl_pt)
+VolumeState to_dual_volume_state(in VolumeState state, in VolumeSample sample)
 {
-  SplineState dual_state = state;
+  VolumeState dual_state = state;
   return dual_state;
 }
 
-SplineState from_dual(in SplineState state, in ControlPoint ctrl_pt)
+VolumeState from_dual_volume_state(in VolumeState state, in VolumeSample sample)
 {
-  SplineState dual_state = state;
+  VolumeState dual_state = state;
   return dual_state;
 }
 
-SplineState inverse_update_dual(
-    in SplineState new_state,
-    in ControlPoint new_ctrl_pt,
-    in ControlPoint ctrl_pt,
+VolumeState inverse_integrate_dual(
+    in VolumeState new_state,
+    in VolumeSample new_sample,
+    in VolumeSample sample,
     in float t_min,
     in float t_max)
 {
-  const float t = ctrl_pt.t;
+  const float t = sample.t;
   const float dt = max(new_state.t - t, 0.f);
 
-  SplineState state = {};
-  state.drgb = new_state.drgb - new_ctrl_pt.dirac;
+  VolumeState state = {};
+  state.drgb = new_state.drgb - new_sample.dirac;
 
   state.t = t;
 
@@ -121,18 +121,18 @@ SplineState inverse_update_dual(
 
 
 [Differentiable]
-SplineState update(
-    in SplineState state,
-    in ControlPoint ctrl_pt,
+VolumeState integrate_volume_sample(
+    in VolumeState state,
+    in VolumeSample sample,
     no_diff in float t_min,
     no_diff in float t_max,
     no_diff in float max_prim_size)
 {
-  const float t = ctrl_pt.t;
+  const float t = sample.t;
   const float dt = max(t - state.t, 0.f);
 
-  SplineState new_state;
-  new_state.drgb = state.drgb + ctrl_pt.dirac;
+  VolumeState new_state;
+  new_state.drgb = state.drgb + sample.dirac;
   new_state.t = t;
 
   float4 drgb = state.drgb;
@@ -172,14 +172,14 @@ SplineState update(
   return new_state;
 }
 
-struct SplineOutput: IDifferentiable {
+struct VolumeOutput: IDifferentiable {
   float3 C;
   float depth;
   float distortion_loss;
 };
 
 [Differentiable]
-SplineOutput extract_color(in SplineState state, in float tmin) {
+VolumeOutput extract_volume_output(in VolumeState state, in float tmin) {
   // let opacity = 1-exp(-state.logT);
   return {
     state.C,

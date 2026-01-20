@@ -18,32 +18,17 @@
 #include <optix.h>
 #include <optix_types.h>
 
-template <typename T>
-struct SbtRecord
-{
-    __align__( OPTIX_SBT_RECORD_ALIGNMENT ) char header[OPTIX_SBT_RECORD_HEADER_SIZE];
-    T data;
-};
-
 template <typename T> struct StructuredBuffer {
   T *data;
-  size_t size;
+  uint32_t size;
 };
 
-
-struct HitData {
-    float3 scales;
-    float3 mean;
-    float4 quat;
-    float height;
-};
-
-struct SplineState//((packed))
+struct VolumeState//((packed))
 {
   float2 distortion_parts;
   float2 cum_sum;
   float3 padding;
-  // Spline state
+  // Ray-marching state
   float t;
   float4 drgb;
 
@@ -54,7 +39,6 @@ struct SplineState//((packed))
 
 // Always on GPU
 struct Primitives {
-  __half *half_attribs;
   float3 *means; 
   float3 *scales; 
   float4 *quats; 
@@ -67,10 +51,14 @@ struct Primitives {
   size_t prev_alloc_size;
 };
 
-struct Cam {
+struct alignas(16) Cam {
     float fx, fy;
     int height;
     int width;
+    float2 _pad0;
     float3 U, V, W;
     float3 eye;
+    float _pad1;
 };
+
+static_assert(alignof(Cam) == 16, "Cam must be 16-byte aligned for GPU layout.");

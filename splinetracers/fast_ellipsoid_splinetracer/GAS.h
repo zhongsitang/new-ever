@@ -13,10 +13,10 @@
 // limitations under the License.
 
 #pragma once
+
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <math.h>
-#include <optix.h>
 #include <stdio.h>
 
 #include <cstdint>
@@ -24,22 +24,26 @@
 #include <string>
 #include <vector>
 
-#include "CUDABuffer.h"
+#include "slang-com-ptr.h"
+#include "slang-rhi.h"
+#include "slang-rhi/acceleration-structure-utils.h"
 #include "structs.h"
 
 class GAS {
    public:
-    OptixTraversableHandle gas_handle = 0;
-    OptixTraversableHandle compactedAccelHandle = 0;
-    GAS() noexcept;
-    GAS(const OptixDeviceContext &context, const uint8_t device, const bool enable_backwards, const bool fast_build) : device(device), context(context), enable_backwards(enable_backwards), fast_build(fast_build) {}
-    GAS(
-        const OptixDeviceContext &context,
-        const uint8_t device,
-        const Primitives &model, 
-        const bool enable_backwards=false,
-        const bool fast_build=false) : GAS(context, device, enable_backwards, fast_build) {
-        build(model);
+    GAS() noexcept = default;
+    GAS(rhi::IDevice *device,
+        rhi::ICommandQueue *queue,
+        const uint8_t device_index,
+        const Primitives &model,
+        const bool enable_anyhit = false,
+        const bool fast_build = false)
+        : device(device),
+          queue(queue),
+          device_index(device_index),
+          enable_anyhit(enable_anyhit),
+          fast_build(fast_build) {
+      build(model);
     }
 
     ~GAS() noexcept(false);
@@ -47,30 +51,38 @@ class GAS {
     GAS &operator=(const GAS &) = delete;
     GAS(GAS &&other) noexcept;
     GAS &operator=(GAS &&other) {
-        using std::swap;
-        if (this != &other) {
-            GAS tmp(std::move(other));
-            swap(tmp, *this);
-        }
-        return *this;
+      using std::swap;
+      if (this != &other) {
+        GAS tmp(std::move(other));
+        swap(tmp, *this);
+      }
+      return *this;
     }
     friend void swap(GAS &first, GAS &second) {
-        using std::swap;
-        swap(first.context, second.context);
-        swap(first.device, second.device);
-        swap(first.gas_handle, second.gas_handle);
+      using std::swap;
+      swap(first.device, second.device);
+      swap(first.queue, second.queue);
+      swap(first.device_index, second.device_index);
+      swap(first.blas, second.blas);
+      swap(first.tlas, second.tlas);
+      swap(first.aabb_buffer, second.aabb_buffer);
+      swap(first.instance_buffer, second.instance_buffer);
     }
 
-    bool defined() const {
-        return gas_handle != 0;
-    }
+    bool defined() const { return tlas != nullptr; }
+    rhi::IAccelerationStructure *get_tlas() const { return tlas.get(); }
 
    private:
     void build(const Primitives &model);
-    bool enable_backwards, fast_build;
-
     void release();
-    OptixDeviceContext context = nullptr;
-    int8_t device = -1;
-};
 
+    Slang::ComPtr<rhi::IDevice> device;
+    Slang::ComPtr<rhi::ICommandQueue> queue;
+    Slang::ComPtr<rhi::IBuffer> aabb_buffer;
+    Slang::ComPtr<rhi::IBuffer> instance_buffer;
+    Slang::ComPtr<rhi::IAccelerationStructure> blas;
+    Slang::ComPtr<rhi::IAccelerationStructure> tlas;
+    int8_t device_index = -1;
+    bool enable_anyhit = false;
+    bool fast_build = false;
+};
