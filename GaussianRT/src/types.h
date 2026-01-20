@@ -53,30 +53,32 @@ struct RayHit {
 // ============================================================================
 
 // Accumulated state along a ray during volume rendering
+// IMPORTANT: Flat layout to match Slang exactly - 11 consecutive floats
 struct RenderState {
-    // Transmittance and color accumulation
-    float log_transmittance;    // log(T) where T = exp(-integral of sigma*dt)
-    float3 accumulated_color;   // C = integral of T * sigma * c dt
-
-    // For depth computation
-    float accumulated_depth;    // Weighted depth
-    float depth_weight;
-
-    // Current ray parameter
-    float t_current;
-
-    // Distortion loss components (for regularization)
-    float2 distortion_accum;
-    float2 weight_accum;
+    float data[11];
+    // Layout:
+    // [0]   log_transmittance
+    // [1-3] accumulated_color (R, G, B)
+    // [4]   accumulated_depth
+    // [5]   depth_weight
+    // [6]   t_current
+    // [7-8] distortion_accum (x, y)
+    // [9-10] weight_accum (x, y)
 };
+
+static_assert(sizeof(RenderState) == 11 * sizeof(float), "RenderState must be 11 floats");
 
 // Control point: represents a sample along the ray
+// IMPORTANT: Flat layout to match Slang exactly - 5 consecutive floats
 struct ControlPoint {
-    float t;                // Distance along ray
-    float sigma;            // Density at this point
-    float3 color;           // Color at this point (from SH evaluation)
-    uint32_t element_id;    // Source element
+    float data[5];
+    // Layout:
+    // [0]   t (distance along ray)
+    // [1]   sigma (density)
+    // [2-4] color (R, G, B)
 };
+
+static_assert(sizeof(ControlPoint) == 5 * sizeof(float), "ControlPoint must be 5 floats");
 
 // ============================================================================
 // Spherical Harmonics

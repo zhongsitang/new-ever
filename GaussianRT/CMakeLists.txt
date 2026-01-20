@@ -44,29 +44,6 @@ link_directories(${SLANG_LIB_DIR})
 # Slang libraries
 set(SLANG_LIBS slang slang-rhi)
 
-# Function to compile Slang to CUDA
-function(compile_slang_to_cuda TARGET_NAME SLANG_FILE OUTPUT_CU)
-    add_custom_command(
-        OUTPUT ${OUTPUT_CU}
-        COMMAND ${SLANGC}
-            -profile cuda_sm_75
-            -target cuda
-            -o ${OUTPUT_CU}
-            -I ${CMAKE_CURRENT_SOURCE_DIR}/slang
-            ${SLANG_FILE}
-        DEPENDS ${SLANG_FILE}
-        COMMENT "Compiling ${SLANG_FILE} to CUDA"
-    )
-    add_custom_target(${TARGET_NAME} DEPENDS ${OUTPUT_CU})
-endfunction()
-
-# Compile backward kernel from Slang to CUDA
-compile_slang_to_cuda(
-    backward_kernel_cuda
-    ${CMAKE_CURRENT_SOURCE_DIR}/slang/backward.slang
-    ${CMAKE_CURRENT_BINARY_DIR}/backward.cu
-)
-
 # Core library sources
 set(CORE_SOURCES
     src/device.cpp
@@ -79,6 +56,7 @@ set(CORE_SOURCES
 set(CUDA_SOURCES
     src/cuda/aabb_builder.cu
     src/cuda/initialize_state.cu
+    src/cuda/backward_kernel.cu
 )
 
 # Build core library
@@ -92,8 +70,6 @@ target_link_libraries(gaussian_rt_core
     CUDA::cudart
     ${TORCH_LIBRARIES}
 )
-
-add_dependencies(gaussian_rt_core backward_kernel_cuda)
 
 # Python module
 pybind11_add_module(_gaussian_rt

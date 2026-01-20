@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include <cuda_runtime.h>
 #include <cstring>
 #include <stdexcept>
 #include <iostream>
@@ -236,9 +237,71 @@ void Renderer::render(
     encoder->finish(cmd_buffer.writeRef());
     device_.submit_and_wait(cmd_buffer);
 
-    // Copy results back (for now, just set pointers - actual implementation
-    // would need proper buffer readback)
-    // In PyTorch integration, we'll use CUDA interop instead
+    // Copy results from internal RHI buffers to output CUDA pointers
+    size_t color_size = num_rays * sizeof(float4);
+    size_t state_size = num_rays * sizeof(RenderState);
+    size_t point_size = num_rays * sizeof(ControlPoint);
+    size_t count_size = num_rays * sizeof(uint32_t);
+    size_t index_size = num_rays * params.max_samples_per_ray * sizeof(int32_t);
+    size_t touch_size = scene.num_elements * sizeof(uint32_t);
+
+    // Create readback buffers
+    auto readback_colors = device_.create_buffer(color_size, rhi::BufferUsage::CopyDest, rhi::MemoryType::ReadBack);
+    auto readback_states = device_.create_buffer(state_size, rhi::BufferUsage::CopyDest, rhi::MemoryType::ReadBack);
+    auto readback_points = device_.create_buffer(point_size, rhi::BufferUsage::CopyDest, rhi::MemoryType::ReadBack);
+    auto readback_counts = device_.create_buffer(count_size, rhi::BufferUsage::CopyDest, rhi::MemoryType::ReadBack);
+    auto readback_indices = device_.create_buffer(index_size, rhi::BufferUsage::CopyDest, rhi::MemoryType::ReadBack);
+    auto readback_touch = device_.create_buffer(touch_size, rhi::BufferUsage::CopyDest, rhi::MemoryType::ReadBack);
+
+    // Copy from device buffers to readback buffers
+    Slang::ComPtr<rhi::ICommandEncoder> copy_encoder;
+    device_.get_queue()->createCommandEncoder(copy_encoder.writeRef());
+
+    copy_encoder->copyBuffer(readback_colors, 0, output_color_buffer_, 0, color_size);
+    copy_encoder->copyBuffer(readback_states, 0, output_state_buffer_, 0, state_size);
+    copy_encoder->copyBuffer(readback_points, 0, output_point_buffer_, 0, point_size);
+    copy_encoder->copyBuffer(readback_counts, 0, output_count_buffer_, 0, count_size);
+    copy_encoder->copyBuffer(readback_indices, 0, output_index_buffer_, 0, index_size);
+    copy_encoder->copyBuffer(readback_touch, 0, touch_count_buffer_, 0, touch_size);
+
+    Slang::ComPtr<rhi::ICommandBuffer> copy_cmd;
+    copy_encoder->finish(copy_cmd.writeRef());
+    device_.submit_and_wait(copy_cmd);
+
+    // Map readback buffers and copy to PyTorch CUDA memory
+    void* mapped = nullptr;
+
+    if (readback_colors->map(nullptr, &mapped) == SLANG_OK && mapped) {
+        cudaMemcpy(output.colors, mapped, color_size, cudaMemcpyHostToDevice);
+        readback_colors->unmap(nullptr);
+    }
+
+    if (readback_states->map(nullptr, &mapped) == SLANG_OK && mapped) {
+        cudaMemcpy(output.final_states, mapped, state_size, cudaMemcpyHostToDevice);
+        readback_states->unmap(nullptr);
+    }
+
+    if (readback_points->map(nullptr, &mapped) == SLANG_OK && mapped) {
+        cudaMemcpy(output.last_points, mapped, point_size, cudaMemcpyHostToDevice);
+        readback_points->unmap(nullptr);
+    }
+
+    if (readback_counts->map(nullptr, &mapped) == SLANG_OK && mapped) {
+        cudaMemcpy(output.sample_counts, mapped, count_size, cudaMemcpyHostToDevice);
+        readback_counts->unmap(nullptr);
+    }
+
+    if (readback_indices->map(nullptr, &mapped) == SLANG_OK && mapped) {
+        cudaMemcpy(output.sample_indices, mapped, index_size, cudaMemcpyHostToDevice);
+        readback_indices->unmap(nullptr);
+    }
+
+    if (readback_touch->map(nullptr, &mapped) == SLANG_OK && mapped) {
+        cudaMemcpy(output.element_touch_counts, mapped, touch_size, cudaMemcpyHostToDevice);
+        readback_touch->unmap(nullptr);
+    }
+
+    cudaDeviceSynchronize();
 }
 
 } // namespace gaussian_rt
