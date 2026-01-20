@@ -2,31 +2,24 @@
 // Apache License 2.0
 
 #include "Device.h"
-
-#ifndef GAUSSIANRT_NO_CUDA
 #include <cuda_runtime.h>
-#endif
 
 namespace gaussianrt {
 
 namespace {
 
-#ifndef GAUSSIANRT_NO_CUDA
 void check_cuda(cudaError_t result, const char* msg) {
     if (result != cudaSuccess) {
         throw DeviceError(std::string(msg) + ": " + cudaGetErrorString(result));
     }
 }
-#endif
 
 } // namespace
 
 Device::Device(int cuda_device_index) : cuda_device_index_(cuda_device_index) {
-#ifndef GAUSSIANRT_NO_CUDA
     // Initialize CUDA device
     check_cuda(cudaSetDevice(cuda_device_index), "Failed to set CUDA device");
     check_cuda(cudaFree(nullptr), "Failed to initialize CUDA context");
-#endif
 
     // Create RHI device
     rhi::DeviceDesc desc = {};

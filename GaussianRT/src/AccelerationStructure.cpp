@@ -4,10 +4,7 @@
 #include "AccelerationStructure.h"
 #include <stdexcept>
 #include <cstring>
-
-#ifndef GAUSSIANRT_NO_CUDA
 #include <cuda_runtime.h>
-#endif
 
 namespace gaussianrt {
 
@@ -52,14 +49,10 @@ std::unique_ptr<AccelerationStructure> AccelerationStructure::build_from_gpu(
         throw std::invalid_argument("Invalid AABB data");
     }
 
-#ifndef GAUSSIANRT_NO_CUDA
     // Copy from GPU to create proper RHI buffer
     std::vector<AABB> aabbs(count);
     cudaMemcpy(aabbs.data(), d_aabbs, count * sizeof(AABB), cudaMemcpyDeviceToHost);
     return build(device, aabbs, options);
-#else
-    throw std::runtime_error("CUDA not available for GPU memory access");
-#endif
 }
 
 void AccelerationStructure::build_blas(
