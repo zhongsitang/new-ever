@@ -76,38 +76,38 @@ uint get_payload31() { __intrinsic_asm "optixGetPayload_31()"; }
 [ForceInline]
 void set_payload(uint i, uint val) {
     switch (i) {
-    case 0: return set_payload0(val);
-    case 1: return set_payload1(val);
-    case 2: return set_payload2(val);
-    case 3: return set_payload3(val);
-    case 4: return set_payload4(val);
-    case 5: return set_payload5(val);
-    case 6: return set_payload6(val);
-    case 7: return set_payload7(val);
-    case 8: return set_payload8(val);
-    case 9: return set_payload9(val);
-    case 10: return set_payload10(val);
-    case 11: return set_payload11(val);
-    case 12: return set_payload12(val);
-    case 13: return set_payload13(val);
-    case 14: return set_payload14(val);
-    case 15: return set_payload15(val);
-    case 16: return set_payload16(val);
-    case 17: return set_payload17(val);
-    case 18: return set_payload18(val);
-    case 19: return set_payload19(val);
-    case 20: return set_payload20(val);
-    case 21: return set_payload21(val);
-    case 22: return set_payload22(val);
-    case 23: return set_payload23(val);
-    case 24: return set_payload24(val);
-    case 25: return set_payload25(val);
-    case 26: return set_payload26(val);
-    case 27: return set_payload27(val);
-    case 28: return set_payload28(val);
-    case 29: return set_payload29(val);
-    case 30: return set_payload30(val);
-    case 31: return set_payload31(val);
+    case 0: set_payload0(val); return;
+    case 1: set_payload1(val); return;
+    case 2: set_payload2(val); return;
+    case 3: set_payload3(val); return;
+    case 4: set_payload4(val); return;
+    case 5: set_payload5(val); return;
+    case 6: set_payload6(val); return;
+    case 7: set_payload7(val); return;
+    case 8: set_payload8(val); return;
+    case 9: set_payload9(val); return;
+    case 10: set_payload10(val); return;
+    case 11: set_payload11(val); return;
+    case 12: set_payload12(val); return;
+    case 13: set_payload13(val); return;
+    case 14: set_payload14(val); return;
+    case 15: set_payload15(val); return;
+    case 16: set_payload16(val); return;
+    case 17: set_payload17(val); return;
+    case 18: set_payload18(val); return;
+    case 19: set_payload19(val); return;
+    case 20: set_payload20(val); return;
+    case 21: set_payload21(val); return;
+    case 22: set_payload22(val); return;
+    case 23: set_payload23(val); return;
+    case 24: set_payload24(val); return;
+    case 25: set_payload25(val); return;
+    case 26: set_payload26(val); return;
+    case 27: set_payload27(val); return;
+    case 28: set_payload28(val); return;
+    case 29: set_payload29(val); return;
+    case 30: set_payload30(val); return;
+    case 31: set_payload31(val); return;
     }
 }
 
@@ -146,6 +146,7 @@ uint get_payload(uint i) {
     case 29: return get_payload29();
     case 30: return get_payload30();
     case 31: return get_payload31();
+    default: return 0;
     }
 }
 

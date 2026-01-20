@@ -46,7 +46,7 @@ def generate():
         "    switch (i) {",
     ])
     for i in range(NUM_PAYLOADS):
-        lines.append(f"    case {i}: return set_payload{i}(val);")
+        lines.append(f"    case {i}: set_payload{i}(val); return;")
     lines.extend([
         "    }",
         "}",
@@ -58,6 +58,7 @@ def generate():
     for i in range(NUM_PAYLOADS):
         lines.append(f"    case {i}: return get_payload{i}();")
     lines.extend([
+        "    default: return 0;",
         "    }",
         "}",
         "",
