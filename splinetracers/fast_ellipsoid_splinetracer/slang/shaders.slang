@@ -18,7 +18,6 @@
 #define BUFFER_SIZE 16
 import spline_machine;
 import optix;
-import optix_intrinsics;
 import tri_intersect;
 import safe_math;
 import sh;
@@ -31,6 +30,16 @@ struct Camera {
     float3 eye;
 };
 
+// Sorted hit buffer payload
+struct HitBuffer {
+    float t[BUFFER_SIZE];
+    uint idx[BUFFER_SIZE];
+};
+
+// Intersection attribute: stores the other t value
+struct HitAttr {
+    uint other_t;  // asuint(float)
+};
 
 // LaunchParams
 RWStructuredBuffer<float4>      image;
@@ -104,17 +113,15 @@ void ellipsoid() {
 }
 
 [shader("closesthit")]
-void ch(
-    inout uint2 garbage : SV_RayPayload,
-)
+void ch(inout HitBuffer buf, in HitAttr attr)
 {
 }
 
 [shader("anyhit")]
-void ah()
+void ah(inout HitBuffer buf, in HitAttr attr)
 {
     float t = RayTCurrent();
-    float other_t = asfloat(optixGetAttribute_0());
+    float other_t = asfloat(attr.other_t);
     uint ind = PrimitiveIndex();
     uint hitkind = HitKind();
     if (hitkind == 0) {
@@ -142,11 +149,11 @@ void ah()
         if (h_t > cur_t) {
             [ForceUnroll]
             for (int i=0; i<BUFFER_SIZE; i++) {
-                test_t = asfloat(get_payload(i*2));
+                test_t = buf.t[i];
                 if (h_t < test_t) {
-                    set_payload(i*2, asuint(h_t));
-                    test_i = get_payload(i*2+1);
-                    set_payload(i*2+1, h_i);
+                    buf.t[i] = h_t;
+                    test_i = buf.idx[i];
+                    buf.idx[i] = h_i;
                     h_i = test_i;
                     h_t = test_t;
                 }
@@ -154,13 +161,13 @@ void ah()
         }
     }
 
-    if (t < asfloat(get_payload(2*(BUFFER_SIZE-1)))) {
+    if (t < buf.t[BUFFER_SIZE-1]) {
         IgnoreHit();
     }
 }
 
 [shader("miss")]
-void ms()
+void ms(inout HitBuffer buf)
 {
 }
 
@@ -178,7 +185,7 @@ void rg_float()
     state.drgb = initial_drgb[idx.x];
 
     let start_id = idx.x * max_iters;
-    
+
     ControlPoint ctrl_pt = {};
     uint last_tri = -1;
     float prev_t = state.t;
@@ -191,22 +198,27 @@ void rg_float()
     while (state.logT < LOG_CUTOFF && iter < max_iters)
     {
         let start_t = abs(state.t);
-        uint payload[2*BUFFER_SIZE];
+
+        // Initialize hit buffer
+        HitBuffer buf;
         for (int i=0; i<BUFFER_SIZE; i++) {
-            payload[2*i] = asuint(1e10f);
+            buf.t[i] = 1e10f;
+            buf.idx[i] = 0;
         }
 
-        optixTraceP32(
-                traversable,
-                origin,
-                direction,
-                start_t,
-                tmax,
-                payload);
+        // Trace ray using native Slang TraceRay
+        RayDesc ray;
+        ray.Origin = origin;
+        ray.Direction = direction;
+        ray.TMin = start_t;
+        ray.TMax = tmax;
+
+        TraceRay(traversable, RAY_FLAG_NONE, 0xff, 0, 0, 0, ray, buf);
+
         bool end = false;
         for (int i=0; i<BUFFER_SIZE; i++) {
-            ctrl_pt.t = asfloat(payload[2*i]);
-            tri = payload[2*i+1];
+            ctrl_pt.t = buf.t[i];
+            tri = buf.idx[i];
             if (ctrl_pt.t > 1e9) {
                 end = true;
                 break;
