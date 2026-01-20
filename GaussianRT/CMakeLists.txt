@@ -190,9 +190,52 @@ if(BUILD_PYTHON_BINDINGS)
         find_package(Torch QUIET)
 
         if(Torch_FOUND)
+            # Find slangc compiler
+            find_program(SLANGC_EXECUTABLE slangc
+                HINTS
+                    "${CMAKE_CURRENT_SOURCE_DIR}/../slang-master/build/Release/bin"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/../slang-master/build/bin"
+                    "$ENV{SLANG_DIR}/bin"
+            )
+
+            if(NOT SLANGC_EXECUTABLE)
+                # Try to use slangc from the slang target
+                set(SLANGC_EXECUTABLE "$<TARGET_FILE_DIR:slang>/slangc")
+            endif()
+
+            # Compile backward.slang to CUDA
+            set(BACKWARD_SLANG "${CMAKE_CURRENT_SOURCE_DIR}/shaders/backward.slang")
+            set(BACKWARD_CUDA "${CMAKE_BINARY_DIR}/generated/backward_kernel.cu")
+            set(SHADER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
+
+            file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/generated")
+
+            add_custom_command(
+                OUTPUT ${BACKWARD_CUDA}
+                COMMAND ${SLANGC_EXECUTABLE}
+                    ${BACKWARD_SLANG}
+                    -target cuda
+                    -I ${SHADER_DIR}
+                    -o ${BACKWARD_CUDA}
+                DEPENDS
+                    ${BACKWARD_SLANG}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/volume.slang
+                    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ellipsoid.slang
+                    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/safe_math.slang
+                    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/sh.slang
+                COMMENT "Compiling backward.slang to CUDA"
+                VERBATIM
+            )
+
+            # Create a custom target for the generated CUDA file
+            add_custom_target(backward_cuda_gen DEPENDS ${BACKWARD_CUDA})
+
             pybind11_add_module(gaussianrt_ext
                 python/bindings.cpp
+                ${BACKWARD_CUDA}
             )
+
+            add_dependencies(gaussianrt_ext backward_cuda_gen)
 
             target_link_libraries(gaussianrt_ext
                 PRIVATE
@@ -203,11 +246,18 @@ if(BUILD_PYTHON_BINDINGS)
             target_include_directories(gaussianrt_ext
                 PRIVATE
                     ${TORCH_INCLUDE_DIRS}
+                    ${CMAKE_BINARY_DIR}/generated
             )
 
             target_compile_definitions(gaussianrt_ext
                 PRIVATE
                     TORCH_EXTENSION_NAME=gaussianrt_ext
+            )
+
+            # CUDA flags for generated code
+            set_source_files_properties(${BACKWARD_CUDA} PROPERTIES
+                LANGUAGE CUDA
+                COMPILE_FLAGS "--expt-relaxed-constexpr -Xcompiler -fPIC"
             )
 
             # Copy Python files to build directory
@@ -219,6 +269,7 @@ if(BUILD_PYTHON_BINDINGS)
             )
 
             message(STATUS "  Python bindings: Enabled (PyTorch ${Torch_VERSION})")
+            message(STATUS "  Slangc:          ${SLANGC_EXECUTABLE}")
         else()
             message(WARNING "PyTorch not found. Python bindings require PyTorch.")
             set(BUILD_PYTHON_BINDINGS OFF)
