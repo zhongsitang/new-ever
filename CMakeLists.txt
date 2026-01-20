@@ -72,13 +72,19 @@ set(OPTIX_IR_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/optix_ir")
 # Main pybind11 extension module
 # -----------------------------------------------------------------------------
 pybind11_add_module(ellipsoid_splinetracer MODULE
+  # Legacy code (kept for backward compatibility)
   ${TRACER_DIR}/Forward.cpp
   ${TRACER_DIR}/Forward.h
+  # New simplified pipeline
+  ${TRACER_DIR}/OptixPipeline.cpp
+  ${TRACER_DIR}/OptixPipeline.h
+  # Core components
   ${TRACER_DIR}/GAS.cpp
   ${TRACER_DIR}/GAS.h
   ${TRACER_DIR}/py_binding.cpp
   ${TRACER_DIR}/structs.h
   ${TRACER_DIR}/CUDABuffer.h
+  ${TRACER_DIR}/exception.h
   ${TRACER_DIR}/create_aabbs.cu
   ${TRACER_DIR}/create_aabbs.h
   ${TRACER_DIR}/initialize_density.cu
