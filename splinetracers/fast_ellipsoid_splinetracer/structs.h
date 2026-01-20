@@ -13,64 +13,77 @@
 // limitations under the License.
 
 #pragma once
-#include "glm/glm.hpp"
+
 #include <cuda_fp16.h>
 #include <optix.h>
 #include <optix_types.h>
 
-template <typename T>
-struct SbtRecord
-{
-    __align__( OPTIX_SBT_RECORD_ALIGNMENT ) char header[OPTIX_SBT_RECORD_HEADER_SIZE];
-    T data;
+#include "glm/glm.hpp"
+
+// ============================================================================
+// Spline State Structure
+// ============================================================================
+//
+// This structure matches the layout expected by Slang shaders.
+// Used for storing intermediate rendering state during ray marching.
+// ============================================================================
+
+struct __align__(16) SplineState {
+    float2 distortion_parts;
+    float2 cum_sum;
+    float3 padding;
+    float  t;
+    float4 drgb;
+    float  logT;
+    float3 C;
 };
 
-template <typename T> struct StructuredBuffer {
-  T *data;
-  size_t size;
-};
-
+// ============================================================================
+// Hit Data Structure
+// ============================================================================
 
 struct HitData {
     float3 scales;
     float3 mean;
     float4 quat;
-    float height;
+    float  height;
 };
 
-struct SplineState//((packed))
-{
-  float2 distortion_parts;
-  float2 cum_sum;
-  float3 padding;
-  // Spline state
-  float t;
-  float4 drgb;
+// ============================================================================
+// Primitives Structure
+// ============================================================================
+//
+// Contains all GPU-resident data for the scene primitives (ellipsoids).
+// All pointers are device pointers.
+// ============================================================================
 
-  // Volume Rendering State
-  float logT;
-  float3 C;
-};
-
-// Always on GPU
 struct Primitives {
-  __half *half_attribs;
-  float3 *means; 
-  float3 *scales; 
-  float4 *quats; 
-  float *densities; 
-  size_t num_prims;
-  float *features; 
-  size_t feature_size;
+    // Geometry attributes
+    __half* half_attribs;     // Half-precision attributes (legacy)
+    float3* means;            // Ellipsoid centers
+    float3* scales;           // Ellipsoid scales (radii)
+    float4* quats;            // Ellipsoid orientations (quaternions)
+    float*  densities;        // Opacity/density values
 
-  OptixAabb *aabbs;
-  size_t prev_alloc_size;
+    // Counts
+    size_t  num_prims;        // Number of primitives
+
+    // Feature data (for spherical harmonics)
+    float*  features;         // SH coefficients
+    size_t  feature_size;     // Features per primitive
+
+    // Acceleration structure
+    OptixAabb* aabbs;         // Axis-aligned bounding boxes
+    size_t prev_alloc_size;   // Previous allocation size (for reallocation)
 };
+
+// ============================================================================
+// Camera Structure
+// ============================================================================
 
 struct Cam {
-    float fx, fy;
-    int height;
-    int width;
-    float3 U, V, W;
-    float3 eye;
+    float  fx, fy;            // Focal lengths
+    int    width, height;     // Image dimensions
+    float3 U, V, W;           // Camera basis vectors
+    float3 eye;               // Camera position
 };
