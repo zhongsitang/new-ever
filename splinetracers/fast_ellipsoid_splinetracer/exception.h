@@ -78,11 +78,12 @@ public:
         }                                                                       \
     } while (0)
 
-// Uses log_ and log_size_ variables from enclosing scope
-// Reset log_size_ before call so OptiX knows the buffer size
+// Self-contained: defines log_ and log_size_ internally
+// Caller uses these names in the call expression
 #define OPTIX_CHECK_LOG(call)                                                   \
     do {                                                                        \
-        log_size_ = sizeof(log_);                                               \
+        char log_[8192];                                                        \
+        size_t log_size_ = sizeof(log_);                                        \
         OptixResult res_ = (call);                                              \
         if (res_ != OPTIX_SUCCESS) {                                            \
             std::ostringstream ss_;                                             \

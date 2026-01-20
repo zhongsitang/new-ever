@@ -125,8 +125,4 @@ private:
 
     Params params_ = {};
     OptixPipelineCompileOptions pipeline_options_ = {};
-
-    // Log buffer for OptiX compilation (used by OPTIX_CHECK_LOG)
-    char log_[8192] = {};
-    size_t log_size_ = sizeof(log_);
 };
