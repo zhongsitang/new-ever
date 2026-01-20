@@ -57,9 +57,11 @@ using HitGroupSbtRecord = SbtRecord<HitGroupData>;
 // -----------------------------------------------------------------------------
 // Launch Parameters (matches Slang SLANG_globalParams)
 // -----------------------------------------------------------------------------
+// CRITICAL: This struct MUST match the layout of global variables in shaders.slang
+// Any mismatch will cause undefined behavior. Use static_assert to verify sizes.
 
-struct Params {
-    // Output buffers
+struct alignas(8) Params {
+    // Output buffers (must match order in shaders.slang)
     StructuredBuffer<float4> image;
     StructuredBuffer<uint32_t> iters;
     StructuredBuffer<uint32_t> last_face;
@@ -74,22 +76,30 @@ struct Params {
     Cam camera;
 
     // Primitive attributes
-    StructuredBuffer<__half> half_attribs;
+    // NOTE: Slang declares this as RWStructuredBuffer<float>, but we use float*
+    // The StructuredBuffer<T> template only stores {T* data, size_t size}
+    // so the element type doesn't affect binary layout
+    StructuredBuffer<float> half_attribs;  // Changed from __half to float to match Slang
     StructuredBuffer<float3> means;
     StructuredBuffer<float3> scales;
     StructuredBuffer<float4> quats;
     StructuredBuffer<float> densities;
     StructuredBuffer<float> features;
 
-    // Rendering parameters
-    size_t sh_degree;
-    size_t max_iters;
-    float tmin;
-    float tmax;
-    StructuredBuffer<float4> initial_drgb;
-    float max_prim_size;
-    OptixTraversableHandle handle;
+    // Rendering parameters - careful with alignment!
+    size_t sh_degree;                       // 8 bytes, offset 0 (mod 8)
+    size_t max_iters;                       // 8 bytes
+    float tmin;                             // 4 bytes
+    float tmax;                             // 4 bytes
+    StructuredBuffer<float4> initial_drgb;  // 16 bytes (ptr + size), aligned to 8
+    float max_prim_size;                    // 4 bytes
+    uint32_t _pad0;                         // 4 bytes padding for handle alignment
+    OptixTraversableHandle handle;          // 8 bytes, needs 8-byte alignment
 };
+
+// Verify struct size at compile time (update expected size if layout changes)
+static_assert(sizeof(StructuredBuffer<float>) == 16, "StructuredBuffer must be 16 bytes");
+static_assert(alignof(Params) == 8, "Params must be 8-byte aligned");
 
 // -----------------------------------------------------------------------------
 // Pipeline Configuration

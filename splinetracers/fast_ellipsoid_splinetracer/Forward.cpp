@@ -385,7 +385,9 @@ void Forward::init_sbt() {
 
 void Forward::init_params(const Primitives& model) {
     // Initialize primitive data pointers
-    params_.half_attribs = { model.half_attribs, model.num_prims };
+    // NOTE: half_attribs is cast to float* to match Slang's RWStructuredBuffer<float>
+    // The actual data is still __half, but StructuredBuffer only stores pointer+size
+    params_.half_attribs = { reinterpret_cast<float*>(model.half_attribs), model.num_prims };
     params_.means = { reinterpret_cast<float3*>(model.means), model.num_prims };
     params_.scales = { reinterpret_cast<float3*>(model.scales), model.num_prims };
     params_.quats = { reinterpret_cast<float4*>(model.quats), model.num_prims };
@@ -393,6 +395,9 @@ void Forward::init_params(const Primitives& model) {
     params_.features = { model.features, model.num_prims * model.feature_size };
 
     num_prims_ = model.num_prims;
+
+    // Initialize padding to 0
+    params_._pad0 = 0;
 
     // Allocate device-side params
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_params_), sizeof(Params)));
