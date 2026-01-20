@@ -111,3 +111,59 @@ public VolumeOutput extract_volume_output(VolumeState state, float tmin) {
 public VolumeState to_dual_volume_state(VolumeState state, VolumeSample sample) {
     return state;
 }
+
+// Convert from dual state
+public VolumeState from_dual_volume_state(VolumeState state, VolumeSample sample) {
+    return state;
+}
+
+// Inverse integration for backward pass
+// Given new_state and the samples, recover the previous state
+public VolumeState inverse_integrate_dual(
+    VolumeState new_state,
+    VolumeSample new_sample,
+    VolumeSample sample,
+    float t_min,
+    float t_max) {
+
+    float t = sample.t;
+    float dt = max(new_state.t - t, 0.0f);
+
+    VolumeState state;
+    state.drgb = new_state.drgb - new_sample.dirac;
+    state.t = t;
+
+    float4 drgb = state.drgb;
+    float4 avg = drgb;
+    float area = max(avg.x * dt, 0.0f);
+
+    float3 rgb_norm = safe_div(float3(avg.y, avg.z, avg.w), avg.x);
+
+    state.logT = max(new_state.logT - area, 0.0f);
+    float weight = clip((1.0f - safe_exp(-area)) * safe_exp(-state.logT), 0.0f, 1.0f);
+
+    state.C = new_state.C - weight * rgb_norm;
+
+    // Inverse depth computation
+    float alpha = -safe_expm1(-area);
+    static const float AREA_THRESHOLD = 1e-6f;
+    float segment_depth;
+    if (avg.x < AREA_THRESHOLD) {
+        segment_depth = alpha * t + (1.0f - alpha) * state.t;
+    } else {
+        segment_depth = safe_div(1.0f, avg.x) * (-safe_expm1(-area))
+                      - (t + t_min) * safe_exp(-area)
+                      + (state.t + t_min);
+    }
+    segment_depth = max(segment_depth, 0.0f);
+    state.padding.x = new_state.padding.x - safe_exp(-state.logT) * segment_depth;
+
+    // Inverse distortion loss
+    float m = tukey_power_ladder((new_state.t + state.t) / 2.0f * PRE_MULTI, LADDER_P);
+    state.cum_sum.x = new_state.cum_sum.x - weight;
+    state.cum_sum.y = new_state.cum_sum.y - weight * m;
+    state.distortion_parts.x = new_state.distortion_parts.x - 2.0f * weight * m * state.cum_sum.x;
+    state.distortion_parts.y = new_state.distortion_parts.y - 2.0f * weight * state.cum_sum.y;
+
+    return state;
+}

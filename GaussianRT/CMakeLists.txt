@@ -367,6 +367,87 @@ target_link_libraries(gaussianrt_test
 add_dependencies(gaussianrt_test gaussianrt)
 
 # -----------------------------------------------------------------------------
+# Python Bindings (optional)
+# -----------------------------------------------------------------------------
+option(BUILD_PYTHON_BINDINGS "Build Python bindings using pybind11" OFF)
+
+if(BUILD_PYTHON_BINDINGS AND HAVE_CUDA)
+    find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
+    find_package(pybind11 CONFIG)
+
+    if(NOT pybind11_FOUND)
+        # Try to find pybind11 via pip
+        execute_process(
+            COMMAND ${Python3_EXECUTABLE} -c "import pybind11; print(pybind11.get_cmake_dir())"
+            OUTPUT_VARIABLE PYBIND11_CMAKE_DIR
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE PYBIND11_RESULT
+        )
+        if(PYBIND11_RESULT EQUAL 0)
+            list(APPEND CMAKE_PREFIX_PATH "${PYBIND11_CMAKE_DIR}")
+            find_package(pybind11 CONFIG REQUIRED)
+        else()
+            message(WARNING "pybind11 not found. Python bindings will not be built.")
+            set(BUILD_PYTHON_BINDINGS OFF)
+        endif()
+    endif()
+
+    if(BUILD_PYTHON_BINDINGS)
+        # Find PyTorch
+        execute_process(
+            COMMAND ${Python3_EXECUTABLE} -c "import torch; print(torch.utils.cmake_prefix_path)"
+            OUTPUT_VARIABLE TORCH_CMAKE_PREFIX
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE TORCH_RESULT
+        )
+        if(TORCH_RESULT EQUAL 0)
+            list(APPEND CMAKE_PREFIX_PATH "${TORCH_CMAKE_PREFIX}")
+        endif()
+
+        find_package(Torch QUIET)
+
+        if(Torch_FOUND)
+            pybind11_add_module(gaussianrt_cuda
+                python/bindings.cpp
+            )
+
+            target_link_libraries(gaussianrt_cuda
+                PRIVATE
+                    gaussianrt
+                    ${TORCH_LIBRARIES}
+            )
+
+            target_include_directories(gaussianrt_cuda
+                PRIVATE
+                    ${TORCH_INCLUDE_DIRS}
+            )
+
+            target_compile_definitions(gaussianrt_cuda
+                PRIVATE
+                    TORCH_EXTENSION_NAME=gaussianrt_cuda
+            )
+
+            # Copy Python files to build directory
+            add_custom_command(TARGET gaussianrt_cuda POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy
+                    "${CMAKE_CURRENT_SOURCE_DIR}/python/gaussianrt.py"
+                    "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/gaussianrt.py"
+                COMMENT "Copying Python wrapper"
+            )
+
+            message(STATUS "  Python bindings: Enabled (PyTorch ${Torch_VERSION})")
+        else()
+            message(WARNING "PyTorch not found. Python bindings require PyTorch.")
+            set(BUILD_PYTHON_BINDINGS OFF)
+        endif()
+    endif()
+else()
+    if(BUILD_PYTHON_BINDINGS AND NOT HAVE_CUDA)
+        message(WARNING "Python bindings require CUDA. Disabling.")
+    endif()
+endif()
+
+# -----------------------------------------------------------------------------
 # Compiler Flags
 # -----------------------------------------------------------------------------
 if(MSVC)

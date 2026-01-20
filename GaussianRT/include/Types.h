@@ -98,4 +98,36 @@ struct RenderOutput {
     VolumeState* states;    // Final volume states
 };
 
+// Forward pass saved state for backward
+struct ForwardSavedState {
+    VolumeState* states;        // Final volume states per ray
+    float4* diracs;             // Final dirac values per ray
+    int* iters;                 // Iteration counts per ray
+    int* tri_collection;        // Triangle hit history (ray_count * max_iters)
+    float4* initial_drgb;       // Initial drgb values
+    int* initial_touch_inds;    // Initial touch indices
+    int initial_touch_count;    // Number of initial touches
+    size_t ray_count;
+    size_t max_iters;
+};
+
+// Gradients for backward pass
+struct Gradients {
+    float3* dL_dmeans;          // Gradient w.r.t. means
+    float3* dL_dscales;         // Gradient w.r.t. scales
+    float4* dL_dquats;          // Gradient w.r.t. quaternions
+    float* dL_ddensities;       // Gradient w.r.t. densities
+    float* dL_dfeatures;        // Gradient w.r.t. features
+    float3* dL_dray_origins;    // Gradient w.r.t. ray origins
+    float3* dL_dray_dirs;       // Gradient w.r.t. ray directions
+    float2* dL_dmeans2D;        // Gradient w.r.t. 2D means (for splatting)
+};
+
+// Backward pass input
+struct BackwardInput {
+    float* dL_doutputs;         // Gradient w.r.t. outputs (ray_count x 5)
+    float* wcts;                // World-to-clip transforms (for 2D gradient)
+    ForwardSavedState saved;    // Saved state from forward pass
+};
+
 } // namespace gaussianrt
