@@ -1,7 +1,7 @@
 include_guard(GLOBAL)
 
 # slang_ptx_embed(
-#   TARGET       <target>           # Target to add the generated .cpp source to
+#   TARGET       <target>           # Target to add include directory
 #   NAME         <symbol>           # C symbol name (MUST be a valid C identifier)
 #   SLANG_FILE   <file.slang>       # Input Slang file
 #   OUT_DIR      <dir>              # Optional output directory
@@ -11,7 +11,7 @@ include_guard(GLOBAL)
 #   SLANG_FLAGS  <flag;...>         # Extra slangc flags
 # )
 #
-# Pipeline: .slang -> .ptx -> .cpp (embedded as null-terminated char[])
+# Pipeline: .slang -> .ptx -> .h (header with inline array)
 #
 function(slang_ptx_embed)
   set(_one TARGET NAME SLANG_FILE OUT_DIR)
@@ -36,7 +36,7 @@ function(slang_ptx_embed)
   find_program(SLANGC slangc REQUIRED)
 
   set(_ptx "${SPE_OUT_DIR}/${SPE_NAME}.ptx")
-  set(_cpp "${SPE_OUT_DIR}/${SPE_NAME}.cpp")
+  set(_header "${SPE_OUT_DIR}/${SPE_NAME}.h")
   set(_script "${SPE_OUT_DIR}/${SPE_NAME}_embed.cmake")
 
   # Build -I args for slangc
@@ -70,7 +70,7 @@ function(slang_ptx_embed)
     VERBATIM
   )
 
-  # PTX -> C++ byte array with null terminator (avoids MSVC string length limits)
+  # PTX -> Header file with inline array
   set(_script_content [=[
 file(READ "@_ptx@" _data HEX)
 string(LENGTH "${_data}" _len)
@@ -85,7 +85,7 @@ while(_len GREATER 0)
   string(APPEND _bytes "0x${_byte},")
   math(EXPR _col "${_col} + 1")
   if(_col EQUAL 16 AND _len GREATER 0)
-    string(APPEND _bytes "\n  ")
+    string(APPEND _bytes "\n    ")
     set(_col 0)
   endif()
 endwhile()
@@ -93,9 +93,10 @@ endwhile()
 # Append null terminator
 string(APPEND _bytes "0x00")
 
-file(WRITE "@_cpp@" "// Generated from @SPE_NAME@.slang
-extern const char @SPE_NAME@[] = {
-  ${_bytes}
+file(WRITE "@_header@" "// Generated from @SPE_NAME@.slang - do not edit
+#pragma once
+inline const char @SPE_NAME@[] = {
+    ${_bytes}
 };
 ")
 ]=])
@@ -104,16 +105,17 @@ extern const char @SPE_NAME@[] = {
   file(GENERATE OUTPUT "${_script}" CONTENT "${_script_content}")
 
   add_custom_command(
-    OUTPUT "${_cpp}"
+    OUTPUT "${_header}"
     COMMAND "${CMAKE_COMMAND}" -P "${_script}"
     DEPENDS "${_ptx}"
-    COMMENT "embed: ${SPE_NAME}.ptx -> ${SPE_NAME}.cpp"
+    COMMENT "embed: ${SPE_NAME}.ptx -> ${SPE_NAME}.h"
     VERBATIM
   )
 
-  set_source_files_properties("${_cpp}" PROPERTIES GENERATED TRUE)
-  target_sources(${SPE_TARGET} PRIVATE "${_cpp}")
+  # Add include directory to target
+  target_include_directories(${SPE_TARGET} PRIVATE "${SPE_OUT_DIR}")
 
-  add_custom_target(${SPE_NAME}_ptx_embed DEPENDS "${_cpp}")
+  # Ensure header is generated before compiling
+  add_custom_target(${SPE_NAME}_ptx_embed DEPENDS "${_header}")
   add_dependencies(${SPE_TARGET} ${SPE_NAME}_ptx_embed)
 endfunction()

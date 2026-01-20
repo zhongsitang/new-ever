@@ -28,11 +28,9 @@
 
 using uint = uint32_t;
 
-// Forward declarations for embedded PTX code (null-terminated)
-extern "C" {
-extern const char shaders_ptx[];
-extern const char fast_shaders_ptx[];
-}
+// Embedded PTX code (generated headers)
+#include "shaders_ptx.h"
+#include "fast_shaders_ptx.h"
 
 // SBT record types
 struct RayGenData {};
