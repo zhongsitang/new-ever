@@ -96,9 +96,9 @@ void ellipsoid() {
     } else {
         bool use_min = cur_t < minmaxt.x;
         if (use_min) {
-            optixReportHit(minmaxt.x, 1u, asuint( minmaxt.y ));
+            ReportHitOptix(minmaxt.x, 1u, asuint(minmaxt.y));
         } else if (cur_t < minmaxt.y){
-            optixReportHit(minmaxt.y, 0u, asuint( minmaxt.x ));
+            ReportHitOptix(minmaxt.y, 0u, asuint(minmaxt.x));
         }
     }
 }
@@ -116,7 +116,7 @@ void ah()
     float t = RayTCurrent();
     float other_t = asfloat(optixGetAttribute_0());
     uint ind = PrimitiveIndex();
-    uint hitkind = optixGetHitKind();
+    uint hitkind = HitKind();
     if (hitkind == 0) {
         float temp_t = other_t;
         other_t = t;
