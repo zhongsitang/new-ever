@@ -1,0 +1,15 @@
+/build*
+/msvs2017
+/msvs2019
+/msvs2022
+/temp
+/3rdparty/assimp
+/3rdparty/devil_1_7_8
+/3rdparty/devil_1_8_0
+/3rdparty/downloads
+/3rdparty/glew
+/3rdparty/glfw
+/3rdparty/optix-toolkit
+.vscode/
+apps/GLTF_renderer/build/
+.vs/
