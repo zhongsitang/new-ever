@@ -86,20 +86,18 @@ slang_ptx_embed(
   TARGET       ellipsoid_splinetracer
   NAME         shaders_ptx
   SLANG_FILE   ${SLANG_DIR}/shaders.slang
-  OPTIX_ROOT   ${OptiX_ROOT}
   OUT_DIR      ${PTX_OUT_DIR}
   INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}
-  NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS}
+  NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS} ${OptiX_ROOT}/include
 )
 
 slang_ptx_embed(
   TARGET       ellipsoid_splinetracer
   NAME         fast_shaders_ptx
   SLANG_FILE   ${SLANG_DIR}/fast_shaders.slang
-  OPTIX_ROOT   ${OptiX_ROOT}
   OUT_DIR      ${PTX_OUT_DIR}
   INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}
-  NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS}
+  NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS} ${OptiX_ROOT}/include
 )
 
 # -----------------------------------------------------------------------------
