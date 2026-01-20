@@ -28,12 +28,10 @@
 
 using uint = uint32_t;
 
-// Forward declarations for embedded PTX code (byte arrays)
+// Forward declarations for embedded PTX code (null-terminated)
 extern "C" {
-extern const unsigned char shaders_ptx[];
-extern const unsigned int shaders_ptx_size;
-extern const unsigned char fast_shaders_ptx[];
-extern const unsigned int fast_shaders_ptx_size;
+extern const char shaders_ptx[];
+extern const char fast_shaders_ptx[];
 }
 
 // SBT record types
@@ -112,7 +110,7 @@ public:
     size_t num_prims = 0;
 
 private:
-    void create_module(const unsigned char* ptx, size_t ptx_size);
+    void create_module(const char* ptx);
     void create_program_groups();
     void create_pipeline();
     void create_sbt();
