@@ -12,16 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// ============================================================================
+// Modern Slang OptiX Shaders for Ellipsoid Spline Rendering
+// Compatible with OptiX 9.1 and Slang 2025+
+// ============================================================================
+
 #define RT_EPS 0
 #define tri_per_g 2
 #define LOG_CUTOFF 5.54
 #define BUFFER_SIZE 16
+
+// Import modules
 import spline_machine;
-import optix;
 import optix_intrinsics;
 import tri_intersect;
 import safe_math;
 import sh;
+
+// ============================================================================
+// Data Structures
+// ============================================================================
 
 struct Camera {
     float fx, fy;
@@ -31,17 +41,19 @@ struct Camera {
     float3 eye;
 };
 
+// ============================================================================
+// Launch Parameters (Global Shader Parameters)
+// ============================================================================
 
-// LaunchParams
 RWStructuredBuffer<float4>      image;
 RWStructuredBuffer<uint>        iters;
 RWStructuredBuffer<uint>        last_face;
 RWStructuredBuffer<uint>        touch_count;
 RWStructuredBuffer<float4>      last_dirac;
 RWStructuredBuffer<SplineState> last_state;
-RWStructuredBuffer<int> tri_collection;
-StructuredBuffer<float3>      ray_origins;
-StructuredBuffer<float3>      ray_directions;
+RWStructuredBuffer<int>         tri_collection;
+StructuredBuffer<float3>        ray_origins;
+StructuredBuffer<float3>        ray_directions;
 Camera camera;
 
 RWStructuredBuffer<float> half_attribs;
@@ -49,8 +61,8 @@ RWStructuredBuffer<float> half_attribs;
 RWStructuredBuffer<float3> means;
 RWStructuredBuffer<float3> scales;
 RWStructuredBuffer<float4> quats;
-RWStructuredBuffer<float> densities;
-RWStructuredBuffer<float> features;
+RWStructuredBuffer<float>  densities;
+RWStructuredBuffer<float>  features;
 
 size_t sh_degree;
 size_t max_iters;
@@ -60,28 +72,42 @@ RWStructuredBuffer<float4> initial_drgb;
 float max_prim_size;
 RaytracingAccelerationStructure traversable;
 
+// ============================================================================
+// Helper Functions
+// ============================================================================
 
+/// Get control point data for a given triangle index
 ControlPoint get_ctrl_pt(uint tri, float t) {
     ControlPoint ctrl_pt;
     let prim_ind = tri / 2;
     let hitkind = tri % 2;
     let height = densities[prim_ind];
     let dirac_height = height * ((hitkind == 1) ? 1 : -1);
+
     Features feat;
-    SHFeatures sh_feats = {prim_ind, sh_degree, features};
+    SHFeatures sh_feats = { prim_ind, sh_degree, features };
     feat.f0 = get_sh(sh_feats, 0);
-    float3 rayd = {0, 0, 1};
+
+    float3 rayd = { 0, 0, 1 };
     let color = eval_sh_col0(rayd, feat);
+
     ctrl_pt.t = t;
     ctrl_pt.dirac.x = dirac_height;
     ctrl_pt.dirac.y = dirac_height * color.x;
     ctrl_pt.dirac.z = dirac_height * color.y;
     ctrl_pt.dirac.w = dirac_height * color.z;
+
     return ctrl_pt;
 }
 
+// ============================================================================
+// Intersection Shader
+// ============================================================================
+
+/// Custom intersection shader for ellipsoid primitives
 [shader("intersection")]
 void ellipsoid() {
+    // Use modern Slang intrinsic
     uint prim_ind = PrimitiveIndex();
 
     float3 rayd = WorldRayDirection();
@@ -90,35 +116,51 @@ void ellipsoid() {
     let mean = means[prim_ind];
     let scale = scales[prim_ind];
     let quat = quats[prim_ind];
+
     float2 minmaxt = ray_intersect_ellipsoid(rayo - mean, rayd, scale, quat);
 
     float cur_t = RayTMin();
-    if ((minmaxt.y < cur_t)) {
+
+    if (minmaxt.y < cur_t) {
         return;
     } else {
         bool use_min = cur_t < minmaxt.x;
         if (use_min) {
-            optixReportHit(minmaxt.x, 1u, asuint( minmaxt.y ));
-        } else if (cur_t < minmaxt.y){
-            optixReportHit(minmaxt.y, 0u, asuint( minmaxt.x ));
+            // Report entering the ellipsoid (hit kind = 1)
+            optixReportHit(minmaxt.x, 1u, asuint(minmaxt.y));
+        } else if (cur_t < minmaxt.y) {
+            // Report exiting the ellipsoid (hit kind = 0)
+            optixReportHit(minmaxt.y, 0u, asuint(minmaxt.x));
         }
     }
 }
 
+// ============================================================================
+// Closest Hit Shader
+// ============================================================================
+
+/// Closest hit shader - minimal implementation
+/// The actual work is done in the anyhit shader for transparency sorting
 [shader("closesthit")]
 void ch(
-    inout uint2 garbage : SV_RayPayload,
-)
-{
+    inout uint2 garbage : SV_RayPayload
+) {
+    // No operation needed - anyhit handles the logic
 }
 
+// ============================================================================
+// Any Hit Shader
+// ============================================================================
+
+/// Any hit shader for sorting transparent ellipsoid surfaces
 [shader("anyhit")]
-void ah()
-{
+void ah() {
     float t = RayTCurrent();
     float other_t = asfloat(optixGetAttribute_0());
     uint ind = PrimitiveIndex();
-    uint hitkind = optixGetHitKind();
+    uint hitkind = HitKind();
+
+    // Swap t values based on hit kind to maintain ordering
     if (hitkind == 0) {
         float temp_t = other_t;
         other_t = t;
@@ -129,11 +171,11 @@ void ah()
 
     float h_t;
     uint h_i;
-
     float test_t;
     uint test_i;
 
-    for (int n=0; n<2; n++) {
+    // Process both intersection points (enter and exit)
+    for (int n = 0; n < 2; n++) {
         if (n == 0) {
             h_t = t;
             h_i = 2 * ind + 1;
@@ -141,14 +183,16 @@ void ah()
             h_t = other_t;
             h_i = 2 * ind;
         }
+
         if (h_t > cur_t) {
+            // Insert into sorted payload buffer
             [ForceUnroll]
-            for (int i=0; i<BUFFER_SIZE; i++) {
-                test_t = asfloat(get_payload(i*2));
+            for (int i = 0; i < BUFFER_SIZE; i++) {
+                test_t = asfloat(get_payload(i * 2));
                 if (h_t < test_t) {
-                    set_payload(i*2, asuint(h_t));
-                    test_i = get_payload(i*2+1);
-                    set_payload(i*2+1, h_i);
+                    set_payload(i * 2, asuint(h_t));
+                    test_i = get_payload(i * 2 + 1);
+                    set_payload(i * 2 + 1, h_i);
                     h_i = test_i;
                     h_t = test_t;
                 }
@@ -156,31 +200,46 @@ void ah()
         }
     }
 
-    if (t < asfloat(get_payload(2*(BUFFER_SIZE-1)))) {
+    // Continue traversal if we might find closer hits
+    if (t < asfloat(get_payload(2 * (BUFFER_SIZE - 1)))) {
         IgnoreHit();
     }
 }
 
+// ============================================================================
+// Miss Shader
+// ============================================================================
+
+/// Miss shader - called when ray doesn't hit any geometry
 [shader("miss")]
-void ms()
-{
+void ms() {
+    // No operation needed for this renderer
 }
 
+// ============================================================================
+// Ray Generation Shader
+// ============================================================================
+
+/// Main ray generation shader for spline-based volume rendering
 [shader("raygeneration")]
-void rg_float()
-{
+void rg_float() {
     let FAST_MODE = false;
 
+    // Get current ray index using modern Slang intrinsic
     const uint3 idx = DispatchRaysIndex();
     const uint3 dim = DispatchRaysDimensions();
+
+    // Set up ray
     float3 direction = l2_normalize(ray_directions[idx.x]);
     float3 origin = ray_origins[idx.x] + tmin * ray_directions[idx.x];
+
+    // Initialize spline state
     SplineState state = make_empty_state();
     state.t = 0;
     state.drgb = initial_drgb[idx.x];
 
     let start_id = idx.x * max_iters;
-    
+
     ControlPoint ctrl_pt = {};
     uint last_tri = -1;
     float prev_t = state.t;
@@ -190,41 +249,55 @@ void rg_float()
     uint tri;
 
     int iter = 0;
-    while (state.logT < LOG_CUTOFF && iter < max_iters)
-    {
+
+    // Main rendering loop
+    while (state.logT < LOG_CUTOFF && iter < max_iters) {
         let start_t = abs(state.t);
-        uint payload[2*BUFFER_SIZE];
-        for (int i=0; i<BUFFER_SIZE; i++) {
-            payload[2*i] = asuint(1e10f);
+
+        // Initialize payload with large values
+        uint payload[2 * BUFFER_SIZE];
+        for (int i = 0; i < BUFFER_SIZE; i++) {
+            payload[2 * i] = asuint(1e10f);
         }
 
+        // Trace ray and collect sorted intersections
         optixTraceP32(
-                traversable,
-                origin,
-                direction,
-                start_t,
-                tmax,
-                payload);
+            traversable,
+            origin,
+            direction,
+            start_t,
+            tmax,
+            payload);
+
         bool end = false;
-        for (int i=0; i<BUFFER_SIZE; i++) {
-            ctrl_pt.t = asfloat(payload[2*i]);
-            tri = payload[2*i+1];
+
+        // Process intersections from payload buffer
+        for (int i = 0; i < BUFFER_SIZE; i++) {
+            ctrl_pt.t = asfloat(payload[2 * i]);
+            tri = payload[2 * i + 1];
+
             if (ctrl_pt.t > 1e9) {
                 end = true;
                 break;
             }
+
             ctrl_pt = get_ctrl_pt(tri, ctrl_pt.t);
             state = update(state, ctrl_pt, tmin, tmax, max_prim_size);
             touch_count[tri / tri_per_g]++;
             tri_collection[idx.x + iter * dim.x] = tri;
             iter++;
+
             if (!(state.logT < LOG_CUTOFF && iter < max_iters)) break;
         }
-        if (end) break;
 
+        if (end) break;
     }
+
+    // Extract final color and write output
     let output = extract_color(state, tmin);
-    image[idx.x] = {output.C.x, output.C.y, output.C.z, output.depth};
+    image[idx.x] = { output.C.x, output.C.y, output.C.z, output.depth };
+
+    // Store state for backward pass
     let dual_state = to_dual(state, ctrl_pt);
     last_state[idx.x] = dual_state;
     last_dirac[idx.x] = ctrl_pt.dirac;
