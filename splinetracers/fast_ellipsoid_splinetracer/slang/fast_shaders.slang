@@ -43,8 +43,6 @@ StructuredBuffer<float3>      ray_origins;
 StructuredBuffer<float3>      ray_directions;
 Camera camera;
 
-RWStructuredBuffer<float> half_attribs;
-
 RWStructuredBuffer<float3> means;
 RWStructuredBuffer<float3> scales;
 RWStructuredBuffer<float4> quats;

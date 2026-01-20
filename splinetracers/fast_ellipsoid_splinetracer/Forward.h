@@ -1,67 +1,19 @@
 // Copyright 2024 Google LLC
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// Licensed under the Apache License, Version 2.0
 
 #pragma once
 
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <optix.h>
-
-#include <array>
 #include <cstdint>
-#include <memory>
-#include <span>
-#include <string_view>
-
 #include "structs.h"
 
 // =============================================================================
-// Modern C++20 OptiX Pipeline for Spline-based Volume Rendering
+// Launch Parameters - must match Slang global variable order exactly
 // =============================================================================
 
-namespace optix_pipeline {
-
-// -----------------------------------------------------------------------------
-// SBT Record Types (OPTIX_SBT_RECORD_ALIGNMENT compliant)
-// -----------------------------------------------------------------------------
-
-struct alignas(OPTIX_SBT_RECORD_ALIGNMENT) SbtRecordHeader {
-    char header[OPTIX_SBT_RECORD_HEADER_SIZE];
-};
-
-struct RayGenData {};
-struct MissData { float3 bg_color; };
-struct HitGroupData {};
-
-template <typename T>
-struct alignas(OPTIX_SBT_RECORD_ALIGNMENT) SbtRecord {
-    char header[OPTIX_SBT_RECORD_HEADER_SIZE];
-    T data;
-};
-
-using RayGenSbtRecord   = SbtRecord<RayGenData>;
-using MissSbtRecord     = SbtRecord<MissData>;
-using HitGroupSbtRecord = SbtRecord<HitGroupData>;
-
-// -----------------------------------------------------------------------------
-// Launch Parameters (matches Slang SLANG_globalParams)
-// -----------------------------------------------------------------------------
-// CRITICAL: This struct MUST match the layout of global variables in shaders.slang
-// Any mismatch will cause undefined behavior. Use static_assert to verify sizes.
-
-struct alignas(8) Params {
-    // Output buffers (must match order in shaders.slang)
+struct Params {
     StructuredBuffer<float4> image;
     StructuredBuffer<uint32_t> iters;
     StructuredBuffer<uint32_t> last_face;
@@ -70,141 +22,67 @@ struct alignas(8) Params {
     StructuredBuffer<SplineState> last_state;
     StructuredBuffer<int> tri_collection;
 
-    // Ray data
     StructuredBuffer<float3> ray_origins;
     StructuredBuffer<float3> ray_directions;
     Cam camera;
 
-    // Primitive attributes
-    // NOTE: Slang declares this as RWStructuredBuffer<float>, but we use float*
-    // The StructuredBuffer<T> template only stores {T* data, size_t size}
-    // so the element type doesn't affect binary layout
-    StructuredBuffer<float> half_attribs;  // Changed from __half to float to match Slang
     StructuredBuffer<float3> means;
     StructuredBuffer<float3> scales;
     StructuredBuffer<float4> quats;
     StructuredBuffer<float> densities;
     StructuredBuffer<float> features;
 
-    // Rendering parameters - careful with alignment!
-    size_t sh_degree;                       // 8 bytes, offset 0 (mod 8)
-    size_t max_iters;                       // 8 bytes
-    float tmin;                             // 4 bytes
-    float tmax;                             // 4 bytes
-    StructuredBuffer<float4> initial_drgb;  // 16 bytes (ptr + size), aligned to 8
-    float max_prim_size;                    // 4 bytes
-    uint32_t _pad0;                         // 4 bytes padding for handle alignment
-    OptixTraversableHandle handle;          // 8 bytes, needs 8-byte alignment
-};
-
-// Verify struct size at compile time (update expected size if layout changes)
-static_assert(sizeof(StructuredBuffer<float>) == 16, "StructuredBuffer must be 16 bytes");
-static_assert(alignof(Params) == 8, "Params must be 8-byte aligned");
-
-// -----------------------------------------------------------------------------
-// Pipeline Configuration
-// -----------------------------------------------------------------------------
-
-struct PipelineConfig {
-    uint32_t num_payload_values = 32;
-    uint32_t num_attribute_values = 1;
-    uint32_t max_trace_depth = 1;
-    OptixCompileOptimizationLevel opt_level = OPTIX_COMPILE_OPTIMIZATION_LEVEL_3;
-    OptixCompileDebugLevel debug_level = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
-    std::string_view launch_params_name = "SLANG_globalParams";
-};
-
-// -----------------------------------------------------------------------------
-// Ray Trace Launch Configuration
-// -----------------------------------------------------------------------------
-
-struct LaunchConfig {
-    OptixTraversableHandle handle;
-    size_t num_rays;
-    float3* ray_origins;
-    float3* ray_directions;
-    void* image_out;
-    uint32_t sh_degree;
+    size_t sh_degree;
+    size_t max_iters;
     float tmin;
     float tmax;
-    float4* initial_drgb;
-    Cam* camera = nullptr;
-    size_t max_iters = 10000;
-    float max_prim_size = 3.0f;
-
-    // Optional debug outputs
-    uint32_t* iters = nullptr;
-    uint32_t* last_face = nullptr;
-    uint32_t* touch_count = nullptr;
-    float4* last_dirac = nullptr;
-    SplineState* last_state = nullptr;
-    int* tri_collection = nullptr;
-    int* d_touch_count = nullptr;
-    int* d_touch_inds = nullptr;
+    StructuredBuffer<float4> initial_drgb;
+    float max_prim_size;
+    uint32_t _pad0;
+    OptixTraversableHandle handle;
 };
 
-// -----------------------------------------------------------------------------
-// Forward Pipeline Class
-// -----------------------------------------------------------------------------
+// =============================================================================
+// Forward Pipeline
+// =============================================================================
 
 class Forward {
 public:
-    // Construction / Destruction
     Forward() = default;
     Forward(OptixDeviceContext context, int8_t device,
             const Primitives& model, bool enable_backward);
-    ~Forward() noexcept(false);
+    ~Forward();
 
-    // Non-copyable, movable
+    // Non-copyable
     Forward(const Forward&) = delete;
     Forward& operator=(const Forward&) = delete;
-    Forward(Forward&& other) noexcept;
-    Forward& operator=(Forward&& other) noexcept;
 
-    // Main interface
-    void trace_rays(const LaunchConfig& config);
+    void trace_rays(OptixTraversableHandle handle, size_t num_rays,
+                    float3* ray_origins, float3* ray_directions,
+                    void* image_out, uint32_t sh_degree,
+                    float tmin, float tmax, float4* initial_drgb,
+                    Cam* camera, size_t max_iters, float max_prim_size,
+                    uint32_t* iters, uint32_t* last_face, uint32_t* touch_count,
+                    float4* last_dirac, SplineState* last_state,
+                    int* tri_collection, int* d_touch_count, int* d_touch_inds);
+
     void reset_features(const Primitives& model);
 
-    // Accessors
-    [[nodiscard]] bool is_backward_enabled() const noexcept { return enable_backward_; }
-    [[nodiscard]] size_t num_primitives() const noexcept { return num_prims_; }
-
 private:
-    // Internal initialization
-    void init_module(const PipelineConfig& config);
-    void init_program_groups();
-    void init_pipeline(const PipelineConfig& config);
-    void init_sbt();
-    void init_params(const Primitives& model);
-    void cleanup() noexcept;
-
-    // OptiX handles
     OptixDeviceContext context_ = nullptr;
     OptixModule module_ = nullptr;
     OptixPipeline pipeline_ = nullptr;
     OptixShaderBindingTable sbt_ = {};
-
-    // Program groups
     OptixProgramGroup raygen_pg_ = nullptr;
     OptixProgramGroup miss_pg_ = nullptr;
     OptixProgramGroup hitgroup_pg_ = nullptr;
+    OptixPipelineCompileOptions pipeline_options_ = {};
 
-    // CUDA resources
     CUstream stream_ = nullptr;
     CUdeviceptr d_params_ = 0;
 
-    // State
     int8_t device_ = -1;
     bool enable_backward_ = false;
-    size_t num_prims_ = 0;
     const Primitives* model_ = nullptr;
     Params params_ = {};
-
-    // Pipeline compile options (needed for module creation)
-    OptixPipelineCompileOptions pipeline_compile_options_ = {};
 };
-
-} // namespace optix_pipeline
-
-// Backward compatibility alias
-using Forward = optix_pipeline::Forward;
