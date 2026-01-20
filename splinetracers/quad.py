@@ -12,6 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Quadrature-based ray tracing for validation/testing.
+
+This module requires JAX and is primarily used for test validation.
+It provides a numerical quadrature implementation of volume rendering
+that can be compared against the OptiX-based implementation.
+"""
+
+import sys
+from pathlib import Path
+
+# Add tests directory to path for utils/jaxutil imports
+_TESTS_DIR = Path(__file__).parent.parent / "tests"
+if str(_TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TESTS_DIR))
+
 import jax
 import jax.numpy as jnp
 import torch

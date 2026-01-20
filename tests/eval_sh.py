@@ -63,8 +63,37 @@ def SH2RGB(sh):
     return sh * C0 + 0.5
 
 
+def eval_sh(means, features, rayo, sh_degree):
+    """Evaluate spherical harmonics at points.
+
+    This function matches the expected interface for tests.
+    It wraps the Python reference implementation.
+
+    Args:
+        means: (N, 3) tensor of primitive means
+        features: (N, D, 3) tensor of SH coefficients
+        rayo: (1, 3) tensor of ray origin
+        sh_degree: int, SH degree (0-3)
+
+    Returns:
+        (N, 3) tensor of evaluated colors
+    """
+    N = means.shape[0]
+    # Convert features to the format expected by eval_sh_py
+    # features is (N, D, 3), need (N, 3, D)
+    shs_view = features.transpose(1, 2).view(-1, 3, (sh_degree + 1) ** 2)
+
+    # Compute direction from ray origin to means
+    dir_pp = means - rayo.repeat(N, 1)
+    dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
+
+    # Evaluate SH using the reference implementation
+    rgb = (_eval_sh_py_impl(sh_degree, shs_view, dir_pp_normalized) + 0.5).clip(min=0)
+    return rgb
+
+
 @torch.jit.script
-def eval_sh_py(deg: int, sh, dirs):
+def _eval_sh_py_impl(deg: int, sh, dirs):
     """
     Evaluate spherical harmonics at unit directions
     using hardcoded SH polynomials.
@@ -120,6 +149,10 @@ def eval_sh_py(deg: int, sh, dirs):
                             -1.7701307697799304 * xz * (xx - 3 * yy) * sh[..., 23] +
                             0.6258357354491761 * (xx * (xx - 3 * yy) - yy * (3 * xx - yy)) * sh[..., 24])
     return result
+
+
+# Alias for backward compatibility with test code
+eval_sh_py = _eval_sh_py_impl
 
 device = torch.device('cuda')
 class SHGradCheckTest(parameterized.TestCase):
