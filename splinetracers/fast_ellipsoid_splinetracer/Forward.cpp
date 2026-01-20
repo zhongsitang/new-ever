@@ -43,12 +43,10 @@ Forward::Forward(OptixDeviceContext context, int8_t device,
     };
 
     const char* ptx = enable_backward_ ? ptx::shaders_ptx : ptx::fast_shaders_ptx;
-    char log[2048];
-    size_t log_size = sizeof(log);
 
     OPTIX_CHECK_LOG(optixModuleCreate(
         context_, &module_opts, &pipeline_options_,
-        ptx, strlen(ptx), log, &log_size, &module_));
+        ptx, strlen(ptx), _log, &_log_size, &module_));
 
     // Program groups
     OptixProgramGroupOptions pg_opts = {};
@@ -57,15 +55,13 @@ Forward::Forward(OptixDeviceContext context, int8_t device,
         .kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN,
         .raygen = { .module = module_, .entryFunctionName = "__raygen__rg_float" }
     };
-    log_size = sizeof(log);
-    OPTIX_CHECK_LOG(optixProgramGroupCreate(context_, &raygen_desc, 1, &pg_opts, log, &log_size, &raygen_pg_));
+    OPTIX_CHECK_LOG(optixProgramGroupCreate(context_, &raygen_desc, 1, &pg_opts, _log, &_log_size, &raygen_pg_));
 
     OptixProgramGroupDesc miss_desc = {
         .kind = OPTIX_PROGRAM_GROUP_KIND_MISS,
         .miss = { .module = module_, .entryFunctionName = "__miss__ms" }
     };
-    log_size = sizeof(log);
-    OPTIX_CHECK_LOG(optixProgramGroupCreate(context_, &miss_desc, 1, &pg_opts, log, &log_size, &miss_pg_));
+    OPTIX_CHECK_LOG(optixProgramGroupCreate(context_, &miss_desc, 1, &pg_opts, _log, &_log_size, &miss_pg_));
 
     OptixProgramGroupDesc hit_desc = {
         .kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP,
@@ -74,15 +70,13 @@ Forward::Forward(OptixDeviceContext context, int8_t device,
             .moduleIS = module_, .entryFunctionNameIS = "__intersection__ellipsoid"
         }
     };
-    log_size = sizeof(log);
-    OPTIX_CHECK_LOG(optixProgramGroupCreate(context_, &hit_desc, 1, &pg_opts, log, &log_size, &hitgroup_pg_));
+    OPTIX_CHECK_LOG(optixProgramGroupCreate(context_, &hit_desc, 1, &pg_opts, _log, &_log_size, &hitgroup_pg_));
 
     // Pipeline
     std::array<OptixProgramGroup, 3> pgs = { raygen_pg_, miss_pg_, hitgroup_pg_ };
     OptixPipelineLinkOptions link_opts = { .maxTraceDepth = 1 };
-    log_size = sizeof(log);
     OPTIX_CHECK_LOG(optixPipelineCreate(context_, &pipeline_options_, &link_opts,
-        pgs.data(), pgs.size(), log, &log_size, &pipeline_));
+        pgs.data(), pgs.size(), _log, &_log_size, &pipeline_));
 
     // Stack sizes
     OptixStackSizes stack = {};

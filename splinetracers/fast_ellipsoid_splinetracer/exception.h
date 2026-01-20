@@ -99,40 +99,21 @@ public:
     } while (0)
 #endif
 
-// Requires: char log[]; size_t sizeof_log;
+// OPTIX_CHECK_LOG: call must have (log, &log_size) as last two args
+// Example: OPTIX_CHECK_LOG(optixModuleCreate(ctx, &opts, &pco, ptx, len, _log, &_log_size, &module))
 #ifndef OPTIX_CHECK_LOG
 #define OPTIX_CHECK_LOG(call)                                                     \
     do                                                                            \
     {                                                                             \
-        OptixResult _res = (call);                                                \
-        const size_t _sizeof_log_returned = sizeof_log;                           \
-        sizeof_log = sizeof(log);                                                 \
-        if (_res != OPTIX_SUCCESS)                                                \
-        {                                                                         \
-            std::ostringstream _ss;                                               \
-            _ss << "OptiX call '" << #call << "' failed at "                      \
-                << detail_make_location(__FILE__, __LINE__)                       \
-                << "\nLog:\n" << log                                              \
-                << (_sizeof_log_returned > sizeof(log) ? "<TRUNCATED>" : "");    \
-            throw Exception(_res, _ss.str());                                     \
-        }                                                                         \
-    } while (0)
-#endif
-
-#ifndef OPTIX_CHECK_LOG2
-#define OPTIX_CHECK_LOG2(call)                                                    \
-    do                                                                            \
-    {                                                                             \
-        char   LOG[16384];                                                         \
-        size_t LOG_SIZE = sizeof(LOG);                                            \
+        char   _log[4096];                                                        \
+        size_t _log_size = sizeof(_log);                                          \
         OptixResult _res = (call);                                                \
         if (_res != OPTIX_SUCCESS)                                                \
         {                                                                         \
             std::ostringstream _ss;                                               \
             _ss << "OptiX call '" << #call << "' failed at "                      \
                 << detail_make_location(__FILE__, __LINE__)                       \
-                << "\nLog:\n" << LOG                                              \
-                << (LOG_SIZE > sizeof(LOG) ? "<TRUNCATED>" : "");                \
+                << "\nLog: " << _log;                                             \
             throw Exception(_res, _ss.str());                                     \
         }                                                                         \
     } while (0)
