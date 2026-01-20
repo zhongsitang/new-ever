@@ -72,7 +72,7 @@ set(OPTIX_IR_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/optix_ir")
 # Main pybind11 extension module
 # -----------------------------------------------------------------------------
 pybind11_add_module(ellipsoid_splinetracer MODULE
-  # OptiX pipeline (new simplified implementation)
+  # OptiX pipeline
   ${TRACER_DIR}/OptixPipeline.cpp
   ${TRACER_DIR}/OptixPipeline.h
   # Acceleration structure
@@ -87,14 +87,11 @@ pybind11_add_module(ellipsoid_splinetracer MODULE
   # CUDA kernels
   ${TRACER_DIR}/create_aabbs.cu
   ${TRACER_DIR}/create_aabbs.h
-  ${TRACER_DIR}/initialize_density.cu
-  ${TRACER_DIR}/initialize_density.h
 )
 
-# Ensure .cu files are treated as CUDA sources (some IDEs/toolchains benefit).
+# Ensure .cu files are treated as CUDA sources
 set_source_files_properties(
   ${TRACER_DIR}/create_aabbs.cu
-  ${TRACER_DIR}/initialize_density.cu
   PROPERTIES LANGUAGE CUDA
 )
 
