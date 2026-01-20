@@ -55,6 +55,13 @@ np.set_printoptions(precision=10)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+# Strict tolerances for numerical comparison
+FORWARD_ATOL = 5e-4
+FORWARD_RTOL = 5e-4
+GRAD_ATOL = 1e-4
+GRAD_RTOL = 1e-4
+GRADCHECK_EPS = 1e-5
+
 
 def SH2RGB(x):
     """Convert SH0 to RGB."""
@@ -78,7 +85,7 @@ def jax_trace_rays_reference(
     rayd: np.ndarray,
     tmin: float,
     tmax: float,
-    num_quad: int = 2**16,
+    num_quad: int = 2**17,  # Increased for higher precision
 ):
     """
     JAX-based reference implementation for ray tracing.
@@ -127,20 +134,44 @@ def jax_trace_rays_reference(
     return out, extras
 
 
+def jax_trace_rays_batch(
+    mean: np.ndarray,
+    scale: np.ndarray,
+    quat: np.ndarray,
+    density: np.ndarray,
+    features: np.ndarray,
+    rayos: np.ndarray,
+    rayds: np.ndarray,
+    tmin: float,
+    tmax: float,
+):
+    """Batch version of JAX reference for multiple rays."""
+    results = []
+    for i in range(rayos.shape[0]):
+        out, _ = jax_trace_rays_reference(
+            mean, scale, quat, density, features,
+            rayos[i:i+1], rayds[i:i+1], tmin, tmax
+        )
+        results.append(np.asarray(out))
+    return np.concatenate(results, axis=0)
+
+
 class GaussianRTForwardTest(parameterized.TestCase):
     """Test forward pass against JAX quadrature reference."""
 
+    def _skip_if_unavailable(self):
+        if not GAUSSIANRT_AVAILABLE:
+            self.skipTest(f"GaussianRT not available: {GAUSSIANRT_IMPORT_ERROR}")
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA not available")
+
     @parameterized.product(
-        N=[1, 5, 10, 20],
-        density_multi=[0.01, 0.1, 1.0],
+        N=[1, 2, 5, 10, 20, 50],
+        density_multi=[0.001, 0.01, 0.1, 0.5, 1.0, 2.0],
     )
     def test_forward_vs_jax_quadrature(self, N, density_multi):
         """Test forward rendering against JAX quadrature reference."""
-        if not GAUSSIANRT_AVAILABLE:
-            self.skipTest(f"GaussianRT not available: {GAUSSIANRT_IMPORT_ERROR}")
-
-        if not torch.cuda.is_available():
-            self.skipTest("CUDA not available")
+        self._skip_if_unavailable()
 
         torch.manual_seed(42)
         np.random.seed(42)
@@ -159,7 +190,6 @@ class GaussianRTForwardTest(parameterized.TestCase):
 
         quat = l2_normalize_th(2 * torch.rand(N, 4, dtype=torch.float32).to(device) - 1)
         density = density_multi * torch.rand(N, 1, dtype=torch.float32).to(device)
-        # Use simple features (SH degree 0: single coefficient per channel)
         features = torch.rand(N, 1, 3, dtype=torch.float32).to(device)
 
         tmin, tmax = 0, 3
@@ -187,21 +217,17 @@ class GaussianRTForwardTest(parameterized.TestCase):
 
         np.testing.assert_allclose(
             gaussianrt_rgb, jax_rgb,
-            atol=1e-3, rtol=1e-3,
+            atol=FORWARD_ATOL, rtol=FORWARD_RTOL,
             err_msg=f"Forward mismatch for N={N}, density_multi={density_multi}"
         )
 
     @parameterized.product(
-        N=[1, 5, 10],
-        density_multi=[0.1, 1.0],
+        N=[1, 5, 10, 20],
+        density_multi=[0.01, 0.1, 1.0],
     )
     def test_forward_ray_origin_inside(self, N, density_multi):
         """Test forward with ray origin potentially inside primitives."""
-        if not GAUSSIANRT_AVAILABLE:
-            self.skipTest(f"GaussianRT not available: {GAUSSIANRT_IMPORT_ERROR}")
-
-        if not torch.cuda.is_available():
-            self.skipTest("CUDA not available")
+        self._skip_if_unavailable()
 
         torch.manual_seed(42)
         np.random.seed(42)
@@ -246,28 +272,279 @@ class GaussianRTForwardTest(parameterized.TestCase):
 
         np.testing.assert_allclose(
             gaussianrt_rgb, jax_rgb,
-            atol=1e-3, rtol=1e-3,
+            atol=FORWARD_ATOL, rtol=FORWARD_RTOL,
             err_msg=f"Forward (inside) mismatch for N={N}, density_multi={density_multi}"
         )
+
+    @parameterized.product(
+        num_rays=[1, 4, 16, 64],
+        N=[5, 10],
+    )
+    def test_forward_multiple_rays(self, num_rays, N):
+        """Test forward with multiple rays in different directions."""
+        self._skip_if_unavailable()
+
+        torch.manual_seed(42)
+        np.random.seed(42)
+
+        # Generate random ray directions on hemisphere
+        theta = np.random.rand(num_rays) * np.pi / 4  # Limit to forward hemisphere
+        phi = np.random.rand(num_rays) * 2 * np.pi
+        rayds = np.stack([
+            np.sin(theta) * np.cos(phi),
+            np.sin(theta) * np.sin(phi),
+            np.cos(theta)
+        ], axis=-1).astype(np.float32)
+
+        rayos = np.zeros((num_rays, 3), dtype=np.float32)
+
+        rayo = torch.tensor(rayos, dtype=torch.float32).to(device)
+        rayd = torch.tensor(rayds, dtype=torch.float32).to(device)
+
+        scale = 0.3 * torch.rand(N, 3, dtype=torch.float32).to(device) + 0.1
+        mean = torch.rand(N, 3, dtype=torch.float32).to(device)
+        mean[:, 2] += 1.0  # Place in front
+
+        quat = l2_normalize_th(2 * torch.rand(N, 4, dtype=torch.float32).to(device) - 1)
+        density = 0.5 * torch.rand(N, 1, dtype=torch.float32).to(device)
+        features = torch.rand(N, 1, 3, dtype=torch.float32).to(device)
+
+        tmin, tmax = 0, 5
+
+        # JAX reference (batch)
+        jax_rgb = jax_trace_rays_batch(
+            mean.detach().cpu().numpy(),
+            scale.detach().cpu().numpy(),
+            quat.detach().cpu().numpy(),
+            density.detach().cpu().numpy(),
+            features.detach().cpu().numpy(),
+            rayos, rayds,
+            tmin, tmax
+        )[:, :3]
+
+        # GaussianRT
+        gaussianrt_color = gaussianrt_trace_rays(
+            mean, scale, quat, density.squeeze(-1), features,
+            rayo, rayd,
+            tmin=tmin, tmax=tmax, max_iters=500
+        )
+        gaussianrt_rgb = gaussianrt_color[:, :3].detach().cpu().numpy()
+
+        np.testing.assert_allclose(
+            gaussianrt_rgb, jax_rgb,
+            atol=FORWARD_ATOL, rtol=FORWARD_RTOL,
+            err_msg=f"Multi-ray forward mismatch for num_rays={num_rays}, N={N}"
+        )
+
+    @parameterized.parameters(
+        {'scale_factor': 0.01},  # Very small primitives
+        {'scale_factor': 0.05},
+        {'scale_factor': 2.0},   # Large primitives
+    )
+    def test_forward_extreme_scales(self, scale_factor):
+        """Test forward with extreme scale values."""
+        self._skip_if_unavailable()
+
+        torch.manual_seed(42)
+        np.random.seed(42)
+
+        N = 10
+        rayo = torch.tensor([[0, 0, 0]], dtype=torch.float32).to(device)
+        rayd = torch.tensor([[0, 0, 1]], dtype=torch.float32).to(device)
+
+        scale = scale_factor * torch.rand(N, 3, dtype=torch.float32).to(device) + scale_factor * 0.1
+        mean = torch.rand(N, 3, dtype=torch.float32).to(device)
+        mean[:, 2] += max(0.5, scale_factor)
+
+        quat = l2_normalize_th(2 * torch.rand(N, 4, dtype=torch.float32).to(device) - 1)
+        density = 0.5 * torch.rand(N, 1, dtype=torch.float32).to(device)
+        features = torch.rand(N, 1, 3, dtype=torch.float32).to(device)
+
+        tmin, tmax = 0, max(5, scale_factor * 5)
+
+        jax_color, _ = jax_trace_rays_reference(
+            mean.detach().cpu().numpy(),
+            scale.detach().cpu().numpy(),
+            quat.detach().cpu().numpy(),
+            density.detach().cpu().numpy(),
+            features.detach().cpu().numpy(),
+            rayo.detach().cpu().numpy(),
+            rayd.detach().cpu().numpy(),
+            tmin, tmax
+        )
+        jax_rgb = np.asarray(jax_color)[:, :3].reshape(-1)
+
+        gaussianrt_color = gaussianrt_trace_rays(
+            mean, scale, quat, density.squeeze(-1), features,
+            rayo, rayd,
+            tmin=tmin, tmax=tmax, max_iters=500
+        )
+        gaussianrt_rgb = gaussianrt_color[:, :3].reshape(-1).detach().cpu().numpy()
+
+        np.testing.assert_allclose(
+            gaussianrt_rgb, jax_rgb,
+            atol=FORWARD_ATOL * 2, rtol=FORWARD_RTOL * 2,  # Slightly relaxed for extreme cases
+            err_msg=f"Extreme scale mismatch for scale_factor={scale_factor}"
+        )
+
+    def test_forward_overlapping_primitives(self):
+        """Test forward with heavily overlapping primitives."""
+        self._skip_if_unavailable()
+
+        torch.manual_seed(42)
+        np.random.seed(42)
+
+        N = 20
+        rayo = torch.tensor([[0, 0, 0]], dtype=torch.float32).to(device)
+        rayd = torch.tensor([[0, 0, 1]], dtype=torch.float32).to(device)
+
+        # All primitives centered at same location
+        scale = 0.3 * torch.rand(N, 3, dtype=torch.float32).to(device) + 0.2
+        mean = torch.zeros(N, 3, dtype=torch.float32).to(device)
+        mean[:, 2] = 1.0  # All at z=1
+
+        quat = l2_normalize_th(2 * torch.rand(N, 4, dtype=torch.float32).to(device) - 1)
+        density = 0.1 * torch.rand(N, 1, dtype=torch.float32).to(device)
+        features = torch.rand(N, 1, 3, dtype=torch.float32).to(device)
+
+        tmin, tmax = 0, 3
+
+        jax_color, _ = jax_trace_rays_reference(
+            mean.detach().cpu().numpy(),
+            scale.detach().cpu().numpy(),
+            quat.detach().cpu().numpy(),
+            density.detach().cpu().numpy(),
+            features.detach().cpu().numpy(),
+            rayo.detach().cpu().numpy(),
+            rayd.detach().cpu().numpy(),
+            tmin, tmax
+        )
+        jax_rgb = np.asarray(jax_color)[:, :3].reshape(-1)
+
+        gaussianrt_color = gaussianrt_trace_rays(
+            mean, scale, quat, density.squeeze(-1), features,
+            rayo, rayd,
+            tmin=tmin, tmax=tmax, max_iters=500
+        )
+        gaussianrt_rgb = gaussianrt_color[:, :3].reshape(-1).detach().cpu().numpy()
+
+        np.testing.assert_allclose(
+            gaussianrt_rgb, jax_rgb,
+            atol=FORWARD_ATOL, rtol=FORWARD_RTOL,
+            err_msg="Overlapping primitives forward mismatch"
+        )
+
+    def test_forward_anisotropic_primitives(self):
+        """Test forward with highly anisotropic (elongated) primitives."""
+        self._skip_if_unavailable()
+
+        torch.manual_seed(42)
+        np.random.seed(42)
+
+        N = 10
+        rayo = torch.tensor([[0, 0, 0]], dtype=torch.float32).to(device)
+        rayd = torch.tensor([[0, 0, 1]], dtype=torch.float32).to(device)
+
+        # Highly elongated ellipsoids
+        scale = torch.zeros(N, 3, dtype=torch.float32).to(device)
+        scale[:, 0] = 0.05 + 0.05 * torch.rand(N)  # Thin
+        scale[:, 1] = 0.05 + 0.05 * torch.rand(N)  # Thin
+        scale[:, 2] = 0.5 + 0.5 * torch.rand(N)    # Long
+
+        mean = torch.rand(N, 3, dtype=torch.float32).to(device)
+        mean[:, 0] *= 0.3
+        mean[:, 1] *= 0.3
+        mean[:, 2] += 0.5
+
+        quat = l2_normalize_th(2 * torch.rand(N, 4, dtype=torch.float32).to(device) - 1)
+        density = 0.5 * torch.rand(N, 1, dtype=torch.float32).to(device)
+        features = torch.rand(N, 1, 3, dtype=torch.float32).to(device)
+
+        tmin, tmax = 0, 3
+
+        jax_color, _ = jax_trace_rays_reference(
+            mean.detach().cpu().numpy(),
+            scale.detach().cpu().numpy(),
+            quat.detach().cpu().numpy(),
+            density.detach().cpu().numpy(),
+            features.detach().cpu().numpy(),
+            rayo.detach().cpu().numpy(),
+            rayd.detach().cpu().numpy(),
+            tmin, tmax
+        )
+        jax_rgb = np.asarray(jax_color)[:, :3].reshape(-1)
+
+        gaussianrt_color = gaussianrt_trace_rays(
+            mean, scale, quat, density.squeeze(-1), features,
+            rayo, rayd,
+            tmin=tmin, tmax=tmax, max_iters=500
+        )
+        gaussianrt_rgb = gaussianrt_color[:, :3].reshape(-1).detach().cpu().numpy()
+
+        np.testing.assert_allclose(
+            gaussianrt_rgb, jax_rgb,
+            atol=FORWARD_ATOL, rtol=FORWARD_RTOL,
+            err_msg="Anisotropic primitives forward mismatch"
+        )
+
+    def test_forward_deterministic(self):
+        """Test that forward pass is deterministic across multiple runs."""
+        self._skip_if_unavailable()
+
+        torch.manual_seed(42)
+        np.random.seed(42)
+
+        N = 20
+        rayo = torch.tensor([[0, 0, 0]], dtype=torch.float32).to(device)
+        rayd = torch.tensor([[0, 0, 1]], dtype=torch.float32).to(device)
+
+        scale = 0.3 * torch.rand(N, 3, dtype=torch.float32).to(device)
+        mean = torch.rand(N, 3, dtype=torch.float32).to(device)
+        mean[:, 2] += 0.5
+
+        quat = l2_normalize_th(2 * torch.rand(N, 4, dtype=torch.float32).to(device) - 1)
+        density = 0.5 * torch.rand(N, 1, dtype=torch.float32).to(device)
+        features = torch.rand(N, 1, 3, dtype=torch.float32).to(device)
+
+        results = []
+        for _ in range(5):
+            result = gaussianrt_trace_rays(
+                mean, scale, quat, density.squeeze(-1), features,
+                rayo, rayd,
+                tmin=0, tmax=3, max_iters=500
+            )
+            results.append(result[:, :3].detach().cpu().numpy())
+
+        for i in range(1, len(results)):
+            np.testing.assert_array_equal(
+                results[0], results[i],
+                err_msg=f"Non-deterministic result at iteration {i}"
+            )
 
 
 class GaussianRTGradientTest(parameterized.TestCase):
     """Test backward pass using gradient checking."""
 
-    def _create_test_inputs(self, N, density_multi=1.0):
+    def _skip_if_unavailable(self):
+        if not GAUSSIANRT_AVAILABLE:
+            self.skipTest(f"GaussianRT not available: {GAUSSIANRT_IMPORT_ERROR}")
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA not available")
+
+    def _create_test_inputs(self, N, density_multi=1.0, seed=42):
         """Create test inputs with requires_grad=True for gradient checking."""
-        torch.manual_seed(42)
-        np.random.seed(42)
+        torch.manual_seed(seed)
+        np.random.seed(seed)
 
         mean = torch.rand(N, 3, dtype=torch.float64, device=device, requires_grad=True)
         mean.data[:, 2] += 0.5  # Place in front of ray
 
-        scale = 0.5 * torch.rand(N, 3, dtype=torch.float64, device=device, requires_grad=True)
+        scale = (0.3 * torch.rand(N, 3, dtype=torch.float64, device=device) + 0.1).requires_grad_(True)
 
         quat_raw = 2 * torch.rand(N, 4, dtype=torch.float64, device=device) - 1
         quat = (quat_raw / torch.norm(quat_raw, dim=-1, keepdim=True)).detach().requires_grad_(True)
 
-        density = (density_multi * torch.rand(N, dtype=torch.float64, device=device)).requires_grad_(True)
+        density = (density_multi * torch.rand(N, dtype=torch.float64, device=device) + 0.1).requires_grad_(True)
         features = torch.rand(N, 1, 3, dtype=torch.float64, device=device, requires_grad=True)
 
         rayo = torch.zeros(1, 3, dtype=torch.float64, device=device, requires_grad=True)
@@ -275,151 +552,206 @@ class GaussianRTGradientTest(parameterized.TestCase):
 
         return mean, scale, quat, density, features, rayo, rayd
 
-    @parameterized.parameters(
-        {'N': 1},
-        {'N': 3},
-        {'N': 5},
+    @parameterized.product(
+        N=[1, 3, 5, 10],
+        density_multi=[0.1, 0.5, 1.0],
     )
-    def test_gradcheck_mean(self, N):
+    def test_gradcheck_mean(self, N, density_multi):
         """Gradient check for mean parameter."""
-        if not GAUSSIANRT_AVAILABLE:
-            self.skipTest(f"GaussianRT not available: {GAUSSIANRT_IMPORT_ERROR}")
+        self._skip_if_unavailable()
 
-        if not torch.cuda.is_available():
-            self.skipTest("CUDA not available")
-
-        mean, scale, quat, density, features, rayo, rayd = self._create_test_inputs(N)
+        mean, scale, quat, density, features, rayo, rayd = self._create_test_inputs(N, density_multi)
 
         def func(mean_input):
             result = gaussianrt_trace_rays(
                 mean_input.float(), scale.float(), quat.float(),
                 density.float(), features.float(),
                 rayo.float(), rayd.float(),
-                tmin=0.0, tmax=3.0, max_iters=100
+                tmin=0.0, tmax=3.0, max_iters=200
             )
-            # Return sum of RGB channels for scalar output
             return result[:, :3].sum()
 
-        # Use numerical gradient check
         torch.autograd.gradcheck(
             func, (mean,),
-            eps=1e-4, atol=1e-3, rtol=1e-3,
+            eps=GRADCHECK_EPS, atol=GRAD_ATOL, rtol=GRAD_RTOL,
             raise_exception=True
         )
 
-    @parameterized.parameters(
-        {'N': 1},
-        {'N': 3},
+    @parameterized.product(
+        N=[1, 3, 5, 10],
+        density_multi=[0.1, 0.5, 1.0],
     )
-    def test_gradcheck_scale(self, N):
+    def test_gradcheck_scale(self, N, density_multi):
         """Gradient check for scale parameter."""
-        if not GAUSSIANRT_AVAILABLE:
-            self.skipTest(f"GaussianRT not available: {GAUSSIANRT_IMPORT_ERROR}")
+        self._skip_if_unavailable()
 
-        if not torch.cuda.is_available():
-            self.skipTest("CUDA not available")
-
-        mean, scale, quat, density, features, rayo, rayd = self._create_test_inputs(N)
+        mean, scale, quat, density, features, rayo, rayd = self._create_test_inputs(N, density_multi)
 
         def func(scale_input):
             result = gaussianrt_trace_rays(
                 mean.float(), scale_input.float(), quat.float(),
                 density.float(), features.float(),
                 rayo.float(), rayd.float(),
-                tmin=0.0, tmax=3.0, max_iters=100
+                tmin=0.0, tmax=3.0, max_iters=200
             )
             return result[:, :3].sum()
 
         torch.autograd.gradcheck(
             func, (scale,),
-            eps=1e-4, atol=1e-3, rtol=1e-3,
+            eps=GRADCHECK_EPS, atol=GRAD_ATOL, rtol=GRAD_RTOL,
             raise_exception=True
         )
 
-    @parameterized.parameters(
-        {'N': 1},
-        {'N': 3},
+    @parameterized.product(
+        N=[1, 3, 5, 10],
+        density_multi=[0.1, 0.5, 1.0],
     )
-    def test_gradcheck_density(self, N):
+    def test_gradcheck_quat(self, N, density_multi):
+        """Gradient check for quaternion parameter."""
+        self._skip_if_unavailable()
+
+        mean, scale, quat, density, features, rayo, rayd = self._create_test_inputs(N, density_multi)
+
+        def func(quat_input):
+            # Normalize quaternion inside function
+            quat_normalized = quat_input / torch.norm(quat_input, dim=-1, keepdim=True)
+            result = gaussianrt_trace_rays(
+                mean.float(), scale.float(), quat_normalized.float(),
+                density.float(), features.float(),
+                rayo.float(), rayd.float(),
+                tmin=0.0, tmax=3.0, max_iters=200
+            )
+            return result[:, :3].sum()
+
+        torch.autograd.gradcheck(
+            func, (quat,),
+            eps=GRADCHECK_EPS, atol=GRAD_ATOL, rtol=GRAD_RTOL,
+            raise_exception=True
+        )
+
+    @parameterized.product(
+        N=[1, 3, 5, 10],
+        density_multi=[0.1, 0.5, 1.0],
+    )
+    def test_gradcheck_density(self, N, density_multi):
         """Gradient check for density parameter."""
-        if not GAUSSIANRT_AVAILABLE:
-            self.skipTest(f"GaussianRT not available: {GAUSSIANRT_IMPORT_ERROR}")
+        self._skip_if_unavailable()
 
-        if not torch.cuda.is_available():
-            self.skipTest("CUDA not available")
-
-        mean, scale, quat, density, features, rayo, rayd = self._create_test_inputs(N)
+        mean, scale, quat, density, features, rayo, rayd = self._create_test_inputs(N, density_multi)
 
         def func(density_input):
             result = gaussianrt_trace_rays(
                 mean.float(), scale.float(), quat.float(),
                 density_input.float(), features.float(),
                 rayo.float(), rayd.float(),
-                tmin=0.0, tmax=3.0, max_iters=100
+                tmin=0.0, tmax=3.0, max_iters=200
             )
             return result[:, :3].sum()
 
         torch.autograd.gradcheck(
             func, (density,),
-            eps=1e-4, atol=1e-3, rtol=1e-3,
+            eps=GRADCHECK_EPS, atol=GRAD_ATOL, rtol=GRAD_RTOL,
             raise_exception=True
         )
 
-    @parameterized.parameters(
-        {'N': 1},
-        {'N': 3},
+    @parameterized.product(
+        N=[1, 3, 5, 10],
+        density_multi=[0.1, 0.5, 1.0],
     )
-    def test_gradcheck_features(self, N):
+    def test_gradcheck_features(self, N, density_multi):
         """Gradient check for features (SH coefficients) parameter."""
-        if not GAUSSIANRT_AVAILABLE:
-            self.skipTest(f"GaussianRT not available: {GAUSSIANRT_IMPORT_ERROR}")
+        self._skip_if_unavailable()
 
-        if not torch.cuda.is_available():
-            self.skipTest("CUDA not available")
-
-        mean, scale, quat, density, features, rayo, rayd = self._create_test_inputs(N)
+        mean, scale, quat, density, features, rayo, rayd = self._create_test_inputs(N, density_multi)
 
         def func(features_input):
             result = gaussianrt_trace_rays(
                 mean.float(), scale.float(), quat.float(),
                 density.float(), features_input.float(),
                 rayo.float(), rayd.float(),
-                tmin=0.0, tmax=3.0, max_iters=100
+                tmin=0.0, tmax=3.0, max_iters=200
             )
             return result[:, :3].sum()
 
         torch.autograd.gradcheck(
             func, (features,),
-            eps=1e-4, atol=1e-3, rtol=1e-3,
+            eps=GRADCHECK_EPS, atol=GRAD_ATOL, rtol=GRAD_RTOL,
             raise_exception=True
         )
 
-    @parameterized.parameters(
-        {'N': 1},
-        {'N': 3},
+    @parameterized.product(
+        N=[1, 3, 5],
+        density_multi=[0.1, 0.5, 1.0],
     )
-    def test_gradcheck_ray_origin(self, N):
+    def test_gradcheck_ray_origin(self, N, density_multi):
         """Gradient check for ray origin parameter."""
-        if not GAUSSIANRT_AVAILABLE:
-            self.skipTest(f"GaussianRT not available: {GAUSSIANRT_IMPORT_ERROR}")
+        self._skip_if_unavailable()
 
-        if not torch.cuda.is_available():
-            self.skipTest("CUDA not available")
-
-        mean, scale, quat, density, features, rayo, rayd = self._create_test_inputs(N)
+        mean, scale, quat, density, features, rayo, rayd = self._create_test_inputs(N, density_multi)
 
         def func(rayo_input):
             result = gaussianrt_trace_rays(
                 mean.float(), scale.float(), quat.float(),
                 density.float(), features.float(),
                 rayo_input.float(), rayd.float(),
-                tmin=0.0, tmax=3.0, max_iters=100
+                tmin=0.0, tmax=3.0, max_iters=200
             )
             return result[:, :3].sum()
 
         torch.autograd.gradcheck(
             func, (rayo,),
-            eps=1e-4, atol=1e-3, rtol=1e-3,
+            eps=GRADCHECK_EPS, atol=GRAD_ATOL, rtol=GRAD_RTOL,
+            raise_exception=True
+        )
+
+    @parameterized.product(
+        N=[1, 3, 5],
+        density_multi=[0.1, 0.5, 1.0],
+    )
+    def test_gradcheck_ray_direction(self, N, density_multi):
+        """Gradient check for ray direction parameter."""
+        self._skip_if_unavailable()
+
+        mean, scale, quat, density, features, rayo, rayd = self._create_test_inputs(N, density_multi)
+
+        def func(rayd_input):
+            result = gaussianrt_trace_rays(
+                mean.float(), scale.float(), quat.float(),
+                density.float(), features.float(),
+                rayo.float(), rayd_input.float(),
+                tmin=0.0, tmax=3.0, max_iters=200
+            )
+            return result[:, :3].sum()
+
+        torch.autograd.gradcheck(
+            func, (rayd,),
+            eps=GRADCHECK_EPS, atol=GRAD_ATOL, rtol=GRAD_RTOL,
+            raise_exception=True
+        )
+
+    @parameterized.parameters(
+        {'N': 1},
+        {'N': 3},
+        {'N': 5},
+    )
+    def test_gradcheck_all_params(self, N):
+        """Gradient check for all parameters simultaneously."""
+        self._skip_if_unavailable()
+
+        mean, scale, quat, density, features, rayo, rayd = self._create_test_inputs(N)
+
+        def func(mean_in, scale_in, density_in, features_in):
+            result = gaussianrt_trace_rays(
+                mean_in.float(), scale_in.float(), quat.float(),
+                density_in.float(), features_in.float(),
+                rayo.float(), rayd.float(),
+                tmin=0.0, tmax=3.0, max_iters=200
+            )
+            return result[:, :3].sum()
+
+        torch.autograd.gradcheck(
+            func, (mean, scale, density, features),
+            eps=GRADCHECK_EPS, atol=GRAD_ATOL, rtol=GRAD_RTOL,
             raise_exception=True
         )
 
@@ -427,190 +759,195 @@ class GaussianRTGradientTest(parameterized.TestCase):
         {'N': 1},
         {'N': 3},
     )
-    def test_gradcheck_ray_direction(self, N):
-        """Gradient check for ray direction parameter."""
-        if not GAUSSIANRT_AVAILABLE:
-            self.skipTest(f"GaussianRT not available: {GAUSSIANRT_IMPORT_ERROR}")
-
-        if not torch.cuda.is_available():
-            self.skipTest("CUDA not available")
+    def test_gradcheck_per_channel_loss(self, N):
+        """Gradient check with per-channel loss instead of sum."""
+        self._skip_if_unavailable()
 
         mean, scale, quat, density, features, rayo, rayd = self._create_test_inputs(N)
 
-        def func(rayd_input):
+        for channel in range(3):
+            def func(mean_input, ch=channel):
+                result = gaussianrt_trace_rays(
+                    mean_input.float(), scale.float(), quat.float(),
+                    density.float(), features.float(),
+                    rayo.float(), rayd.float(),
+                    tmin=0.0, tmax=3.0, max_iters=200
+                )
+                return result[:, ch].sum()
+
+            torch.autograd.gradcheck(
+                func, (mean,),
+                eps=GRADCHECK_EPS, atol=GRAD_ATOL, rtol=GRAD_RTOL,
+                raise_exception=True
+            )
+
+    def test_gradcheck_multiple_rays(self):
+        """Gradient check with multiple rays."""
+        self._skip_if_unavailable()
+
+        N = 5
+        num_rays = 4
+
+        torch.manual_seed(42)
+        mean = torch.rand(N, 3, dtype=torch.float64, device=device, requires_grad=True)
+        mean.data[:, 2] += 0.5
+
+        scale = (0.3 * torch.rand(N, 3, dtype=torch.float64, device=device) + 0.1).requires_grad_(True)
+        quat_raw = 2 * torch.rand(N, 4, dtype=torch.float64, device=device) - 1
+        quat = (quat_raw / torch.norm(quat_raw, dim=-1, keepdim=True)).detach().requires_grad_(True)
+        density = (0.5 * torch.rand(N, dtype=torch.float64, device=device) + 0.1).requires_grad_(True)
+        features = torch.rand(N, 1, 3, dtype=torch.float64, device=device, requires_grad=True)
+
+        rayo = torch.zeros(num_rays, 3, dtype=torch.float64, device=device, requires_grad=True)
+        rayd = torch.randn(num_rays, 3, dtype=torch.float64, device=device)
+        rayd[:, 2] = torch.abs(rayd[:, 2]) + 0.5  # Ensure forward direction
+        rayd = (rayd / torch.norm(rayd, dim=-1, keepdim=True)).detach().requires_grad_(True)
+
+        def func(mean_input):
             result = gaussianrt_trace_rays(
-                mean.float(), scale.float(), quat.float(),
+                mean_input.float(), scale.float(), quat.float(),
                 density.float(), features.float(),
-                rayo.float(), rayd_input.float(),
-                tmin=0.0, tmax=3.0, max_iters=100
+                rayo.float(), rayd.float(),
+                tmin=0.0, tmax=3.0, max_iters=200
             )
             return result[:, :3].sum()
 
         torch.autograd.gradcheck(
-            func, (rayd,),
-            eps=1e-4, atol=1e-3, rtol=1e-3,
+            func, (mean,),
+            eps=GRADCHECK_EPS, atol=GRAD_ATOL, rtol=GRAD_RTOL,
             raise_exception=True
         )
 
+    def test_gradient_magnitude_reasonable(self):
+        """Test that gradient magnitudes are reasonable (not exploding/vanishing)."""
+        self._skip_if_unavailable()
 
-class GaussianRTCompareOriginalTest(parameterized.TestCase):
-    """Compare GaussianRT with original splinetracer implementation."""
+        N = 10
+        mean, scale, quat, density, features, rayo, rayd = self._create_test_inputs(N)
 
-    @parameterized.product(
-        N=[1, 5, 10, 20],
-        density_multi=[0.01, 0.1, 1.0],
-    )
-    def test_compare_with_original_splinetracer(self, N, density_multi):
-        """Compare GaussianRT output with original fast_ellipsoid_splinetracer."""
+        # Convert to float32 for actual computation
+        mean_f = mean.float().detach().requires_grad_(True)
+        scale_f = scale.float().detach().requires_grad_(True)
+        quat_f = quat.float().detach().requires_grad_(True)
+        density_f = density.float().detach().requires_grad_(True)
+        features_f = features.float().detach().requires_grad_(True)
+
+        result = gaussianrt_trace_rays(
+            mean_f, scale_f, quat_f, density_f, features_f,
+            rayo.float(), rayd.float(),
+            tmin=0.0, tmax=3.0, max_iters=200
+        )
+        loss = result[:, :3].sum()
+        loss.backward()
+
+        # Check gradients exist and are finite
+        for name, param in [('mean', mean_f), ('scale', scale_f), ('quat', quat_f),
+                            ('density', density_f), ('features', features_f)]:
+            self.assertIsNotNone(param.grad, f"{name} gradient is None")
+            self.assertTrue(torch.isfinite(param.grad).all(), f"{name} gradient has non-finite values")
+
+            # Check gradient magnitude is reasonable (not exploding)
+            grad_norm = param.grad.norm().item()
+            self.assertLess(grad_norm, 1e6, f"{name} gradient norm too large: {grad_norm}")
+
+    def test_gradient_consistency_across_seeds(self):
+        """Test gradient computation is consistent across different random seeds."""
+        self._skip_if_unavailable()
+
+        N = 5
+        gradients = []
+
+        for seed in [42, 123, 456]:
+            mean, scale, quat, density, features, rayo, rayd = self._create_test_inputs(N, seed=seed)
+
+            mean_f = mean.float().detach().requires_grad_(True)
+
+            result = gaussianrt_trace_rays(
+                mean_f, scale.float(), quat.float(), density.float(), features.float(),
+                rayo.float(), rayd.float(),
+                tmin=0.0, tmax=3.0, max_iters=200
+            )
+            loss = result[:, :3].sum()
+            loss.backward()
+
+            gradients.append(mean_f.grad.clone())
+
+        # Gradients should be different for different inputs
+        for i in range(1, len(gradients)):
+            self.assertFalse(
+                torch.allclose(gradients[0], gradients[i]),
+                "Gradients should differ for different random inputs"
+            )
+
+
+class GaussianRTBackwardCompareJAXTest(parameterized.TestCase):
+    """Compare GaussianRT backward pass with JAX autodiff."""
+
+    def _skip_if_unavailable(self):
         if not GAUSSIANRT_AVAILABLE:
             self.skipTest(f"GaussianRT not available: {GAUSSIANRT_IMPORT_ERROR}")
-
         if not torch.cuda.is_available():
             self.skipTest("CUDA not available")
 
-        # Try to import original splinetracer
-        try:
-            from splinetracers import fast_ellipsoid_splinetracer as original
-        except ImportError:
-            self.skipTest("Original splinetracer not available")
+    @parameterized.product(
+        N=[1, 3, 5],
+        density_multi=[0.1, 0.5, 1.0],
+    )
+    def test_backward_vs_jax_autodiff(self, N, density_multi):
+        """Compare backward gradients with JAX automatic differentiation."""
+        self._skip_if_unavailable()
 
         torch.manual_seed(42)
         np.random.seed(42)
 
-        rayo = torch.tensor([[0, 0, 0]], dtype=torch.float32).to(device)
-        rayd = torch.tensor([[0, 0, 1]], dtype=torch.float32).to(device)
+        # Create inputs
+        rayo_np = np.array([[0, 0, 0]], dtype=np.float64)
+        rayd_np = np.array([[0, 0, 1]], dtype=np.float64)
 
-        scale = 0.5 * torch.tensor(
-            np.random.rand(N, 3), dtype=torch.float32
-        ).to(device)
-        mean = torch.rand(N, 3, dtype=torch.float32).to(device)
-        mean[:, 0] *= 0.5
-        mean[:, 1] *= 0.5
-        mean[:, 2] += 0.5
+        scale_np = (0.3 * np.random.rand(N, 3) + 0.1).astype(np.float64)
+        mean_np = np.random.rand(N, 3).astype(np.float64)
+        mean_np[:, 2] += 0.5
 
-        quat = l2_normalize_th(2 * torch.rand(N, 4, dtype=torch.float32).to(device) - 1)
-        density = density_multi * torch.rand(N, 1, dtype=torch.float32).to(device)
-        features = torch.rand(N, 1, 3, dtype=torch.float32).to(device)
+        quat_np = (2 * np.random.rand(N, 4) - 1).astype(np.float64)
+        quat_np = quat_np / np.linalg.norm(quat_np, axis=-1, keepdims=True)
+        density_np = (density_multi * np.random.rand(N, 1) + 0.1).astype(np.float64)
+        features_np = np.random.rand(N, 1, 3).astype(np.float64)
 
-        tmin, tmax = 0, 3
+        tmin, tmax = 0.0, 3.0
 
-        # Original implementation
-        original_result = original.trace_rays(
-            mean, scale, quat, density, features,
-            rayo, rayd,
-            tmin=tmin, tmax=tmax, max_iters=500, return_extras=False
-        )
-        original_rgb = original_result[:, :3].reshape(-1).detach().cpu().numpy()
+        # JAX gradient computation
+        def jax_loss(mean_jax):
+            out, _ = jax_trace_rays_reference(
+                mean_jax, scale_np, quat_np, density_np, features_np,
+                rayo_np, rayd_np, tmin, tmax
+            )
+            return jnp.sum(out[:, :3])
 
-        # GaussianRT implementation
-        gaussianrt_result = gaussianrt_trace_rays(
-            mean, scale, quat, density.squeeze(-1), features,
-            rayo, rayd,
+        jax_grad = jax.grad(jax_loss)(mean_np)
+
+        # PyTorch/GaussianRT gradient computation
+        mean_th = torch.tensor(mean_np, dtype=torch.float32, device=device, requires_grad=True)
+        scale_th = torch.tensor(scale_np, dtype=torch.float32, device=device)
+        quat_th = torch.tensor(quat_np, dtype=torch.float32, device=device)
+        density_th = torch.tensor(density_np.squeeze(-1), dtype=torch.float32, device=device)
+        features_th = torch.tensor(features_np, dtype=torch.float32, device=device)
+        rayo_th = torch.tensor(rayo_np, dtype=torch.float32, device=device)
+        rayd_th = torch.tensor(rayd_np, dtype=torch.float32, device=device)
+
+        result = gaussianrt_trace_rays(
+            mean_th, scale_th, quat_th, density_th, features_th,
+            rayo_th, rayd_th,
             tmin=tmin, tmax=tmax, max_iters=500
         )
-        gaussianrt_rgb = gaussianrt_result[:, :3].reshape(-1).detach().cpu().numpy()
+        loss = result[:, :3].sum()
+        loss.backward()
+
+        gaussianrt_grad = mean_th.grad.cpu().numpy()
 
         np.testing.assert_allclose(
-            gaussianrt_rgb, original_rgb,
-            atol=1e-4, rtol=1e-4,
-            err_msg=f"Mismatch with original for N={N}, density_multi={density_multi}"
-        )
-
-
-class GaussianRTBackwardCompareTest(parameterized.TestCase):
-    """Compare GaussianRT backward pass with original implementation."""
-
-    @parameterized.product(
-        N=[1, 5],
-        density_multi=[0.1, 1.0],
-    )
-    def test_backward_compare_with_original(self, N, density_multi):
-        """Compare backward gradients with original splinetracer."""
-        if not GAUSSIANRT_AVAILABLE:
-            self.skipTest(f"GaussianRT not available: {GAUSSIANRT_IMPORT_ERROR}")
-
-        if not torch.cuda.is_available():
-            self.skipTest("CUDA not available")
-
-        try:
-            from splinetracers import fast_ellipsoid_splinetracer as original
-        except ImportError:
-            self.skipTest("Original splinetracer not available")
-
-        torch.manual_seed(42)
-        np.random.seed(42)
-
-        # Create inputs with gradients
-        rayo = torch.tensor([[0, 0, 0]], dtype=torch.float32, device=device)
-        rayd = torch.tensor([[0, 0, 1]], dtype=torch.float32, device=device)
-
-        scale = 0.5 * torch.rand(N, 3, dtype=torch.float32, device=device)
-        mean = torch.rand(N, 3, dtype=torch.float32, device=device)
-        mean[:, 2] += 0.5
-
-        quat_raw = 2 * torch.rand(N, 4, dtype=torch.float32, device=device) - 1
-        quat = quat_raw / torch.norm(quat_raw, dim=-1, keepdim=True)
-        density = density_multi * torch.rand(N, 1, dtype=torch.float32, device=device)
-        features = torch.rand(N, 1, 3, dtype=torch.float32, device=device)
-
-        tmin, tmax = 0, 3
-
-        # Clone for independent computation
-        mean_orig = mean.clone().requires_grad_(True)
-        scale_orig = scale.clone().requires_grad_(True)
-        quat_orig = quat.clone().requires_grad_(True)
-        density_orig = density.clone().requires_grad_(True)
-        features_orig = features.clone().requires_grad_(True)
-
-        mean_new = mean.clone().requires_grad_(True)
-        scale_new = scale.clone().requires_grad_(True)
-        quat_new = quat.clone().requires_grad_(True)
-        density_new = density.squeeze(-1).clone().requires_grad_(True)
-        features_new = features.clone().requires_grad_(True)
-
-        # Original backward
-        original_result = original.trace_rays(
-            mean_orig, scale_orig, quat_orig, density_orig, features_orig,
-            rayo, rayd, tmin=tmin, tmax=tmax, max_iters=500
-        )
-        original_loss = original_result[:, :3].sum()
-        original_loss.backward()
-
-        # GaussianRT backward
-        gaussianrt_result = gaussianrt_trace_rays(
-            mean_new, scale_new, quat_new, density_new, features_new,
-            rayo, rayd, tmin=tmin, tmax=tmax, max_iters=500
-        )
-        gaussianrt_loss = gaussianrt_result[:, :3].sum()
-        gaussianrt_loss.backward()
-
-        # Compare gradients
-        np.testing.assert_allclose(
-            mean_new.grad.cpu().numpy(),
-            mean_orig.grad.cpu().numpy(),
+            gaussianrt_grad, np.asarray(jax_grad),
             atol=1e-3, rtol=1e-3,
-            err_msg="Mean gradient mismatch"
-        )
-
-        np.testing.assert_allclose(
-            scale_new.grad.cpu().numpy(),
-            scale_orig.grad.cpu().numpy(),
-            atol=1e-3, rtol=1e-3,
-            err_msg="Scale gradient mismatch"
-        )
-
-        np.testing.assert_allclose(
-            density_new.grad.cpu().numpy(),
-            density_orig.grad.squeeze(-1).cpu().numpy(),
-            atol=1e-3, rtol=1e-3,
-            err_msg="Density gradient mismatch"
-        )
-
-        np.testing.assert_allclose(
-            features_new.grad.cpu().numpy(),
-            features_orig.grad.cpu().numpy(),
-            atol=1e-3, rtol=1e-3,
-            err_msg="Features gradient mismatch"
+            err_msg=f"Backward vs JAX mismatch for N={N}, density_multi={density_multi}"
         )
 
 
