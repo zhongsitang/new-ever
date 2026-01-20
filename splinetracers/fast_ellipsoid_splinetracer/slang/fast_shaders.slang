@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Modern OptiX 9.1 / Slang Fast Ray Tracing Shaders
-// Uses standard HLSL ray tracing intrinsics that map directly to OptiX
+// OptiX 9.1 / Slang Fast Ray Tracing Shaders for CUDA target
 
 #define RT_EPS 0
 #define tri_per_g 2
@@ -51,10 +50,11 @@ struct MultiHitPayload
     HitEntry hits[BUFFER_SIZE];
 };
 
-// Custom attributes passed from intersection to hit shaders
+// Custom attributes for intersection (must be uint/int for OptiX)
+// Slang will auto-generate optixGetAttribute_N() calls in anyhit/closesthit
 struct EllipsoidHitAttributes
 {
-    float otherT;  // The other intersection t value
+    uint otherT_bits;  // float stored as uint bits
 };
 
 // ============================================================================
@@ -175,18 +175,14 @@ void ellipsoid()
 
     bool use_min = cur_t < minmaxt.x;
 
-    // Create attributes to pass the other t value
-    EllipsoidHitAttributes attr;
-
+    // Use ReportHitOptix for CUDA target - pass float as uint bits
     if (use_min)
     {
-        attr.otherT = minmaxt.y;
-        ReportHit(minmaxt.x, 1u, attr);
+        ReportHitOptix(minmaxt.x, 1u, asuint(minmaxt.y));
     }
     else if (cur_t < minmaxt.y)
     {
-        attr.otherT = minmaxt.x;
-        ReportHit(minmaxt.y, 0u, attr);
+        ReportHitOptix(minmaxt.y, 0u, asuint(minmaxt.x));
     }
 }
 
@@ -208,7 +204,7 @@ void ch(inout MultiHitPayload payload, in EllipsoidHitAttributes attr)
 void ah(inout MultiHitPayload payload, in EllipsoidHitAttributes attr)
 {
     float t = RayTCurrent();
-    float other_t = attr.otherT;
+    float other_t = asfloat(attr.otherT_bits);
     uint ind = PrimitiveIndex();
     uint hitkind = HitKind();
 
@@ -294,7 +290,7 @@ void rg_float()
         ray.TMin = start_t;
         ray.TMax = tmax;
 
-        // Trace ray using standard HLSL API
+        // Trace ray
         TraceRay(
             traversable,           // Acceleration structure
             RAY_FLAG_NONE,         // Ray flags

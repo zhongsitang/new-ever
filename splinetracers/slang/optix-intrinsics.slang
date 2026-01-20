@@ -12,108 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// OptiX Intrinsics for Modern Slang (OptiX 9.1+ compatible)
+// OptiX Intrinsics Module for Slang (OptiX 9.1+ / CUDA target)
 //
-// Modern Slang natively supports HLSL-style ray tracing intrinsics that map directly
-// to OptiX calls. This module provides additional utilities and compatibility wrappers.
+// For CUDA target, use these Slang intrinsics:
 //
-// Native Slang ray tracing intrinsics (no import needed):
+// Ray Query:
 //   - DispatchRaysIndex(), DispatchRaysDimensions()
 //   - WorldRayOrigin(), WorldRayDirection()
 //   - ObjectRayOrigin(), ObjectRayDirection()
 //   - RayTMin(), RayTCurrent(), RayTMax()
 //   - PrimitiveIndex(), InstanceIndex(), InstanceID()
 //   - HitKind(), RayFlags()
-//   - ObjectToWorld3x4(), WorldToObject3x4()
-//   - ReportHit(), IgnoreHit(), AcceptHitAndEndSearch()
-//   - TraceRay()
+//
+// Intersection:
+//   - ReportHitOptix(float t, uint hitKind, uint attr0, ...) - for CUDA target
+//   - IgnoreHit(), AcceptHitAndEndSearch()
+//
+// Tracing:
+//   - TraceRay(accel, flags, mask, sbtOffset, sbtStride, missIndex, ray, payload)
 
 module optix_intrinsics;
-
-// ============================================================================
-// Custom Hit Attributes
-// ============================================================================
-
-// Custom attributes structure for procedural intersection
-// Can pass up to 8 uint values through attributes (a0-a7)
-struct CustomHitAttributes
-{
-    uint a0;
-    uint a1;
-    uint a2;
-    uint a3;
-    uint a4;
-    uint a5;
-    uint a6;
-    uint a7;
-};
-
-// ============================================================================
-// Hit Buffer for Multi-Hit Tracking
-// ============================================================================
-
-static const uint MAX_HITS = 16;
-
-struct HitEntry
-{
-    float t;
-    uint triIndex;
-};
-
-struct HitBuffer
-{
-    HitEntry entries[MAX_HITS];
-
-    [mutating]
-    void init()
-    {
-        [ForceUnroll]
-        for (int i = 0; i < MAX_HITS; i++)
-        {
-            entries[i].t = 1e10f;
-            entries[i].triIndex = 0xFFFFFFFF;
-        }
-    }
-
-    [mutating]
-    void insert(float t, uint triIndex)
-    {
-        float h_t = t;
-        uint h_i = triIndex;
-
-        [ForceUnroll]
-        for (int i = 0; i < MAX_HITS; i++)
-        {
-            if (h_t < entries[i].t)
-            {
-                float temp_t = entries[i].t;
-                uint temp_i = entries[i].triIndex;
-                entries[i].t = h_t;
-                entries[i].triIndex = h_i;
-                h_t = temp_t;
-                h_i = temp_i;
-            }
-        }
-    }
-
-    float getMaxT()
-    {
-        return entries[MAX_HITS - 1].t;
-    }
-};
-
-// ============================================================================
-// Ray Payload Types
-// ============================================================================
-
-// Generic ray payload for closest-hit queries
-struct RayPayload
-{
-    float3 color;
-    float hitT;
-    uint hitKind;
-    bool hit;
-};
 
 // ============================================================================
 // Utility Functions
@@ -129,46 +47,6 @@ uint floatBitsToUint(float f)
 float uintBitsToFloat(uint u)
 {
     return asfloat(u);
-}
-
-// Pack two floats into a float2 for attribute passing
-float2 packFloats(float a, float b)
-{
-    return float2(a, b);
-}
-
-// ============================================================================
-// ReportHit Wrappers
-// ============================================================================
-
-// Report a procedural hit with a single float attribute
-bool ReportHitWithAttr1(float hitT, uint hitKind, float attr0)
-{
-    return ReportHit(hitT, hitKind, float2(attr0, 0));
-}
-
-// Report a procedural hit with two float attributes
-bool ReportHitWithAttr2(float hitT, uint hitKind, float attr0, float attr1)
-{
-    return ReportHit(hitT, hitKind, float2(attr0, attr1));
-}
-
-// ============================================================================
-// Attribute Access Helpers
-// ============================================================================
-
-// Get the first attribute as float (for procedural intersections)
-float GetAttribute0AsFloat()
-{
-    BuiltInTriangleIntersectionAttributes attr;
-    return attr.barycentrics.x;
-}
-
-// Get the second attribute as float (for procedural intersections)
-float GetAttribute1AsFloat()
-{
-    BuiltInTriangleIntersectionAttributes attr;
-    return attr.barycentrics.y;
 }
 
 // ============================================================================
