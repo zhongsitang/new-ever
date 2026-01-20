@@ -15,43 +15,31 @@
 #pragma once
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include <math.h>
 #include <optix.h>
-#include <stdio.h>
 #include <cstdint>
 #include <stdexcept>
-#include <string>
-#include <vector>
 #include "structs.h"
 
 using uint = uint32_t;
 
-// Forward declarations for embedded OptiX-IR data
-// These are defined in the generated .c files from bin2c
+// Forward declarations for embedded PTX code (null-terminated strings)
 extern "C" {
-extern const unsigned char shaders_optixir[];
-extern const size_t shaders_optixir_size;
-extern const unsigned char fast_shaders_optixir[];
-extern const size_t fast_shaders_optixir_size;
+extern const char shaders_ptx[];
+extern const char fast_shaders_ptx[];
 }
 
-struct RayGenData
-{
-    // No data needed
-};
-struct MissData
-{
-    float3 bg_color;
-};
-typedef SbtRecord<RayGenData>     RayGenSbtRecord;
-typedef SbtRecord<MissData>       MissSbtRecord;
+// SBT record types
+struct RayGenData {};
+struct MissData { float3 bg_color; };
+struct HitGroupData {};
 
-struct HitGroupData {
-};
-typedef SbtRecord<HitGroupData> HitGroupSbtRecord;
+using RayGenSbtRecord   = SbtRecord<RayGenData>;
+using MissSbtRecord     = SbtRecord<MissData>;
+using HitGroupSbtRecord = SbtRecord<HitGroupData>;
 
-struct Params
-{
+// Launch parameters - must match slang layout exactly
+// Note: StructuredBuffer<T> = {T* data, size_t size} (16 bytes with padding)
+struct Params {
     StructuredBuffer<float4> image;
     StructuredBuffer<uint> iters;
     StructuredBuffer<uint> last_face;
@@ -62,8 +50,6 @@ struct Params
     StructuredBuffer<float3> ray_origins;
     StructuredBuffer<float3> ray_directions;
     Cam camera;
-
-    StructuredBuffer<__half> half_attribs;
 
     StructuredBuffer<float3> means;
     StructuredBuffer<float3> scales;
@@ -81,51 +67,66 @@ struct Params
 };
 
 class Forward {
-   public:
+public:
     Forward() = default;
-    Forward(
-        const OptixDeviceContext &context,
-        int8_t device,
-        const Primitives &model,
-        const bool enable_backward);
+    Forward(OptixDeviceContext context, int8_t device, const Primitives& model, bool enable_backward);
     ~Forward() noexcept(false);
-    void trace_rays(const OptixTraversableHandle &handle,
-                    const size_t num_rays,
-                    float3 *ray_origins,
-                    float3 *ray_directions,
-                    void *image_out,
-                    uint sh_degree,
-                    float tmin,
-                    float tmax,
-                    float4 *initial_drgb,
-                    Cam *camera=NULL,
-                    const size_t max_iters=10000,
-                    const float max_prim_size=3,
-                    uint *iters=NULL,
-                    uint *last_face=NULL,
-                    uint *touch_count=NULL,
-                    float4 *last_dirac=NULL,
-                    SplineState *last_state=NULL,
-                    int *tri_collection=NULL,
-                    int *d_touch_count=NULL,
-                    int *d_touch_inds=NULL);
-   void reset_features(const Primitives &model);
-   bool enable_backward = false;
-   size_t num_prims = 0;
-   private:
-    Params params;
-    // Context, streams, and accel structures are inherited
-    OptixDeviceContext context = nullptr;
-    int8_t device = -1;
-    const Primitives *model;
-    // Local fields used for this pipeline
-    OptixModule module = nullptr;
-    OptixShaderBindingTable sbt = {};
-    OptixPipeline pipeline = nullptr;
-    CUdeviceptr d_param = 0;
-    CUstream stream = nullptr;
-    OptixProgramGroup raygen_prog_group = nullptr;
-    OptixProgramGroup miss_prog_group = nullptr;
-    OptixProgramGroup hitgroup_prog_group = nullptr;
-    float eps = 1e-6;
+
+    // Non-copyable
+    Forward(const Forward&) = delete;
+    Forward& operator=(const Forward&) = delete;
+
+    void trace_rays(
+        OptixTraversableHandle handle,
+        size_t num_rays,
+        float3* ray_origins,
+        float3* ray_directions,
+        void* image_out,
+        uint sh_degree,
+        float tmin, float tmax,
+        float4* initial_drgb,
+        Cam* camera = nullptr,
+        size_t max_iters = 10000,
+        float max_prim_size = 3.0f,
+        uint* iters = nullptr,
+        uint* last_face = nullptr,
+        uint* touch_count = nullptr,
+        float4* last_dirac = nullptr,
+        SplineState* last_state = nullptr,
+        int* tri_collection = nullptr,
+        int* d_touch_count = nullptr,
+        int* d_touch_inds = nullptr
+    );
+
+    void reset_features(const Primitives& model);
+
+    bool enable_backward = false;
+    size_t num_prims = 0;
+
+private:
+    void create_module(const char* ptx);
+    void create_program_groups();
+    void create_pipeline();
+    void create_sbt();
+
+    OptixDeviceContext context_ = nullptr;
+    int8_t device_ = -1;
+    const Primitives* model_ = nullptr;
+
+    OptixModule module_ = nullptr;
+    OptixPipeline pipeline_ = nullptr;
+    OptixProgramGroup raygen_pg_ = nullptr;
+    OptixProgramGroup miss_pg_ = nullptr;
+    OptixProgramGroup hitgroup_pg_ = nullptr;
+
+    OptixShaderBindingTable sbt_ = {};
+    CUdeviceptr d_param_ = 0;
+    CUstream stream_ = nullptr;
+
+    Params params_ = {};
+    OptixPipelineCompileOptions pipeline_options_ = {};
+
+    // Log buffer for OptiX compilation (used by OPTIX_CHECK_LOG)
+    char log_[8192] = {};
+    size_t log_size_ = sizeof(log_);
 };

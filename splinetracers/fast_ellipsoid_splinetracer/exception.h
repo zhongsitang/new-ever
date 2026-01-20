@@ -14,14 +14,10 @@
 
 #pragma once
 
-// This header is safe to include from both .cpp and .cu files.
-// Host-only OptiX helpers (e.g., optixGetErrorName) are guarded for __CUDACC__.
-
 #include <optix.h>
 #include <cuda_runtime.h>
 
 #include <cstdlib>
-#include <cstring>
 #include <exception>
 #include <iostream>
 #include <sstream>
@@ -29,185 +25,126 @@
 #include <string>
 
 // -----------------------------------------------------------------------------
-// Internal helpers (not part of public API)
+// Internal helpers
 // -----------------------------------------------------------------------------
-inline std::string detail_optix_error_name_safe(OptixResult res)
-{
+namespace detail {
+
+inline std::string optix_error_name(OptixResult res) {
 #if !defined(__CUDACC__)
     const char* name = optixGetErrorName(res);
-    return name ? std::string(name) : std::string("OPTIX_ERROR_UNKNOWN");
+    return name ? name : "OPTIX_ERROR_UNKNOWN";
 #else
-    // In CUDA compilation units, avoid host-only OptiX APIs.
     (void)res;
-    return std::string("OPTIX_ERROR");
+    return "OPTIX_ERROR";
 #endif
 }
 
-inline const char* detail_cuda_error_string_safe(cudaError_t err)
-{
+inline const char* cuda_error_string(cudaError_t err) {
     const char* s = cudaGetErrorString(err);
     return s ? s : "cudaErrorUnknown";
 }
 
-inline std::string detail_make_location(const char* file, int line)
-{
+inline std::string make_location(const char* file, int line) {
     std::ostringstream out;
     out << file << ":" << line;
     return out.str();
 }
 
+} // namespace detail
+
 // -----------------------------------------------------------------------------
-// Unified, more robust Exception
+// Exception class
 // -----------------------------------------------------------------------------
-class Exception : public std::runtime_error
-{
+class Exception : public std::runtime_error {
 public:
-    explicit Exception(const std::string& msg)
-        : std::runtime_error(msg)
-    {}
+    explicit Exception(const std::string& msg) : std::runtime_error(msg) {}
+    explicit Exception(const char* msg) : std::runtime_error(msg ? msg : "Exception") {}
 
-    explicit Exception(const char* msg)
-        : std::runtime_error(msg ? msg : "Exception")
-    {}
-
-    // OptiX-aware constructor (gracefully degrades in .cu files)
     Exception(OptixResult res, const std::string& msg)
-        : std::runtime_error(detail_optix_error_name_safe(res) + ": " + msg)
-    {}
-
-    Exception(OptixResult res, const char* msg)
-        : Exception(res, std::string(msg ? msg : "OptiX error"))
-    {}
+        : std::runtime_error(detail::optix_error_name(res) + ": " + msg) {}
 };
 
 // -----------------------------------------------------------------------------
-// OptiX error-checking macros
+// OptiX macros
 // -----------------------------------------------------------------------------
-
-#ifndef OPTIX_CHECK
-#define OPTIX_CHECK(call)                                                         \
-    do                                                                            \
-    {                                                                             \
-        OptixResult _res = (call);                                                \
-        if (_res != OPTIX_SUCCESS)                                                \
-        {                                                                         \
-            std::ostringstream _ss;                                               \
-            _ss << "OptiX call '" << #call << "' failed at "                      \
-                << detail_make_location(__FILE__, __LINE__);                     \
-            throw Exception(_res, _ss.str());                                     \
-        }                                                                         \
+#define OPTIX_CHECK(call)                                                       \
+    do {                                                                        \
+        OptixResult res_ = (call);                                              \
+        if (res_ != OPTIX_SUCCESS) {                                            \
+            std::ostringstream ss_;                                             \
+            ss_ << "OptiX call '" << #call << "' failed at "                    \
+                << detail::make_location(__FILE__, __LINE__);                   \
+            throw Exception(res_, ss_.str());                                   \
+        }                                                                       \
     } while (0)
-#endif
 
-// Requires: char log[]; size_t sizeof_log;
-#ifndef OPTIX_CHECK_LOG
-#define OPTIX_CHECK_LOG(call)                                                     \
-    do                                                                            \
-    {                                                                             \
-        OptixResult _res = (call);                                                \
-        const size_t _sizeof_log_returned = sizeof_log;                           \
-        sizeof_log = sizeof(log);                                                 \
-        if (_res != OPTIX_SUCCESS)                                                \
-        {                                                                         \
-            std::ostringstream _ss;                                               \
-            _ss << "OptiX call '" << #call << "' failed at "                      \
-                << detail_make_location(__FILE__, __LINE__)                       \
-                << "\nLog:\n" << log                                              \
-                << (_sizeof_log_returned > sizeof(log) ? "<TRUNCATED>" : "");    \
-            throw Exception(_res, _ss.str());                                     \
-        }                                                                         \
+// Uses log_ and log_size_ variables from enclosing scope
+// Reset log_size_ before call so OptiX knows the buffer size
+#define OPTIX_CHECK_LOG(call)                                                   \
+    do {                                                                        \
+        log_size_ = sizeof(log_);                                               \
+        OptixResult res_ = (call);                                              \
+        if (res_ != OPTIX_SUCCESS) {                                            \
+            std::ostringstream ss_;                                             \
+            ss_ << "OptiX call '" << #call << "' failed at "                    \
+                << detail::make_location(__FILE__, __LINE__)                    \
+                << "\nLog: " << log_;                                           \
+            throw Exception(res_, ss_.str());                                   \
+        }                                                                       \
     } while (0)
-#endif
 
-#ifndef OPTIX_CHECK_LOG2
-#define OPTIX_CHECK_LOG2(call)                                                    \
-    do                                                                            \
-    {                                                                             \
-        char   LOG[16384];                                                         \
-        size_t LOG_SIZE = sizeof(LOG);                                            \
-        OptixResult _res = (call);                                                \
-        if (_res != OPTIX_SUCCESS)                                                \
-        {                                                                         \
-            std::ostringstream _ss;                                               \
-            _ss << "OptiX call '" << #call << "' failed at "                      \
-                << detail_make_location(__FILE__, __LINE__)                       \
-                << "\nLog:\n" << LOG                                              \
-                << (LOG_SIZE > sizeof(LOG) ? "<TRUNCATED>" : "");                \
-            throw Exception(_res, _ss.str());                                     \
-        }                                                                         \
+#define OPTIX_CHECK_NOTHROW(call)                                               \
+    do {                                                                        \
+        OptixResult res_ = (call);                                              \
+        if (res_ != OPTIX_SUCCESS) {                                            \
+            std::cerr << "OptiX call '" << #call << "' failed at "              \
+                      << detail::make_location(__FILE__, __LINE__) << "\n";     \
+            std::terminate();                                                   \
+        }                                                                       \
     } while (0)
-#endif
-
-#ifndef OPTIX_CHECK_NOTHROW
-#define OPTIX_CHECK_NOTHROW(call)                                                 \
-    do                                                                            \
-    {                                                                             \
-        OptixResult _res = (call);                                                \
-        if (_res != OPTIX_SUCCESS)                                                \
-        {                                                                         \
-            std::cerr << "OptiX call '" << #call << "' failed at "                \
-                      << detail_make_location(__FILE__, __LINE__) << "\n";       \
-            std::terminate();                                                     \
-        }                                                                         \
-    } while (0)
-#endif
 
 // -----------------------------------------------------------------------------
-// CUDA error-checking macros
+// CUDA macros
 // -----------------------------------------------------------------------------
-
-#ifndef CUDA_CHECK
-#define CUDA_CHECK(call)                                                          \
-    do                                                                            \
-    {                                                                             \
-        cudaError_t _err = (call);                                                \
-        if (_err != cudaSuccess)                                                  \
-        {                                                                         \
-            std::ostringstream _ss;                                               \
-            _ss << "CUDA call (" << #call << ") failed with error: '"             \
-                << detail_cuda_error_string_safe(_err) << "' at "                 \
-                << detail_make_location(__FILE__, __LINE__);                     \
-            throw Exception(_ss.str());                                           \
-        }                                                                         \
+#define CUDA_CHECK(call)                                                        \
+    do {                                                                        \
+        cudaError_t err_ = (call);                                              \
+        if (err_ != cudaSuccess) {                                              \
+            std::ostringstream ss_;                                             \
+            ss_ << "CUDA call (" << #call << ") failed: '"                      \
+                << detail::cuda_error_string(err_) << "' at "                   \
+                << detail::make_location(__FILE__, __LINE__);                   \
+            throw Exception(ss_.str());                                         \
+        }                                                                       \
     } while (0)
-#endif
 
-#ifndef CUDA_SYNC_CHECK
-#define CUDA_SYNC_CHECK()                                                         \
-    do                                                                            \
-    {                                                                             \
-        cudaError_t _sync_err = cudaDeviceSynchronize();                          \
-        cudaError_t _last_err = cudaGetLastError();                               \
-        if (_sync_err != cudaSuccess)                                             \
-        {                                                                         \
-            std::ostringstream _ss;                                               \
-            _ss << "CUDA synchronize failed with error: '"                        \
-                << detail_cuda_error_string_safe(_sync_err) << "' at "            \
-                << detail_make_location(__FILE__, __LINE__);                     \
-            throw Exception(_ss.str());                                           \
-        }                                                                         \
-        if (_last_err != cudaSuccess)                                             \
-        {                                                                         \
-            std::ostringstream _ss;                                               \
-            _ss << "CUDA last error after synchronize: '"                         \
-                << detail_cuda_error_string_safe(_last_err) << "' at "            \
-                << detail_make_location(__FILE__, __LINE__);                     \
-            throw Exception(_ss.str());                                           \
-        }                                                                         \
+#define CUDA_SYNC_CHECK()                                                       \
+    do {                                                                        \
+        cudaError_t sync_err_ = cudaDeviceSynchronize();                        \
+        cudaError_t last_err_ = cudaGetLastError();                             \
+        if (sync_err_ != cudaSuccess) {                                         \
+            std::ostringstream ss_;                                             \
+            ss_ << "CUDA sync failed: '"                                        \
+                << detail::cuda_error_string(sync_err_) << "' at "              \
+                << detail::make_location(__FILE__, __LINE__);                   \
+            throw Exception(ss_.str());                                         \
+        }                                                                       \
+        if (last_err_ != cudaSuccess) {                                         \
+            std::ostringstream ss_;                                             \
+            ss_ << "CUDA last error: '"                                         \
+                << detail::cuda_error_string(last_err_) << "' at "              \
+                << detail::make_location(__FILE__, __LINE__);                   \
+            throw Exception(ss_.str());                                         \
+        }                                                                       \
     } while (0)
-#endif
 
-#ifndef CUDA_CHECK_NOTHROW
-#define CUDA_CHECK_NOTHROW(call)                                                  \
-    do                                                                            \
-    {                                                                             \
-        cudaError_t _err = (call);                                                \
-        if (_err != cudaSuccess)                                                  \
-        {                                                                         \
-            std::cerr << "CUDA call (" << #call << ") failed with error: '"       \
-                      << detail_cuda_error_string_safe(_err) << "' at "           \
-                      << detail_make_location(__FILE__, __LINE__) << "\n";       \
-            std::terminate();                                                     \
-        }                                                                         \
+#define CUDA_CHECK_NOTHROW(call)                                                \
+    do {                                                                        \
+        cudaError_t err_ = (call);                                              \
+        if (err_ != cudaSuccess) {                                              \
+            std::cerr << "CUDA call (" << #call << ") failed: '"                \
+                      << detail::cuda_error_string(err_) << "' at "             \
+                      << detail::make_location(__FILE__, __LINE__) << "\n";     \
+            std::terminate();                                                   \
+        }                                                                       \
     } while (0)
-#endif
