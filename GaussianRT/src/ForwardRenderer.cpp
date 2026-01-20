@@ -75,7 +75,7 @@ using HitGroupRecord = SbtRecord<HitGroupData>;
 struct LaunchParams {
     // Output
     float4* colorOutput;
-    SplineState* stateOutput;
+    VolumeIntegrationState* stateOutput;  // Per-ray integration state for backward pass
     int* triCollection;
     uint32_t* itersOutput;
     float4* lastDirac;
@@ -180,7 +180,7 @@ Result ForwardRenderer::createPipeline(const char* shaderPath) {
     OptixPipelineCompileOptions pipelineCompileOptions = {};
     pipelineCompileOptions.usesMotionBlur = false;
     pipelineCompileOptions.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
-    pipelineCompileOptions.numPayloadValues = 8;  // SplineState + hit buffer
+    pipelineCompileOptions.numPayloadValues = 8;  // VolumeIntegrationState + hit buffer
     pipelineCompileOptions.numAttributeValues = 2;
     pipelineCompileOptions.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
     pipelineCompileOptions.pipelineLaunchParamsVariableName = "params";
@@ -422,9 +422,9 @@ Result ForwardRenderer::allocateOutput(size_t numRays, size_t maxIters, ForwardO
     output.d_color = m_device.createBuffer(numRays * sizeof(float) * 4);
     if (!output.d_color) return Result::ErrorOutOfMemory;
 
-    // State output (SplineState * numRays)
+    // State output (VolumeIntegrationState * numRays) - for backward pass gradient computation
     if (m_enableBackward) {
-        output.d_state = m_device.createBuffer(numRays * sizeof(SplineState));
+        output.d_state = m_device.createBuffer(numRays * sizeof(VolumeIntegrationState));
         if (!output.d_state) return Result::ErrorOutOfMemory;
 
         // Triangle collection (int * numRays * maxIters)
@@ -469,7 +469,7 @@ Result ForwardRenderer::traceRays(
 
     // Output buffers
     launchParams.colorOutput = static_cast<float4*>(output.d_color);
-    launchParams.stateOutput = static_cast<SplineState*>(output.d_state);
+    launchParams.stateOutput = static_cast<VolumeIntegrationState*>(output.d_state);
     launchParams.triCollection = static_cast<int*>(output.d_triCollection);
     launchParams.itersOutput = static_cast<uint32_t*>(output.d_iters);
 

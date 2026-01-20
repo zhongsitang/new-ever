@@ -15,40 +15,54 @@ import common.intersect;
 ConstantBuffer<LaunchParams> params;
 
 //------------------------------------------------------------------------------
-// Volume Rendering State Machine
+// Volume Rendering Integration
+// Implements the discrete volume rendering equation:
+//   C = Σᵢ αᵢ · cᵢ · Tᵢ
+// where:
+//   αᵢ = 1 - exp(-σᵢ · Δtᵢ)  is the discrete opacity
+//   Tᵢ = Πⱼ₌₁^{i-1}(1 - αⱼ)  is the accumulated transmittance
 //------------------------------------------------------------------------------
 
-// Update spline state with a control point (differentiable)
+// Accumulate a Gaussian sample into the integration state (differentiable)
 [Differentiable]
-SplineState updateSplineState(SplineState state, ControlPoint cp, float tMax) {
-    SplineState newState = state;
+VolumeIntegrationState accumulateSample(
+    VolumeIntegrationState state,
+    GaussianSample sample,
+    float tMax)
+{
+    VolumeIntegrationState newState = state;
 
-    float dt = max(cp.t - state.t, 0.0f);
+    // Compute step size Δt
+    float deltaT = max(sample.t - state.rayT, 0.0f);
 
-    // Extract density and color from Dirac pulse
-    float alpha = cp.dirac.x;
-    float3 colorWeighted = float3(cp.dirac.y, cp.dirac.z, cp.dirac.w);
+    // Extract density (α) and density-weighted color (α·c) from sample
+    float alpha = sample.alphaColorProduct.x;
+    float3 alphaColor = float3(
+        sample.alphaColorProduct.y,
+        sample.alphaColorProduct.z,
+        sample.alphaColorProduct.w
+    );
 
-    // Volume rendering integration:
-    // C = ∫ σ(t) * c(t) * T(t) dt
-    // where T(t) = exp(-∫₀ᵗ σ(s) ds)
+    // Volume rendering integration using log-space for numerical stability:
+    //   T = exp(-∫σdt) → log(T) = -∫σdt
+    //   α̂ = 1 - exp(-σ·Δt)  (discrete opacity)
+    //   C += α̂ · c · T       (color contribution)
 
-    // Using log-space for numerical stability
-    float area = alpha * dt;
-    float T = safeExp(-state.logT);
-    float alphaHat = clampValue(1.0f - safeExp(-area), 0.0f, 1.0f);
+    float opticalDepth = alpha * deltaT;                            // σ·Δt
+    float transmittance = safeExp(-state.logTransmittance);         // T = exp(-log(T))
+    float discreteAlpha = clampValue(1.0f - safeExp(-opticalDepth), 0.0f, 1.0f);  // α̂
 
-    // Accumulate color
-    newState.C = state.C + alphaHat * colorWeighted * T;
+    // Accumulate color: C += α̂ · c · T
+    newState.accumulatedColor = state.accumulatedColor + discreteAlpha * alphaColor * transmittance;
 
-    // Update transmittance
-    newState.logT = state.logT + area;
+    // Update log-transmittance: log(T) += σ·Δt
+    newState.logTransmittance = state.logTransmittance + opticalDepth;
 
-    // Update position
-    newState.t = cp.t;
+    // Update ray position
+    newState.rayT = sample.t;
 
-    // Accumulate Dirac pulse
-    newState.drgb = state.drgb + cp.dirac;
+    // Accumulate running sum of alpha-weighted colors (for backward pass)
+    newState.accumulatedAlphaRGB = state.accumulatedAlphaRGB + sample.alphaColorProduct;
 
     return newState;
 }
@@ -72,26 +86,28 @@ void __raygen__main() {
     // Normalize direction
     direction = normalize3(direction);
 
-    // Initialize state
-    SplineState state = SplineState.makeEmpty();
-    state.t = params.tmin;
+    // Initialize volume integration state
+    VolumeIntegrationState integrationState = VolumeIntegrationState.makeEmpty();
+    integrationState.rayT = params.tmin;
 
-    uint iter = 0;
+    uint sampleCount = 0;
 
-    // Main tracing loop
-    while (state.logT > LOG_TRANSMITTANCE_CUTOFF && iter < params.maxIters) {
-        // Create payload
+    // Main ray marching loop
+    while (integrationState.logTransmittance > LOG_TRANSMITTANCE_CUTOFF &&
+           sampleCount < params.maxSamplesPerRay) {
+
+        // Create payload for this trace iteration
         RayPayload payload = RayPayload.create();
-        payload.state = state;
+        payload.integrationState = integrationState;
 
         // Setup ray descriptor
         RayDesc ray;
         ray.Origin = origin;
         ray.Direction = direction;
-        ray.TMin = state.t + EPSILON;
+        ray.TMin = integrationState.rayT + EPSILON;
         ray.TMax = params.tmax;
 
-        // Trace ray
+        // Trace ray to collect Gaussian intersections
         TraceRay(
             params.accel,
             RAY_FLAG_NONE,
@@ -103,11 +119,11 @@ void __raygen__main() {
             payload
         );
 
-        // Process collected hits
+        // Process collected hits (sorted front-to-back)
         uint numHits = min(payload.hitCount, HIT_BUFFER_SIZE);
 
         if (numHits == 0) {
-            break;  // No more intersections
+            break;  // No more Gaussian intersections
         }
 
         [ForceUnroll]
@@ -115,67 +131,70 @@ void __raygen__main() {
             if (i >= numHits) break;
 
             float t = asfloat(payload.hitBuffer[i * 2]);
-            uint triId = payload.hitBuffer[i * 2 + 1];
+            uint hitId = payload.hitBuffer[i * 2 + 1];
 
-            if (triId == 0xFFFFFFFF) break;
+            if (hitId == 0xFFFFFFFF) break;
 
-            // Decode primitive index and entry/exit
-            uint primIdx = triId / 2;
-            bool isEntry = (triId % 2) == 0;
+            // Decode primitive index and entry/exit flag
+            // hitId = primitiveIndex * 2 + (isEntry ? 0 : 1)
+            uint primIdx = hitId / 2;
+            bool isEntry = (hitId % 2) == 0;
 
-            // Store triangle ID for backward pass
-            params.triCollection[rayIdx * params.maxIters + iter] = int(triId);
+            // Store hit ID for backward pass gradient computation
+            params.hitPrimitiveIds[rayIdx * params.maxSamplesPerRay + sampleCount] = int(hitId);
 
-            // Get primitive data
+            // Get Gaussian primitive data
             float3 mean = params.means[primIdx];
             float3 scale = params.scales[primIdx];
             float4 quat = params.quats[primIdx];
             float density = params.densities[primIdx];
 
-            // Evaluate color
+            // Evaluate view-dependent color (SH or RGB)
             float3 viewDir = -direction;
             float3 color = evaluateColor(viewDir, params.features, primIdx,
                                         params.featureSize, params.shDegree);
 
-            // Generate control point
-            ControlPoint cp = generateControlPoint(
+            // Create Gaussian sample at this intersection
+            GaussianSample sample = createGaussianSample(
                 t, origin, direction,
                 mean, scale, quat, density, color,
                 isEntry
             );
 
-            // Update state
-            state = updateSplineState(state, cp, params.tmax);
+            // Accumulate sample into integration state
+            integrationState = accumulateSample(integrationState, sample, params.tmax);
 
-            iter++;
+            sampleCount++;
 
-            // Early termination
-            if (iter >= params.maxIters || state.logT <= LOG_TRANSMITTANCE_CUTOFF) {
+            // Early termination if ray is essentially opaque
+            if (sampleCount >= params.maxSamplesPerRay ||
+                integrationState.logTransmittance <= LOG_TRANSMITTANCE_CUTOFF) {
                 break;
             }
         }
 
-        // Update state for next iteration
+        // Update ray start position for next iteration
         if (numHits > 0) {
             float lastT = asfloat(payload.hitBuffer[(numHits - 1) * 2]);
-            state.t = lastT + EPSILON;
+            integrationState.rayT = lastT + EPSILON;
         }
     }
 
-    // Fill remaining tri_collection with -1
-    for (uint j = iter; j < params.maxIters; j++) {
-        params.triCollection[rayIdx * params.maxIters + j] = -1;
+    // Mark remaining hit slots as unused (-1) for backward pass
+    for (uint j = sampleCount; j < params.maxSamplesPerRay; j++) {
+        params.hitPrimitiveIds[rayIdx * params.maxSamplesPerRay + j] = -1;
     }
 
-    // Compute final color with background
-    float T = safeExp(-state.logT);
-    float3 finalColor = state.C;  // Background is black
+    // Compute final pixel color
+    // Remaining transmittance shows through to background (black)
+    float finalTransmittance = safeExp(-integrationState.logTransmittance);
+    float3 finalColor = integrationState.accumulatedColor;
 
     // Write outputs
-    params.colorOutput[rayIdx] = float4(finalColor, T);
-    params.stateOutput[rayIdx] = state;
-    params.itersOutput[rayIdx] = iter;
-    params.lastDirac[rayIdx] = state.drgb;
+    params.colorOutput[rayIdx] = float4(finalColor, finalTransmittance);
+    params.stateOutput[rayIdx] = integrationState;
+    params.numSamplesPerRay[rayIdx] = sampleCount;
+    params.lastSampleAlphaRGB[rayIdx] = integrationState.accumulatedAlphaRGB;
 }
 
 //------------------------------------------------------------------------------
@@ -184,27 +203,28 @@ void __raygen__main() {
 
 [shader("miss")]
 void __miss__main(inout RayPayload payload) {
-    // Nothing to do - background is handled in raygen
+    // Background color is handled in raygen shader
+    // No action needed here
 }
 
 //------------------------------------------------------------------------------
-// Intersection Shader (Custom Ellipsoid)
+// Intersection Shader (Custom Ellipsoid/Gaussian)
 //------------------------------------------------------------------------------
 
 [shader("intersection")]
 void __intersection__ellipsoid() {
     uint primIdx = PrimitiveIndex();
 
-    // Get primitive data
+    // Get Gaussian primitive data
     float3 mean = params.means[primIdx];
     float3 scale = params.scales[primIdx];
     float4 quat = params.quats[primIdx];
 
-    // Get ray
+    // Get ray in world space
     float3 rayOrigin = WorldRayOrigin();
     float3 rayDir = WorldRayDirection();
 
-    // Compute intersection
+    // Compute ray-ellipsoid intersection (3-sigma bounding ellipsoid)
     IntersectResult result = rayIntersectGaussian(
         rayOrigin, rayDir, mean, scale, quat
     );
@@ -216,32 +236,33 @@ void __intersection__ellipsoid() {
     float tMin = RayTMin();
     float tMax = RayTCurrent();
 
-    // Report entry point (hitKind = 0)
+    // Report entry point (hitKind = 0: entering the Gaussian)
     if (result.tNear >= tMin && result.tNear <= tMax) {
         ReportHit(result.tNear, 0, /* no attributes */);
     }
 
-    // Report exit point (hitKind = 1)
+    // Report exit point (hitKind = 1: exiting the Gaussian)
     if (result.tFar >= tMin && result.tFar <= tMax) {
         ReportHit(result.tFar, 1, /* no attributes */);
     }
 }
 
 //------------------------------------------------------------------------------
-// Any-Hit Shader (Sorting)
+// Any-Hit Shader (Front-to-Back Sorting)
+// Collects and sorts Gaussian intersections by distance
 //------------------------------------------------------------------------------
 
 [shader("anyhit")]
 void __anyhit__sorting(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes attr) {
     float t = RayTCurrent();
     uint primIdx = PrimitiveIndex();
-    uint hitKind = HitKind();
+    uint hitKind = HitKind();  // 0 = entry, 1 = exit
 
-    // Encode triId: primIdx * 2 + hitKind
-    // hitKind: 0 = entry, 1 = exit
-    uint triId = primIdx * 2 + hitKind;
+    // Encode hit: primitiveIndex * 2 + hitKind
+    uint hitId = primIdx * 2 + hitKind;
 
-    // Insertion sort to maintain sorted hit buffer
+    // Insert into sorted hit buffer using insertion sort
+    // This maintains hits in front-to-back order for proper compositing
     uint tBits = asuint(t);
 
     [ForceUnroll]
@@ -249,22 +270,22 @@ void __anyhit__sorting(inout RayPayload payload, in BuiltInTriangleIntersectionA
         uint storedTBits = payload.hitBuffer[i * 2];
 
         if (tBits < storedTBits) {
-            // Shift elements to make room
+            // Shift elements to make room for new hit
             [ForceUnroll]
             for (uint j = HIT_BUFFER_SIZE - 1; j > i; j--) {
                 payload.hitBuffer[j * 2] = payload.hitBuffer[(j - 1) * 2];
                 payload.hitBuffer[j * 2 + 1] = payload.hitBuffer[(j - 1) * 2 + 1];
             }
 
-            // Insert new hit
+            // Insert new hit at position i
             payload.hitBuffer[i * 2] = tBits;
-            payload.hitBuffer[i * 2 + 1] = triId;
+            payload.hitBuffer[i * 2 + 1] = hitId;
 
             payload.hitCount = min(payload.hitCount + 1, HIT_BUFFER_SIZE);
             break;
         }
     }
 
-    // Ignore this hit to continue searching for more
+    // Ignore this hit to continue searching for more Gaussians
     IgnoreHit();
 }

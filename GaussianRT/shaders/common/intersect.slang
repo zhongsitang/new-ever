@@ -129,39 +129,44 @@ float evaluateGaussianAlongRay(
 }
 
 //------------------------------------------------------------------------------
-// Control Point Generation
+// Gaussian Sample Generation
+// Creates a sample for volume rendering integration at a ray-Gaussian intersection
 //------------------------------------------------------------------------------
 
-// Generate control point for volume rendering
-// A control point represents a Dirac impulse at the intersection boundary
+// Generate a Gaussian sample for volume rendering
+// This represents the contribution of a Gaussian at the intersection point
+// for use in the discrete volume rendering equation:
+//   C = Σᵢ αᵢ · cᵢ · Πⱼ₌₁^{i-1}(1 - αⱼ)
 [Differentiable]
-ControlPoint generateControlPoint(
-    float t,
+GaussianSample createGaussianSample(
+    float t,                    // Ray parameter at intersection
     float3 rayOrigin,
     float3 rayDir,
     float3 mean,
     float3 scale,
     float4 quat,
-    float density,
-    float3 color,
-    bool isEntry)
+    float density,              // Base opacity σ
+    float3 color,               // RGB color at this point
+    bool isEntry)               // true if entering Gaussian, false if exiting
 {
-    ControlPoint cp;
-    cp.t = t;
+    GaussianSample sample;
+    sample.t = t;
 
-    // Evaluate density at intersection point
+    // Evaluate the Gaussian density σ(t) at the intersection point
     float sigma = evaluateGaussianAlongRay(rayOrigin, rayDir, t, mean, scale, quat, density);
 
-    // For volume rendering, we use the density-weighted color
-    // Sign depends on whether entering or exiting
+    // For the discrete volume rendering formulation:
+    // - Entry points contribute positively (add to accumulated density)
+    // - Exit points contribute negatively (subtract from accumulated density)
     float sign = isEntry ? 1.0f : -1.0f;
 
-    cp.dirac = float4(
+    // Store [α, α·R, α·G, α·B] where α is the signed density contribution
+    sample.alphaColorProduct = float4(
         sign * sigma,
         sign * sigma * color.x,
         sign * sigma * color.y,
         sign * sigma * color.z
     );
 
-    return cp;
+    return sample;
 }

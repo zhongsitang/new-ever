@@ -54,15 +54,16 @@ TEST(GaussianData_alignment) {
     ASSERT_TRUE(alignof(GaussianData) == 16);
 }
 
-TEST(SplineState_initialization) {
-    SplineState state;
-    state.logT = 0.0f;
-    state.C = Float3(0.0f, 0.0f, 0.0f);
-    state.t = 0.0f;
-    state.drgb = Float4(0.0f, 0.0f, 0.0f, 0.0f);
+TEST(VolumeIntegrationState_initialization) {
+    // Test volume integration state used in differentiable rendering
+    VolumeIntegrationState state;
+    state.logTransmittance = 0.0f;      // log(T) where T is transmittance
+    state.accumulatedColor = Float3(0.0f, 0.0f, 0.0f);  // Accumulated color C
+    state.rayT = 0.0f;                  // Current ray parameter t
+    state.accumulatedAlphaRGB = Float4(0.0f, 0.0f, 0.0f, 0.0f);  // [Σα, Σ(α·R), Σ(α·G), Σ(α·B)]
 
-    ASSERT_EQ(state.logT, 0.0f);
-    ASSERT_EQ(state.t, 0.0f);
+    ASSERT_EQ(state.logTransmittance, 0.0f);
+    ASSERT_EQ(state.rayT, 0.0f);
 }
 
 TEST(RenderParams_defaults) {
@@ -109,7 +110,7 @@ int main() {
     RUN_TEST(Float3_creation);
     RUN_TEST(Float4_creation);
     RUN_TEST(GaussianData_alignment);
-    RUN_TEST(SplineState_initialization);
+    RUN_TEST(VolumeIntegrationState_initialization);
     RUN_TEST(RenderParams_defaults);
     RUN_TEST(sh_coeffs_count);
     RUN_TEST(sh_feature_size);

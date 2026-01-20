@@ -67,25 +67,34 @@ struct alignas(8) AABB {
 };
 
 //------------------------------------------------------------------------------
-// Spline state for volume rendering (shared with shaders)
+// Volume Integration State for ray marching
+// Tracks the accumulated result of volume rendering equation:
+//   C = ∫ σ(t) · c(t) · T(t) dt,  where T(t) = exp(-∫₀ᵗ σ(s) ds)
 //------------------------------------------------------------------------------
 
-struct alignas(16) SplineState {
-    float logT;         // Log transmittance
-    Float3 C;           // Accumulated color
+struct alignas(16) VolumeIntegrationState {
+    float logTransmittance;     // log(T), where T is transmittance (for numerical stability)
+    Float3 accumulatedColor;    // C: accumulated color from volume rendering
 
-    float t;            // Current parameter
-    Float4 drgb;        // Dirac pulse [alpha, alpha*R, alpha*G, alpha*B]
+    float rayT;                 // Current ray parameter t
+    Float4 accumulatedAlphaRGB; // Running sum of [Σα, Σ(α·R), Σ(α·G), Σ(α·B)]
 };
 
+// Legacy alias for compatibility
+using SplineState = VolumeIntegrationState;
+
 //------------------------------------------------------------------------------
-// Control point for spline machine
+// Gaussian Sample: represents a ray-Gaussian intersection point
+// Used for accumulating contributions during volume rendering
 //------------------------------------------------------------------------------
 
-struct alignas(16) ControlPoint {
-    float t;            // Parameter position
-    Float4 dirac;       // Dirac pulse coefficients
+struct alignas(16) GaussianSample {
+    float t;                    // Ray parameter at intersection
+    Float4 alphaColorProduct;   // [α, α·R, α·G, α·B] - density-weighted color contribution
 };
+
+// Legacy alias for compatibility
+using ControlPoint = GaussianSample;
 
 //------------------------------------------------------------------------------
 // Render parameters
@@ -107,10 +116,10 @@ struct RenderParams {
 
 struct ForwardOutput {
     void* colorBuffer = nullptr;            // RGBA output (float4 * numRays)
-    void* stateBuffer = nullptr;            // Final states (SplineState * numRays)
+    void* stateBuffer = nullptr;            // Final integration states (VolumeIntegrationState * numRays)
     void* triCollectionBuffer = nullptr;    // Visited primitives (int * numRays * maxIters)
     void* itersBuffer = nullptr;            // Iterations per ray (uint * numRays)
-    void* lastDiracBuffer = nullptr;        // Last Dirac pulse (float4 * numRays)
+    void* lastSampleBuffer = nullptr;       // Last Gaussian sample (float4 * numRays)
 
     size_t numRays = 0;
     size_t maxIters = 0;

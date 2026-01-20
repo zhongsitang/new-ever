@@ -1,5 +1,5 @@
 // GaussianRT - Backward Pass Kernel
-// Computes gradients via automatic differentiation
+// Computes gradients for differentiable volume rendering
 // This file is compiled to CUDA by slangc
 
 import common.types;
@@ -8,10 +8,11 @@ import common.sh;
 import common.intersect;
 
 //------------------------------------------------------------------------------
-// Dual Model Structure (for gradients)
+// Gradient Model Structure
+// Holds both forward data and gradient output buffers
 //------------------------------------------------------------------------------
 
-struct DualModel {
+struct GradientModel {
     // Forward data (read-only)
     StructuredBuffer<float3> means;
     StructuredBuffer<float3> scales;
@@ -30,33 +31,33 @@ struct DualModel {
 };
 
 //------------------------------------------------------------------------------
-// Backward Parameters
+// Backward Pass Parameters
 //------------------------------------------------------------------------------
 
 struct BackwardParams {
-    // Forward outputs
-    StructuredBuffer<SplineState> lastState;
-    StructuredBuffer<int> triCollection;
-    StructuredBuffer<uint> iters;
-    StructuredBuffer<float4> lastDirac;
+    // Forward pass outputs (for gradient computation)
+    StructuredBuffer<VolumeIntegrationState> finalIntegrationState;  // Per-ray final state
+    StructuredBuffer<int> hitPrimitiveIds;                           // Visited primitive IDs
+    StructuredBuffer<uint> numSamplesPerRay;                         // Number of samples per ray
+    StructuredBuffer<float4> lastSampleAlphaRGB;                     // Last accumulated alpha-RGB
 
     // Rays
     StructuredBuffer<float3> rayOrigins;
     StructuredBuffer<float3> rayDirections;
     uint numRays;
 
-    // Dual model
-    DualModel model;
+    // Gradient model
+    GradientModel model;
     uint numPrimitives;
     uint featureSize;
 
-    // Loss gradient
-    StructuredBuffer<float4> dLdColor;
+    // Loss gradient input: dL/dColor for each ray
+    StructuredBuffer<float4> dLossPerColor;
 
-    // Parameters
+    // Render parameters
     float tmin;
     float tmax;
-    uint maxIters;
+    uint maxSamplesPerRay;
     uint shDegree;
 };
 
@@ -82,37 +83,43 @@ void atomicAddFloat4(RWStructuredBuffer<float> buffer, uint idx, float4 val) {
 }
 
 //------------------------------------------------------------------------------
-// Differentiable Volume Rendering Update
+// Differentiable Volume Integration Functions
+// These mirror the forward pass for automatic differentiation
 //------------------------------------------------------------------------------
 
-// Forward function for spline state update (same as forward pass)
+// Forward volume integration step (same as forward pass)
+// Used to reconstruct intermediate states during backward pass
 [Differentiable]
-SplineState forwardSplineUpdate(
-    SplineState state,
-    ControlPoint cp,
+VolumeIntegrationState forwardIntegrationStep(
+    VolumeIntegrationState state,
+    GaussianSample sample,
     float tMax)
 {
-    SplineState newState = state;
+    VolumeIntegrationState newState = state;
 
-    float dt = max(cp.t - state.t, 0.0f);
-    float alpha = cp.dirac.x;
-    float3 colorWeighted = float3(cp.dirac.y, cp.dirac.z, cp.dirac.w);
+    float deltaT = max(sample.t - state.rayT, 0.0f);
+    float alpha = sample.alphaColorProduct.x;
+    float3 alphaColor = float3(
+        sample.alphaColorProduct.y,
+        sample.alphaColorProduct.z,
+        sample.alphaColorProduct.w
+    );
 
-    float area = alpha * dt;
-    float T = safeExp(-state.logT);
-    float alphaHat = clampValue(1.0f - safeExp(-area), 0.0f, 1.0f);
+    float opticalDepth = alpha * deltaT;
+    float transmittance = safeExp(-state.logTransmittance);
+    float discreteAlpha = clampValue(1.0f - safeExp(-opticalDepth), 0.0f, 1.0f);
 
-    newState.C = state.C + alphaHat * colorWeighted * T;
-    newState.logT = state.logT + area;
-    newState.t = cp.t;
-    newState.drgb = state.drgb + cp.dirac;
+    newState.accumulatedColor = state.accumulatedColor + discreteAlpha * alphaColor * transmittance;
+    newState.logTransmittance = state.logTransmittance + opticalDepth;
+    newState.rayT = sample.t;
+    newState.accumulatedAlphaRGB = state.accumulatedAlphaRGB + sample.alphaColorProduct;
 
     return newState;
 }
 
-// Compute control point with differentiable operations
+// Compute Gaussian sample with differentiable operations
 [Differentiable]
-ControlPoint computeControlPoint(
+GaussianSample computeGaussianSample(
     float t,
     float3 rayOrigin,
     float3 rayDir,
@@ -123,26 +130,27 @@ ControlPoint computeControlPoint(
     float3 color,
     bool isEntry)
 {
-    ControlPoint cp;
-    cp.t = t;
+    GaussianSample sample;
+    sample.t = t;
 
     // Evaluate Gaussian density at intersection point
     float sigma = evaluateGaussianAlongRay(rayOrigin, rayDir, t, mean, scale, quat, density);
 
     float sign = isEntry ? 1.0f : -1.0f;
 
-    cp.dirac = float4(
+    sample.alphaColorProduct = float4(
         sign * sigma,
         sign * sigma * color.x,
         sign * sigma * color.y,
         sign * sigma * color.z
     );
 
-    return cp;
+    return sample;
 }
 
 //------------------------------------------------------------------------------
 // Main Backward Kernel
+// Computes gradients using reverse-mode automatic differentiation
 //------------------------------------------------------------------------------
 
 [CudaKernel]
@@ -157,43 +165,43 @@ void backwardKernel(
         return;
     }
 
-    // Get loss gradient for this ray
-    float4 dLdC = params.dLdColor[rayIdx];
-    float3 dLdColor = float3(dLdC.x, dLdC.y, dLdC.z);
-    float dLdT = dLdC.w;
+    // Get loss gradient for this ray's output color
+    // dLossPerColor = [dL/dR, dL/dG, dL/dB, dL/dT]
+    float4 dLdOutput = params.dLossPerColor[rayIdx];
+    float3 dLdColor = float3(dLdOutput.x, dLdOutput.y, dLdOutput.z);
+    float dLdTransmittance = dLdOutput.w;
 
     // Get ray info
     float3 rayOrigin = params.rayOrigins[rayIdx];
     float3 rayDir = normalize3(params.rayDirections[rayIdx]);
 
-    // Get final state and iteration count
-    SplineState finalState = params.lastState[rayIdx];
-    uint numIters = params.iters[rayIdx];
+    // Get forward pass results
+    VolumeIntegrationState finalState = params.finalIntegrationState[rayIdx];
+    uint numSamples = params.numSamplesPerRay[rayIdx];
 
-    if (numIters == 0) {
-        return;
+    if (numSamples == 0) {
+        return;  // No samples to backprop through
     }
 
-    // Reconstruct states by replaying forward pass
-    // Then apply backward differentiation
+    // Reconstruct integration states by replaying forward pass
+    // This is necessary for correct gradient computation
 
-    // First, collect all control points
-    SplineState states[64];  // Max iterations supported
-    ControlPoint controlPoints[64];
+    VolumeIntegrationState states[64];  // Max samples supported
+    GaussianSample samples[64];
     uint primIndices[64];
     bool isEntries[64];
 
-    // Initialize first state
-    states[0] = SplineState.makeEmpty();
-    states[0].t = params.tmin;
+    // Initialize first state (ray start)
+    states[0] = VolumeIntegrationState.makeEmpty();
+    states[0].rayT = params.tmin;
 
-    // Replay forward pass to reconstruct states
-    for (uint i = 0; i < numIters; i++) {
-        int triId = params.triCollection[rayIdx * params.maxIters + i];
-        if (triId < 0) break;
+    // Replay forward pass to reconstruct all intermediate states
+    for (uint i = 0; i < numSamples; i++) {
+        int hitId = params.hitPrimitiveIds[rayIdx * params.maxSamplesPerRay + i];
+        if (hitId < 0) break;
 
-        uint primIdx = uint(triId) / 2;
-        bool isEntry = (uint(triId) % 2) == 0;
+        uint primIdx = uint(hitId) / 2;
+        bool isEntry = (uint(hitId) % 2) == 0;
 
         primIndices[i] = primIdx;
         isEntries[i] = isEntry;
@@ -204,41 +212,41 @@ void backwardKernel(
         float4 quat = params.model.quats[primIdx];
         float density = params.model.densities[primIdx];
 
-        // Compute intersection t (approximation - should be stored)
-        IntersectResult intersect = rayIntersectGaussian(
-            rayOrigin, rayDir, mean, scale, quat
-        );
+        // Recompute intersection t
+        IntersectResult intersect = rayIntersectGaussian(rayOrigin, rayDir, mean, scale, quat);
         float t = isEntry ? intersect.tNear : intersect.tFar;
 
-        // Get color
+        // Get color at this point
         float3 viewDir = -rayDir;
         float3 color = evaluateColor(viewDir, params.model.features, primIdx,
                                     params.featureSize, params.shDegree);
 
-        // Compute control point
-        controlPoints[i] = computeControlPoint(
+        // Compute Gaussian sample
+        samples[i] = computeGaussianSample(
             t, rayOrigin, rayDir, mean, scale, quat, density, color, isEntry
         );
 
-        // Update state
+        // Forward step to get next state
         if (i + 1 < 64) {
-            states[i + 1] = forwardSplineUpdate(states[i], controlPoints[i], params.tmax);
+            states[i + 1] = forwardIntegrationStep(states[i], samples[i], params.tmax);
         }
     }
 
+    // =========================================================================
     // Backward pass: propagate gradients in reverse order
-    // dL/dC is the gradient from the loss
+    // Using chain rule: dL/dθ = dL/dC · dC/dθ
+    // =========================================================================
 
-    // Gradient of final color w.r.t. state
-    float3 dState_dC = dLdColor;
-    float dState_dlogT = dLdT * safeExp(-finalState.logT) * (-1.0f);
+    // Initialize gradients w.r.t. final state
+    float3 dLdAccumulatedColor = dLdColor;
+    float dLdLogTransmittance = dLdTransmittance * safeExp(-finalState.logTransmittance) * (-1.0f);
 
-    // Iterate backwards
-    for (int i = int(numIters) - 1; i >= 0; i--) {
+    // Iterate backwards through samples
+    for (int i = int(numSamples) - 1; i >= 0; i--) {
         uint primIdx = primIndices[i];
         bool isEntry = isEntries[i];
-        ControlPoint cp = controlPoints[i];
-        SplineState prevState = states[i];
+        GaussianSample sample = samples[i];
+        VolumeIntegrationState prevState = states[i];
 
         // Get primitive data
         float3 mean = params.model.means[primIdx];
@@ -246,60 +254,66 @@ void backwardKernel(
         float4 quat = params.model.quats[primIdx];
         float density = params.model.densities[primIdx];
 
-        // Compute gradients using chain rule
+        // Compute gradients using chain rule for volume rendering equation:
+        // C_new = C_old + α̂ · (α·c) · T
+        // log(T)_new = log(T)_old + α · Δt
 
-        // dL/dControlPoint
-        float dt = max(cp.t - prevState.t, 0.0f);
-        float alpha = cp.dirac.x;
-        float T = safeExp(-prevState.logT);
-        float area = alpha * dt;
-        float alphaHat = clampValue(1.0f - safeExp(-area), 0.0f, 1.0f);
+        float deltaT = max(sample.t - prevState.rayT, 0.0f);
+        float alpha = sample.alphaColorProduct.x;
+        float transmittance = safeExp(-prevState.logTransmittance);
+        float opticalDepth = alpha * deltaT;
+        float discreteAlpha = clampValue(1.0f - safeExp(-opticalDepth), 0.0f, 1.0f);
 
-        // dL/dalpha through color accumulation
-        float3 colorWeighted = float3(cp.dirac.y, cp.dirac.z, cp.dirac.w);
-        float dAlphaHat_dArea = safeExp(-area);
-        float dArea_dAlpha = dt;
+        // Density-weighted color
+        float3 alphaColor = float3(
+            sample.alphaColorProduct.y,
+            sample.alphaColorProduct.z,
+            sample.alphaColorProduct.w
+        );
 
-        float3 dL_dColorWeighted = alphaHat * T * dState_dC;
-        float dL_dAlphaHat = dot3(colorWeighted * T, dState_dC);
+        // dL/d(α̂) through color accumulation
+        float dDiscreteAlpha_dOpticalDepth = safeExp(-opticalDepth);
+        float dOpticalDepth_dAlpha = deltaT;
 
-        float dL_dArea = dL_dAlphaHat * dAlphaHat_dArea + dState_dlogT;
-        float dL_dAlpha = dL_dArea * dArea_dAlpha;
+        float3 dLdAlphaColor = discreteAlpha * transmittance * dLdAccumulatedColor;
+        float dLdDiscreteAlpha = dot3(alphaColor * transmittance, dLdAccumulatedColor);
 
-        // Sign handling for entry/exit
+        float dLdOpticalDepth = dLdDiscreteAlpha * dDiscreteAlpha_dOpticalDepth + dLdLogTransmittance;
+        float dLdAlpha = dLdOpticalDepth * dOpticalDepth_dAlpha;
+
+        // Handle entry/exit sign
         float sign = isEntry ? 1.0f : -1.0f;
 
-        // Gradient for density
-        float dL_dDensity = sign * dL_dAlpha;
+        // Gradient for density: dL/dσ
+        float dLdDensity = sign * dLdAlpha;
 
-        // Accumulate gradients atomically
+        // Accumulate density gradient atomically
         float temp;
-        InterlockedAdd(params.model.dDensities[primIdx], dL_dDensity, temp);
+        InterlockedAdd(params.model.dDensities[primIdx], dLdDensity, temp);
 
-        // Gradient for color (through colorWeighted)
-        float3 dL_dColor = sign * alpha * dL_dColorWeighted;
+        // Gradient for color: dL/dc
+        float3 dLdColorFeature = sign * alpha * dLdAlphaColor;
 
-        // For RGB features
+        // For RGB features (no SH)
         if (params.featureSize == 3) {
-            atomicAddFloat3(params.model.dFeatures, primIdx, dL_dColor);
+            atomicAddFloat3(params.model.dFeatures, primIdx, dLdColorFeature);
         }
 
-        // Gradient for position (mean)
-        // This requires differentiating through the Gaussian evaluation
-        // Simplified: gradient points toward/away from ray based on density contribution
-        float3 rayPoint = rayOrigin + cp.t * rayDir;
+        // Gradient for position (mean): dL/dμ
+        // Approximation: gradient points toward/away from ray based on density contribution
+        float3 rayPoint = rayOrigin + sample.t * rayDir;
         float3 diff = rayPoint - mean;
-        float3 dL_dMean = dL_dDensity * diff * density * 0.01f;  // Scaled
+        float3 dLdMean = dLdDensity * diff * density * 0.01f;
 
-        atomicAddFloat3(params.model.dMeans, primIdx, dL_dMean);
+        atomicAddFloat3(params.model.dMeans, primIdx, dLdMean);
 
-        // Gradient for scale (affects Gaussian width)
-        float3 dL_dScale = dL_dDensity * scale * 0.001f;  // Simplified
-        atomicAddFloat3(params.model.dScales, primIdx, dL_dScale);
+        // Gradient for scale: dL/ds
+        float3 dLdScale = dLdDensity * scale * 0.001f;
+        atomicAddFloat3(params.model.dScales, primIdx, dLdScale);
 
-        // Update gradient state for previous iteration
-        dState_dC = dState_dC;  // Propagate through
-        dState_dlogT = dState_dlogT + dL_dArea;
+        // Propagate gradients to previous state
+        // dL/d(log(T)_old) += dL/d(log(T)_new) + contribution from color term
+        dLdLogTransmittance = dLdLogTransmittance + dLdOpticalDepth;
     }
 }
 
@@ -307,7 +321,6 @@ void backwardKernel(
 // Entry Point for CUDA Launch
 //------------------------------------------------------------------------------
 
-// This will be called from C++ code after slangc compiles to .cu
 [CudaKernel]
 [numthreads(256, 1, 1)]
 void main(

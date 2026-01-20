@@ -36,8 +36,8 @@ namespace gaussian_rt {
 //------------------------------------------------------------------------------
 
 struct BackwardParams {
-    // Forward outputs
-    const SplineState* lastState;
+    // Forward outputs - final integration state from forward pass
+    const VolumeIntegrationState* finalIntegrationState;
     const int* triCollection;
     const uint32_t* iters;
     const float4* lastDirac;
@@ -98,8 +98,8 @@ __global__ void backwardKernelFallback(BackwardParams params) {
     float3 rayOrigin = params.rayOrigins[rayIdx];
     float3 rayDir = params.rayDirections[rayIdx];
 
-    // Get final state
-    SplineState state = params.lastState[rayIdx];
+    // Get final volume integration state
+    VolumeIntegrationState state = params.finalIntegrationState[rayIdx];
     uint32_t numIters = params.iters[rayIdx];
 
     // Iterate backwards through visited primitives
@@ -124,7 +124,8 @@ __global__ void backwardKernelFallback(BackwardParams params) {
         // Slang autodiff
 
         // Accumulate gradients (atomic add for thread safety)
-        float weight = expf(-state.logT) * (1.0f - expf(-density));
+        // weight = transmittance * (1 - exp(-density)) = exp(-logTransmittance) * alpha
+        float weight = expf(-state.logTransmittance) * (1.0f - expf(-density));
 
         // Gradient for density
         float dDensity = (dLdC.x + dLdC.y + dLdC.z) * weight;
@@ -274,8 +275,8 @@ Result BackwardPass::compute(
     // Setup parameters
     BackwardParams backwardParams = {};
 
-    // Forward outputs
-    backwardParams.lastState = static_cast<const SplineState*>(forwardOutput.d_state);
+    // Forward outputs - final integration state per ray
+    backwardParams.finalIntegrationState = static_cast<const VolumeIntegrationState*>(forwardOutput.d_state);
     backwardParams.triCollection = static_cast<const int*>(forwardOutput.d_triCollection);
     backwardParams.iters = static_cast<const uint32_t*>(forwardOutput.d_iters);
 

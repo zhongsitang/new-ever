@@ -40,44 +40,53 @@ static const float SH_C3_6 = 0.5900435899266435f;
 
 struct GaussianPrimitive {
     float3 mean;        // Center position
-    float density;      // Opacity/density
+    float density;      // Opacity/density σ
 
-    float3 scale;       // Scale factors
+    float3 scale;       // Scale factors (radii)
     float _pad0;
 
     float4 quat;        // Rotation quaternion (x, y, z, w)
 };
 
 //------------------------------------------------------------------------------
-// Spline State for Volume Rendering
+// Volume Integration State
+// Tracks the accumulated result of the volume rendering equation:
+//   C = ∫ σ(t) · c(t) · T(t) dt
+// where:
+//   T(t) = exp(-∫₀ᵗ σ(s) ds)  is the transmittance
+//   σ(t) is the density at point t
+//   c(t) is the color at point t
 //------------------------------------------------------------------------------
 
-struct SplineState : IDifferentiable {
-    float logT;         // Log transmittance: log(T) where T = exp(-∫σdt)
-    float3 C;           // Accumulated color: C = ∫σ·c·T dt
+struct VolumeIntegrationState : IDifferentiable {
+    float logTransmittance;     // log(T) where T = exp(-∫σdt), for numerical stability
+    float3 accumulatedColor;    // C = ∫σ·c·T dt (accumulated color)
 
-    float t;            // Current ray parameter
-    float4 drgb;        // Dirac pulse: [α, α*R, α*G, α*B]
+    float rayT;                 // Current ray parameter t
+    float4 accumulatedAlphaRGB; // Running sum: [Σα, Σ(α·R), Σ(α·G), Σ(α·B)]
 
-    // Factory for empty state
+    // Factory for empty state (ray start)
     [Differentiable]
-    static SplineState makeEmpty() {
-        SplineState state;
-        state.logT = 0.0f;
-        state.C = float3(0.0f);
-        state.t = 0.0f;
-        state.drgb = float4(0.0f);
+    static VolumeIntegrationState makeEmpty() {
+        VolumeIntegrationState state;
+        state.logTransmittance = 0.0f;      // T = 1 (fully transparent)
+        state.accumulatedColor = float3(0.0f);
+        state.rayT = 0.0f;
+        state.accumulatedAlphaRGB = float4(0.0f);
         return state;
     }
 };
 
 //------------------------------------------------------------------------------
-// Control Point for Spline Machine
+// Gaussian Sample
+// Represents the contribution of a single Gaussian at a ray intersection point.
+// Used in the discrete approximation of the volume rendering integral.
 //------------------------------------------------------------------------------
 
-struct ControlPoint : IDifferentiable {
-    float t;            // Parameter position
-    float4 dirac;       // Dirac pulse coefficients [α, α*R, α*G, α*B]
+struct GaussianSample : IDifferentiable {
+    float t;                    // Ray parameter at this sample
+    float4 alphaColorProduct;   // [α, α·R, α·G, α·B] - opacity-weighted color
+                                // α = 1 - exp(-σ·Δt) is the discrete opacity
 };
 
 //------------------------------------------------------------------------------
@@ -85,20 +94,20 @@ struct ControlPoint : IDifferentiable {
 //------------------------------------------------------------------------------
 
 struct RayPayload {
-    SplineState state;
+    VolumeIntegrationState integrationState;
 
-    // Hit buffer: stores (t, triId) pairs for sorting
-    // Using uint for bit manipulation
+    // Hit buffer: stores (t, primitiveId) pairs for front-to-back sorting
+    // Using uint for bit manipulation (float bits stored as uint)
     uint hitBuffer[HIT_BUFFER_SIZE * 2];
     uint hitCount;
 
-    // Initialize payload
+    // Initialize payload for a new ray
     static RayPayload create() {
         RayPayload payload;
-        payload.state = SplineState.makeEmpty();
+        payload.integrationState = VolumeIntegrationState.makeEmpty();
         payload.hitCount = 0;
 
-        // Initialize hit buffer with large t values
+        // Initialize hit buffer with large t values (far away)
         [ForceUnroll]
         for (uint i = 0; i < HIT_BUFFER_SIZE; i++) {
             payload.hitBuffer[i * 2] = asuint(1e10f);
@@ -116,17 +125,17 @@ struct RayPayload {
 struct LaunchParams {
     // Output buffers
     RWStructuredBuffer<float4> colorOutput;
-    RWStructuredBuffer<SplineState> stateOutput;
-    RWStructuredBuffer<int> triCollection;
-    RWStructuredBuffer<uint> itersOutput;
-    RWStructuredBuffer<float4> lastDirac;
+    RWStructuredBuffer<VolumeIntegrationState> stateOutput;
+    RWStructuredBuffer<int> hitPrimitiveIds;        // Visited primitive IDs for backward pass
+    RWStructuredBuffer<uint> numSamplesPerRay;      // Number of samples processed per ray
+    RWStructuredBuffer<float4> lastSampleAlphaRGB;  // Last sample's alpha-weighted color
 
     // Input rays
     StructuredBuffer<float3> rayOrigins;
     StructuredBuffer<float3> rayDirections;
     uint numRays;
 
-    // Primitives
+    // Gaussian primitives
     StructuredBuffer<float3> means;
     StructuredBuffer<float3> scales;
     StructuredBuffer<float4> quats;
@@ -138,7 +147,7 @@ struct LaunchParams {
     // Render parameters
     float tmin;
     float tmax;
-    uint maxIters;
+    uint maxSamplesPerRay;      // Maximum Gaussian intersections per ray
     uint shDegree;
     float maxPrimSize;
 
@@ -167,7 +176,7 @@ float3x3 quatToMatrix(float4 q) {
     return m;
 }
 
-// Safe division
+// Safe division (avoid divide by zero)
 [Differentiable]
 float safeDivide(float a, float b) {
     return abs(b) < EPSILON ? 0.0f : a / b;
