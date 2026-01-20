@@ -108,13 +108,13 @@ void RTPipeline::destroy() {
     m_sbt = {};
 }
 
-RTPipeline::~OptixPipeline() {
+RTPipeline::~RTPipeline() {
     if (m_device_id >= 0) {
         destroy();
     }
 }
 
-RTPipeline::OptixPipeline(OptixPipeline&& other) noexcept
+RTPipeline::RTPipeline(RTPipeline&& other) noexcept
     : m_context(std::exchange(other.m_context, nullptr))
     , m_module(std::exchange(other.m_module, nullptr))
     , m_pipeline(std::exchange(other.m_pipeline, nullptr))
@@ -131,7 +131,7 @@ RTPipeline::OptixPipeline(OptixPipeline&& other) noexcept
     , m_pipeline_compile_options(other.m_pipeline_compile_options)
 {}
 
-OptixPipeline& RTPipeline::operator=(OptixPipeline&& other) noexcept {
+RTPipeline& RTPipeline::operator=(RTPipeline&& other) noexcept {
     if (this != &other) {
         destroy();
         m_context = std::exchange(other.m_context, nullptr);
