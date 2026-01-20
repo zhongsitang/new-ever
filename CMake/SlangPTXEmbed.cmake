@@ -11,7 +11,7 @@ include_guard(GLOBAL)
 #   SLANG_FLAGS  <flag;...>         # Extra slangc flags
 # )
 #
-# Pipeline: .slang -> .ptx -> .cpp (embedded as const char*)
+# Pipeline: .slang -> .ptx -> .cpp (embedded as unsigned char[])
 #
 function(slang_ptx_embed)
   set(_one TARGET NAME SLANG_FILE OUT_DIR)
@@ -70,16 +70,40 @@ function(slang_ptx_embed)
     VERBATIM
   )
 
-  # PTX -> C++ raw string literal
-  set(_script_content
-"file(READ \"${_ptx}\" _ptx)
-string(REPLACE \"\\\\\" \"\\\\\\\\\" _ptx \"\${_ptx}\")
-string(REPLACE \"\\\"\" \"\\\\\\\"\" _ptx \"\${_ptx}\")
-file(WRITE \"${_cpp}\" \"// Generated from ${SPE_NAME}.slang
-extern const char ${SPE_NAME}[] = R\\\"ptx(\${_ptx})ptx\\\";
-\")
-")
+  # PTX -> C++ byte array (avoids MSVC string length limits)
+  set(_script_content [=[
+file(READ "@_ptx@" _data HEX)
+string(LENGTH "${_data}" _len)
+math(EXPR _size "${_len} / 2")
 
+# Convert hex to comma-separated bytes, 16 per line
+set(_bytes "")
+set(_col 0)
+while(_len GREATER 0)
+  string(SUBSTRING "${_data}" 0 2 _byte)
+  string(SUBSTRING "${_data}" 2 -1 _data)
+  string(LENGTH "${_data}" _len)
+  if(_len GREATER 0)
+    string(APPEND _bytes "0x${_byte},")
+  else()
+    string(APPEND _bytes "0x${_byte}")
+  endif()
+  math(EXPR _col "${_col} + 1")
+  if(_col EQUAL 16 AND _len GREATER 0)
+    string(APPEND _bytes "\n  ")
+    set(_col 0)
+  endif()
+endwhile()
+
+file(WRITE "@_cpp@" "// Generated from @SPE_NAME@.slang
+extern const unsigned char @SPE_NAME@[] = {
+  ${_bytes}
+};
+extern const unsigned int @SPE_NAME@_size = ${_size};
+")
+]=])
+
+  string(CONFIGURE "${_script_content}" _script_content @ONLY)
   file(GENERATE OUTPUT "${_script}" CONTENT "${_script_content}")
 
   add_custom_command(

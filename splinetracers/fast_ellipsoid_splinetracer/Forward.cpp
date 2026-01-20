@@ -19,7 +19,6 @@
 
 #include <optix_stubs.h>
 #include <optix_stack_size.h>
-#include <cstring>
 
 // -----------------------------------------------------------------------------
 // Forward implementation
@@ -34,7 +33,8 @@ Forward::Forward(OptixDeviceContext context, int8_t device, const Primitives& mo
     CUDA_CHECK(cudaSetDevice(device));
 
     // Select PTX based on mode
-    const char* ptx = enable_backward ? shaders_ptx : fast_shaders_ptx;
+    const unsigned char* ptx = enable_backward ? shaders_ptx : fast_shaders_ptx;
+    size_t ptx_size = enable_backward ? shaders_ptx_size : fast_shaders_ptx_size;
 
     // Setup pipeline compile options
     pipeline_options_.usesMotionBlur = false;
@@ -45,7 +45,7 @@ Forward::Forward(OptixDeviceContext context, int8_t device, const Primitives& mo
     pipeline_options_.pipelineLaunchParamsVariableName = "SLANG_globalParams";
     pipeline_options_.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_CUSTOM;
 
-    create_module(ptx);
+    create_module(ptx, ptx_size);
     create_program_groups();
     create_pipeline();
     create_sbt();
@@ -61,7 +61,7 @@ Forward::Forward(OptixDeviceContext context, int8_t device, const Primitives& mo
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_param_), sizeof(Params)));
 }
 
-void Forward::create_module(const char* ptx) {
+void Forward::create_module(const unsigned char* ptx, size_t ptx_size) {
     OptixModuleCompileOptions module_options = {};
     module_options.optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_3;
     module_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
@@ -70,8 +70,8 @@ void Forward::create_module(const char* ptx) {
         context_,
         &module_options,
         &pipeline_options_,
-        ptx,
-        strlen(ptx),
+        reinterpret_cast<const char*>(ptx),
+        ptx_size,
         log_, &log_size_,
         &module_
     ));
