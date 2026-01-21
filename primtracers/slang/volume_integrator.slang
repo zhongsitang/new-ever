@@ -12,61 +12,92 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// =============================================================================
+// Volume Rendering Integration State Machine
+// =============================================================================
+// Implements front-to-back volume rendering with:
+// - Transmittance tracking (log-space for numerical stability)
+// - Color accumulation with proper alpha weighting
+// - Depth computation for expected depth maps
+// - Distortion loss for regularization
+
 #define EPS 1e-18
 import safe_math;
 #define PRE_MULTI 1000
 #define LADDER_P -0.1
 
+// -----------------------------------------------------------------------------
+// Volume Rendering State
+// -----------------------------------------------------------------------------
+
 struct VolumeState : IDifferentiable
 {
-  float2 distortion_parts;
-  float2 cum_sum;
-  float3 padding;
-  // Integration state (ray parameter and delta extinction/color)
-  float t;
-  float4 drgb;  // delta (density, r, g, b) - accumulated contribution derivative
+    // Distortion loss computation
+    float2 distortion_parts;
+    float2 cum_sum;
 
-  // Volume Rendering State (transmittance and accumulated color)
-  float logT;
-  float3 C;
+    // Depth accumulation (stored in padding[0])
+    float3 padding;
+
+    // Current ray parameter
+    float t;
+
+    // Accumulated density and density-weighted color: (σ, σ*r, σ*g, σ*b)
+    float4 accumulated_drgb;
+
+    // Volume rendering state
+    float log_transmittance;  // log(T) for numerical stability
+    float3 color;             // Accumulated color C = Σ w_i * c_i
 };
 
 VolumeState make_initial_state() {
-  return {
-    float2(0.f),
-    float2(0.f),
-    float3(0.f),
-    0.f,
-    float4(0.0f),
+    return {
+        float2(0.f),    // distortion_parts
+        float2(0.f),    // cum_sum
+        float3(0.f),    // padding (depth in [0])
+        0.f,            // t
+        float4(0.0f),   // accumulated_drgb
 
-    0.0,
-    float3(0.0f),
-  };
+        0.0,            // log_transmittance
+        float3(0.0f),   // color
+    };
 }
+
+// -----------------------------------------------------------------------------
+// Sample Point: represents a surface intersection contribution
+// -----------------------------------------------------------------------------
 
 struct SamplePoint : IDifferentiable
 {
-  float t;
-  float4 dirac;
+    float t;        // Ray parameter at intersection
+    float4 delta;   // Delta contribution: (±σ, ±σ*r, ±σ*g, ±σ*b)
+                    // Positive for entry, negative for exit
 }
 
-bool AlmostEqualRelative(float A, float B,
-                         float maxRelDiff = 1.2e-7f)
+// -----------------------------------------------------------------------------
+// Utility Functions
+// -----------------------------------------------------------------------------
+
+bool AlmostEqualRelative(float A, float B, float maxRelDiff = 1.2e-7f)
 {
     return abs(A - B) <= max(abs(A), abs(B)) * maxRelDiff;
 }
 
 VolumeState to_dual(in VolumeState state, in SamplePoint sample)
 {
-  VolumeState dual_state = state;
-  return dual_state;
+    VolumeState dual_state = state;
+    return dual_state;
 }
 
 VolumeState from_dual(in VolumeState state, in SamplePoint sample)
 {
-  VolumeState dual_state = state;
-  return dual_state;
+    VolumeState dual_state = state;
+    return dual_state;
 }
+
+// -----------------------------------------------------------------------------
+// Inverse Update (for backward pass)
+// -----------------------------------------------------------------------------
 
 VolumeState inverse_update_dual(
     in VolumeState new_state,
@@ -75,50 +106,49 @@ VolumeState inverse_update_dual(
     in float t_min,
     in float t_max)
 {
-  const float t = sample.t;
-  const float dt = max(new_state.t - t, 0.f);
+    const float t = sample.t;
+    const float dt = max(new_state.t - t, 0.f);
 
-  VolumeState state = {};
-  state.drgb = new_state.drgb - new_sample.dirac;
+    VolumeState state = {};
+    state.accumulated_drgb = new_state.accumulated_drgb - new_sample.delta;
+    state.t = t;
 
-  state.t = t;
+    float4 drgb = state.accumulated_drgb;
+    let avg = drgb;
+    float area = max(avg.x * dt, 0.f);
+    let rgb_norm = safe_div(float3(avg.y, avg.z, avg.w), avg.x);
 
-  float4 drgb = state.drgb;
+    state.log_transmittance = max(new_state.log_transmittance - area, 0.f);
+    const float weight = clip((1-safe_exp(-area)) * safe_exp(-state.log_transmittance), 0.f, 1.f);
+    state.color = new_state.color - weight * rgb_norm;
 
-  let avg = drgb;
-  float area = max(avg.x * dt, 0.f);
-  let rgb_norm = safe_div(float3(avg.y, avg.z, avg.w), avg.x);
+    float alpha = -safe_expm1(-area);
+    const float AREA_THRESHOLD = 1e-6f;
+    float segment_depth_val;
+    if (avg.x < AREA_THRESHOLD) {
+        segment_depth_val = alpha * t + (1-alpha) * state.t;
+    } else {
+        segment_depth_val = safe_div(1.f, avg.x) * (-safe_expm1(-area))
+                          - (t + t_min) * safe_exp(-area)
+                          + (state.t + t_min);
+    }
 
-  state.logT = max(new_state.logT - area, 0.f);
-  const float weight = clip((1-safe_exp(-area)) * safe_exp(-state.logT), 0.f, 1.f);
+    const float segment_depth = max(segment_depth_val, 0.f);
+    new_state.padding[0] = state.padding[0] - safe_exp(-state.log_transmittance) * segment_depth;
 
-  state.C = new_state.C - weight * rgb_norm;
-  float alpha = -safe_expm1(-area);
+    // Distortion loss
+    let m = tukey_power_ladder((new_state.t+state.t)/2 * PRE_MULTI, LADDER_P);
+    state.cum_sum.x = new_state.cum_sum.x - weight;
+    state.cum_sum.y = new_state.cum_sum.y - weight * m;
+    state.distortion_parts.x = new_state.distortion_parts.x - 2 * weight * m * state.cum_sum.x;
+    state.distortion_parts.y = new_state.distortion_parts.y - 2 * weight * state.cum_sum.y;
 
-  const float AREA_THRESHOLD = 1e-6f;
-  float segment_depth_val;
-  if (avg.x < AREA_THRESHOLD) {
-      segment_depth_val = alpha * t + (1-alpha) * state.t;
-  } else {
-      segment_depth_val = safe_div(1.f, avg.x) * (-safe_expm1(-area)) 
-                        - (t + t_min) * safe_exp(-area) 
-                        + (state.t + t_min);
-  }
-
-  const float segment_depth = max(segment_depth_val, 0.f);
-  new_state.padding[0] = state.padding[0] - safe_exp(-state.logT) * segment_depth;
-
-  // Distortion Loss
-  // make sure this is the right t. I believe this is correct.
-  let m = tukey_power_ladder((new_state.t+state.t)/2 * PRE_MULTI, LADDER_P);
-  state.cum_sum.x = new_state.cum_sum.x - weight;
-  state.cum_sum.y = new_state.cum_sum.y - weight * m;
-  state.distortion_parts.x = new_state.distortion_parts.x - 2 * weight * m * state.cum_sum.x;
-  state.distortion_parts.y = new_state.distortion_parts.y - 2 * weight * state.cum_sum.y;
-
-  return state;
+    return state;
 }
 
+// -----------------------------------------------------------------------------
+// Forward Update: integrate a sample point into volume state
+// -----------------------------------------------------------------------------
 
 [Differentiable]
 VolumeState update(
@@ -128,62 +158,61 @@ VolumeState update(
     no_diff in float t_max,
     no_diff in float max_prim_size)
 {
-  const float t = sample.t;
-  const float dt = max(t - state.t, 0.f);
+    const float t = sample.t;
+    const float dt = max(t - state.t, 0.f);
 
-  VolumeState new_state;
-  new_state.drgb = state.drgb + sample.dirac;
-  new_state.t = t;
+    VolumeState new_state;
+    new_state.accumulated_drgb = state.accumulated_drgb + sample.delta;
+    new_state.t = t;
 
-  float4 drgb = state.drgb;
+    float4 drgb = state.accumulated_drgb;
+    let avg = drgb;
+    let area = max(avg.x * dt, 0.f);
+    let rgb_norm = safe_div(float3(avg.y, avg.z, avg.w), avg.x);
 
-  let avg = drgb;
-  let area = max(avg.x * dt, 0.f);
+    new_state.log_transmittance = max(area + state.log_transmittance, 0.f);
+    float alpha = -safe_expm1(-area);
+    const float weight = clip(alpha * safe_exp(-state.log_transmittance), 0.f, 1.f);
+    new_state.color = state.color + weight * rgb_norm;
 
-  let rgb_norm = safe_div(float3(avg.y, avg.z, avg.w), avg.x);
+    const float AREA_THRESHOLD = 1e-6f;
+    float segment_depth_val;
+    if (avg.x < AREA_THRESHOLD) {
+        segment_depth_val = alpha * t + (1-alpha) * state.t;
+    } else {
+        segment_depth_val = safe_div(1.f, avg.x) * (-safe_expm1(-area))
+                          - (t + t_min) * safe_exp(-area)
+                          + (state.t + t_min);
+    }
 
-  new_state.logT = max(area + state.logT, 0.f);
-  float alpha = -safe_expm1(-area);
-  const float weight = clip(alpha * safe_exp(-state.logT), 0.f, 1.f);
-  new_state.C = state.C + weight * rgb_norm;
+    const float segment_depth = max(segment_depth_val, 0.f);
+    new_state.padding[0] = state.padding[0] + safe_exp(-state.log_transmittance) * segment_depth;
 
-  const float AREA_THRESHOLD = 1e-6f;
-  float segment_depth_val;
-  if (avg.x < AREA_THRESHOLD) {
-      segment_depth_val = alpha * t + (1-alpha) * state.t;
-  } else {
-      segment_depth_val = safe_div(1.f, avg.x) * (-safe_expm1(-area)) 
-                        - (t + t_min) * safe_exp(-area) 
-                        + (state.t + t_min);
-  }
+    // Distortion loss
+    let m = tukey_power_ladder((new_state.t+state.t)/2 * PRE_MULTI, LADDER_P);
+    new_state.distortion_parts.x = state.distortion_parts.x + 2 * weight * m * state.cum_sum.x;
+    new_state.distortion_parts.y = state.distortion_parts.y + 2 * weight * state.cum_sum.y;
+    new_state.cum_sum.x = state.cum_sum.x + weight;
+    new_state.cum_sum.y = state.cum_sum.y + weight * m;
 
-  const float segment_depth = max(segment_depth_val, 0.f);
-  new_state.padding[0] = state.padding[0] + safe_exp(-state.logT) * segment_depth;
-
-
-  // Distortion Loss
-  // make sure this is the right t. I believe this is correct.
-  let m = tukey_power_ladder((new_state.t+state.t)/2 * PRE_MULTI, LADDER_P);
-  new_state.distortion_parts.x = state.distortion_parts.x + 2 * weight * m * state.cum_sum.x;
-  new_state.distortion_parts.y = state.distortion_parts.y + 2 * weight * state.cum_sum.y;
-  new_state.cum_sum.x = state.cum_sum.x + weight;
-  new_state.cum_sum.y = state.cum_sum.y + weight * m;
-
-  return new_state;
+    return new_state;
 }
 
+// -----------------------------------------------------------------------------
+// Output Extraction
+// -----------------------------------------------------------------------------
+
 struct RenderOutput: IDifferentiable {
-  float3 C;
-  float depth;
-  float distortion_loss;
+    float3 C;
+    float depth;
+    float distortion_loss;
 };
 
 [Differentiable]
 RenderOutput extract_color(in VolumeState state, in float tmin) {
-  // let opacity = 1-exp(-state.logT);
-  return {
-    state.C,
-    state.padding[0],
-    state.distortion_parts.x - state.distortion_parts.y
-  };
+    return {
+        state.color,
+        state.padding[0],
+        state.distortion_parts.x - state.distortion_parts.y
+    };
 }

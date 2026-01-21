@@ -12,200 +12,258 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// =============================================================================
+// OptiX Ray Tracing Shaders for Volume Rendering
+// =============================================================================
+// Implements ellipsoid primitive ray tracing with sorted hit buffer for
+// front-to-back volume integration.
+
 #define RT_EPS 0
-#define tri_per_g 2
-#define LOG_CUTOFF 5.54
-#define BUFFER_SIZE 16
+#define SURFACES_PER_PRIM 2          // Each primitive has entry and exit surfaces
+#define TRANSMITTANCE_CUTOFF 5.54    // log(T) threshold for early termination
+#define HIT_BUFFER_SIZE 16           // Sorted hit buffer capacity
+
 import volume_integrator;
 import ellipsoid_intersect;
 import safe_math;
 import spherical_harmonics;
 
+// -----------------------------------------------------------------------------
+// Camera Parameters
+// -----------------------------------------------------------------------------
+
 struct Camera {
-    float fx, fy;
-    int height;
-    int width;
-    float3 U, V, W;
-    float3 eye;
+    float fx, fy;           // Focal lengths
+    int image_height;       // Image dimensions
+    int image_width;
+    float3 U, V, W;         // Camera basis vectors
+    float3 eye;             // Camera position
 };
 
-// Sorted hit buffer payload
+// -----------------------------------------------------------------------------
+// Hit Buffer: sorted list of surface intersections
+// -----------------------------------------------------------------------------
+
 struct HitBuffer {
-    float t[BUFFER_SIZE];
-    uint idx[BUFFER_SIZE];
+    float t[HIT_BUFFER_SIZE];           // Intersection distances (sorted)
+    uint surface_id[HIT_BUFFER_SIZE];   // Surface IDs: prim_idx * 2 + (1=entry, 0=exit)
 };
 
-// Intersection attribute: stores the other t value
-struct HitAttr {
-    uint other_t;  // asuint(float)
+// Intersection attribute: stores the complementary intersection distance
+struct IntersectAttr {
+    uint other_t_bits;  // asuint(float) of the other intersection t
 };
 
-// LaunchParams
+// -----------------------------------------------------------------------------
+// Launch Parameters (global buffers)
+// -----------------------------------------------------------------------------
+
+// Output buffers
 RWStructuredBuffer<float4>      image;
 RWStructuredBuffer<uint>        iters;
-RWStructuredBuffer<uint>        last_face;
-RWStructuredBuffer<uint>        touch_count;
-RWStructuredBuffer<float4>      last_dirac;
+RWStructuredBuffer<uint>        last_surface;
+RWStructuredBuffer<uint>        prim_hit_count;
+RWStructuredBuffer<float4>      last_delta;
 RWStructuredBuffer<VolumeState> last_state;
-RWStructuredBuffer<int> tri_collection;
-StructuredBuffer<float3>      ray_origins;
-StructuredBuffer<float3>      ray_directions;
+RWStructuredBuffer<int>         hit_log;
+
+// Ray parameters
+StructuredBuffer<float3>        ray_origins;
+StructuredBuffer<float3>        ray_directions;
 Camera camera;
 
-RWStructuredBuffer<float3> means;
-RWStructuredBuffer<float3> scales;
-RWStructuredBuffer<float4> quats;
-RWStructuredBuffer<float> densities;
-RWStructuredBuffer<float> features;
+// Primitive data
+RWStructuredBuffer<float3>      means;
+RWStructuredBuffer<float3>      scales;
+RWStructuredBuffer<float4>      quats;
+RWStructuredBuffer<float>       densities;
+RWStructuredBuffer<float>       features;
 
+// Rendering parameters
 size_t sh_degree;
 size_t max_iters;
 float tmin;
 float tmax;
-RWStructuredBuffer<float4> initial_drgb;
+RWStructuredBuffer<float4>      initial_accumulated_drgb;
 float max_prim_size;
 RaytracingAccelerationStructure traversable;
 
+// -----------------------------------------------------------------------------
+// Sample Point Construction
+// -----------------------------------------------------------------------------
 
-SamplePoint get_sample(uint tri, float t) {
+// Create a sample point from a surface hit
+// surface_id encodes: prim_idx * 2 + hit_kind (1=entry, 0=exit)
+SamplePoint get_sample(uint surface_id, float t) {
     SamplePoint sample;
-    let prim_ind = tri / 2;
-    let hitkind = tri % 2;
-    let height = densities[prim_ind];
-    let dirac_height = height * ((hitkind == 1) ? 1 : -1);
+    let prim_idx = surface_id / SURFACES_PER_PRIM;
+    let is_entry = (surface_id % SURFACES_PER_PRIM) == 1;
+
+    // Get density with sign: positive for entry, negative for exit
+    let density = densities[prim_idx];
+    let signed_density = density * (is_entry ? 1.0f : -1.0f);
+
+    // Evaluate color from spherical harmonics
     Features feat;
-    SHFeatures sh_feats = {prim_ind, sh_degree, features};
+    SHFeatures sh_feats = {prim_idx, sh_degree, features};
     feat.f0 = get_sh(sh_feats, 0);
     float3 rayd = {0, 0, 1};
     let color = eval_sh_col0(rayd, feat);
+
+    // Build delta contribution: (+-sigma, +-sigma*r, +-sigma*g, +-sigma*b)
     sample.t = t;
-    sample.dirac.x = dirac_height;
-    sample.dirac.y = dirac_height * color.x;
-    sample.dirac.z = dirac_height * color.y;
-    sample.dirac.w = dirac_height * color.z;
+    sample.delta.x = signed_density;
+    sample.delta.y = signed_density * color.x;
+    sample.delta.z = signed_density * color.y;
+    sample.delta.w = signed_density * color.z;
+
     return sample;
 }
 
+// -----------------------------------------------------------------------------
+// Intersection Shader: Ray-Ellipsoid Intersection
+// -----------------------------------------------------------------------------
+
 [shader("intersection")]
 void ellipsoid() {
-    uint prim_ind = PrimitiveIndex();
+    uint prim_idx = PrimitiveIndex();
 
     float3 rayd = WorldRayDirection();
     float3 rayo = WorldRayOrigin();
 
-    let mean = means[prim_ind];
-    let scale = scales[prim_ind];
-    let quat = quats[prim_ind];
-    float2 minmaxt = ray_intersect_ellipsoid(rayo - mean, rayd, scale, quat);
+    let mean = means[prim_idx];
+    let scale = scales[prim_idx];
+    let quat = quats[prim_idx];
+
+    // Compute entry/exit t values
+    float2 t_entry_exit = ray_intersect_ellipsoid(rayo - mean, rayd, scale, quat);
 
     float cur_t = RayTMin();
-    if ((minmaxt.y < cur_t)) {
-        return;
-    } else {
-        bool use_min = cur_t < minmaxt.x;
-        if (use_min) {
-            ReportHitOptix(minmaxt.x, 1u, asuint(minmaxt.y));
-        } else if (cur_t < minmaxt.y){
-            ReportHitOptix(minmaxt.y, 0u, asuint(minmaxt.x));
-        }
+    if (t_entry_exit.y < cur_t) {
+        return;  // Ray starts after ellipsoid
+    }
+
+    // Report the first valid intersection
+    bool hit_entry = cur_t < t_entry_exit.x;
+    if (hit_entry) {
+        // Entry hit: report entry t, store exit t as attribute
+        ReportHitOptix(t_entry_exit.x, 1u, asuint(t_entry_exit.y));
+    } else if (cur_t < t_entry_exit.y) {
+        // Exit hit: report exit t, store entry t as attribute
+        ReportHitOptix(t_entry_exit.y, 0u, asuint(t_entry_exit.x));
     }
 }
+
+// -----------------------------------------------------------------------------
+// Closest Hit Shader (unused but required)
+// -----------------------------------------------------------------------------
 
 [shader("closesthit")]
-void ch(inout HitBuffer buf, in HitAttr attr)
+void closesthit(inout HitBuffer buf, in IntersectAttr attr)
 {
 }
 
+// -----------------------------------------------------------------------------
+// Any Hit Shader: Insert hits into sorted buffer
+// -----------------------------------------------------------------------------
+
 [shader("anyhit")]
-void ah(inout HitBuffer buf, in HitAttr attr)
+void anyhit(inout HitBuffer buf, in IntersectAttr attr)
 {
     float t = RayTCurrent();
-    float other_t = asfloat(attr.other_t);
-    uint ind = PrimitiveIndex();
-    uint hitkind = HitKind();
-    if (hitkind == 0) {
-        float temp_t = other_t;
+    float other_t = asfloat(attr.other_t_bits);
+    uint prim_idx = PrimitiveIndex();
+    uint hit_kind = HitKind();
+
+    // Ensure t is entry and other_t is exit
+    if (hit_kind == 0) {
+        float temp = other_t;
         other_t = t;
-        t = temp_t;
+        t = temp;
     }
 
     float cur_t = RayTMin();
 
-    float h_t;
-    uint h_i;
+    // Insert both entry and exit into sorted buffer
+    for (int n = 0; n < 2; n++) {
+        float hit_t;
+        uint surface_id;
 
-    float test_t;
-    uint test_i;
-
-    for (int n=0; n<2; n++) {
         if (n == 0) {
-            h_t = t;
-            h_i = 2 * ind + 1;
+            hit_t = t;
+            surface_id = 2 * prim_idx + 1;  // Entry surface
         } else {
-            h_t = other_t;
-            h_i = 2 * ind;
+            hit_t = other_t;
+            surface_id = 2 * prim_idx;      // Exit surface
         }
-        if (h_t > cur_t) {
+
+        if (hit_t > cur_t) {
+            // Insertion sort into buffer
             [ForceUnroll]
-            for (int i=0; i<BUFFER_SIZE; i++) {
-                test_t = buf.t[i];
-                if (h_t < test_t) {
-                    buf.t[i] = h_t;
-                    test_i = buf.idx[i];
-                    buf.idx[i] = h_i;
-                    h_i = test_i;
-                    h_t = test_t;
+            for (int i = 0; i < HIT_BUFFER_SIZE; i++) {
+                float test_t = buf.t[i];
+                if (hit_t < test_t) {
+                    buf.t[i] = hit_t;
+                    uint test_id = buf.surface_id[i];
+                    buf.surface_id[i] = surface_id;
+                    surface_id = test_id;
+                    hit_t = test_t;
                 }
             }
         }
     }
 
-    if (t < buf.t[BUFFER_SIZE-1]) {
+    // Continue tracing if buffer not full with closer hits
+    if (t < buf.t[HIT_BUFFER_SIZE - 1]) {
         IgnoreHit();
     }
 }
 
+// -----------------------------------------------------------------------------
+// Miss Shader
+// -----------------------------------------------------------------------------
+
 [shader("miss")]
-void ms(inout HitBuffer buf)
+void miss(inout HitBuffer buf)
 {
 }
+
+// -----------------------------------------------------------------------------
+// Ray Generation Shader: Main rendering entry point
+// -----------------------------------------------------------------------------
 
 [shader("raygeneration")]
 void rg_float()
 {
-    let FAST_MODE = false;
-
     const uint3 idx = DispatchRaysIndex();
     const uint3 dim = DispatchRaysDimensions();
+
+    // Initialize ray
     float3 direction = l2_normalize(ray_directions[idx.x]);
     float3 origin = ray_origins[idx.x] + tmin * ray_directions[idx.x];
+
+    // Initialize volume state
     VolumeState state = make_initial_state();
     state.t = 0;
-    state.drgb = initial_drgb[idx.x];
-
-    let start_id = idx.x * max_iters;
+    state.accumulated_drgb = initial_accumulated_drgb[idx.x];
 
     SamplePoint sample = {};
-    uint last_tri = -1;
-    float prev_t = state.t;
-    uint next_tri = -1;
-    float next_t = 1e20;
-
-    uint tri;
-
+    uint prev_surface = -1;
     int iter = 0;
-    while (state.logT < LOG_CUTOFF && iter < max_iters)
+
+    // Main ray marching loop
+    while (state.log_transmittance < TRANSMITTANCE_CUTOFF && iter < max_iters)
     {
         let start_t = abs(state.t);
 
-        // Initialize hit buffer
+        // Initialize hit buffer with sentinel values
         HitBuffer buf;
-        for (int i=0; i<BUFFER_SIZE; i++) {
+        for (int i = 0; i < HIT_BUFFER_SIZE; i++) {
             buf.t[i] = 1e10f;
-            buf.idx[i] = 0;
+            buf.surface_id[i] = 0;
         }
 
-        // Trace ray using native Slang TraceRay
+        // Trace ray
         RayDesc ray;
         ray.Origin = origin;
         ray.Direction = direction;
@@ -214,29 +272,38 @@ void rg_float()
 
         TraceRay(traversable, RAY_FLAG_NONE, 0xff, 0, 0, 0, ray, buf);
 
-        bool end = false;
-        for (int i=0; i<BUFFER_SIZE; i++) {
+        // Process hits from buffer
+        bool ray_escaped = false;
+        for (int i = 0; i < HIT_BUFFER_SIZE; i++) {
             sample.t = buf.t[i];
-            tri = buf.idx[i];
+            uint surface_id = buf.surface_id[i];
+
             if (sample.t > 1e9) {
-                end = true;
+                ray_escaped = true;
                 break;
             }
-            sample = get_sample(tri, sample.t);
-            state = update(state, sample, tmin, tmax, max_prim_size);
-            touch_count[tri / tri_per_g]++;
-            tri_collection[idx.x + iter * dim.x] = tri;
-            iter++;
-            if (!(state.logT < LOG_CUTOFF && iter < max_iters)) break;
-        }
-        if (end) break;
 
+            // Integrate sample into volume state
+            sample = get_sample(surface_id, sample.t);
+            state = update(state, sample, tmin, tmax, max_prim_size);
+
+            // Record hit
+            prim_hit_count[surface_id / SURFACES_PER_PRIM]++;
+            hit_log[idx.x + iter * dim.x] = surface_id;
+            iter++;
+
+            if (!(state.log_transmittance < TRANSMITTANCE_CUTOFF && iter < max_iters)) break;
+        }
+        if (ray_escaped) break;
     }
+
+    // Extract final color and write outputs
     let output = extract_color(state, tmin);
     image[idx.x] = {output.C.x, output.C.y, output.C.z, output.depth};
+
     let dual_state = to_dual(state, sample);
     last_state[idx.x] = dual_state;
-    last_dirac[idx.x] = sample.dirac;
-    last_face[idx.x] = last_tri;
+    last_delta[idx.x] = sample.delta;
+    last_surface[idx.x] = prev_surface;
     iters[idx.x] = iter;
 }

@@ -21,9 +21,9 @@
 #include <optix_stack_size.h>
 #include <cstring>
 
-// -----------------------------------------------------------------------------
-// RayPipeline implementation
-// -----------------------------------------------------------------------------
+// =============================================================================
+// RayPipeline Implementation
+// =============================================================================
 
 RayPipeline::RayPipeline(OptixDeviceContext context, int8_t device, const Primitives& model, bool enable_backward)
     : enable_backward(enable_backward)
@@ -90,7 +90,7 @@ void RayPipeline::create_program_groups() {
     OptixProgramGroupDesc miss_desc = {};
     miss_desc.kind = OPTIX_PROGRAM_GROUP_KIND_MISS;
     miss_desc.miss.module = module_;
-    miss_desc.miss.entryFunctionName = "__miss__ms";
+    miss_desc.miss.entryFunctionName = "__miss__miss";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
         context_, &miss_desc, 1, &pg_options, log_, &log_size_, &miss_pg_
     ));
@@ -99,7 +99,7 @@ void RayPipeline::create_program_groups() {
     OptixProgramGroupDesc hitgroup_desc = {};
     hitgroup_desc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
     hitgroup_desc.hitgroup.moduleAH = module_;
-    hitgroup_desc.hitgroup.entryFunctionNameAH = "__anyhit__ah";
+    hitgroup_desc.hitgroup.entryFunctionNameAH = "__anyhit__anyhit";
     hitgroup_desc.hitgroup.moduleIS = module_;
     hitgroup_desc.hitgroup.entryFunctionNameIS = "__intersection__ellipsoid";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
@@ -186,16 +186,16 @@ void RayPipeline::trace_rays(
     void* image_out,
     uint sh_degree,
     float tmin, float tmax,
-    float4* initial_drgb,
+    float4* initial_accumulated_drgb,
     Cam* camera,
     size_t max_iters,
     float max_prim_size,
     uint* iters,
-    uint* last_face,
-    uint* touch_count,
-    float4* last_dirac,
+    uint* last_surface,
+    uint* prim_hit_count,
+    float4* last_delta,
     VolumeState* last_state,
-    int* tri_collection,
+    int* hit_log,
     int* d_touch_count,
     int* d_touch_inds)
 {
@@ -204,11 +204,11 @@ void RayPipeline::trace_rays(
     // Setup params
     params_.image = {reinterpret_cast<float4*>(image_out), num_rays};
     params_.last_state = {last_state, num_rays};
-    params_.last_dirac = {last_dirac, num_rays};
-    params_.tri_collection = {tri_collection, num_rays * max_iters};
+    params_.last_delta = {last_delta, num_rays};
+    params_.hit_log = {hit_log, num_rays * max_iters};
     params_.iters = {iters, num_rays};
-    params_.last_face = {last_face, num_rays};
-    params_.touch_count = {touch_count, num_prims};
+    params_.last_surface = {last_surface, num_rays};
+    params_.prim_hit_count = {prim_hit_count, num_prims};
     params_.sh_degree = sh_degree;
     params_.max_prim_size = max_prim_size;
     params_.max_iters = max_iters;
@@ -221,8 +221,8 @@ void RayPipeline::trace_rays(
         params_.camera = *camera;
     }
 
-    CUDA_CHECK(cudaMemset(initial_drgb, 0, num_rays * sizeof(float4)));
-    params_.initial_drgb = {initial_drgb, num_rays};
+    CUDA_CHECK(cudaMemset(initial_accumulated_drgb, 0, num_rays * sizeof(float4)));
+    params_.initial_accumulated_drgb = {initial_accumulated_drgb, num_rays};
 
     init_ray_start_samples(&params_, model_->aabbs, d_touch_count, d_touch_inds);
 
@@ -232,7 +232,7 @@ void RayPipeline::trace_rays(
 
     if (camera) {
         OPTIX_CHECK(optixLaunch(pipeline_, stream_, d_param_, sizeof(Params), &sbt_,
-                                camera->width, camera->height, 1));
+                                camera->image_width, camera->image_height, 1));
     } else {
         OPTIX_CHECK(optixLaunch(pipeline_, stream_, d_param_, sizeof(Params), &sbt_,
                                 num_rays, 1, 1));

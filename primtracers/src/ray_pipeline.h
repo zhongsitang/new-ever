@@ -31,7 +31,10 @@ using uint = uint32_t;
 // Embedded PTX code (generated header)
 #include "shaders_ptx.h"
 
-// SBT record types
+// =============================================================================
+// SBT Record Types
+// =============================================================================
+
 struct RayGenData {};
 struct MissData { float3 bg_color; };
 struct HitGroupData {};
@@ -40,34 +43,46 @@ using RayGenSbtRecord   = SbtRecord<RayGenData>;
 using MissSbtRecord     = SbtRecord<MissData>;
 using HitGroupSbtRecord = SbtRecord<HitGroupData>;
 
-// Launch parameters - must match slang layout exactly
+// =============================================================================
+// Launch Parameters (must match Slang layout exactly)
+// =============================================================================
 // Note: StructuredBuffer<T> = {T* data, size_t size} (16 bytes with padding)
+
 struct Params {
+    // Output buffers
     StructuredBuffer<float4> image;
     StructuredBuffer<uint> iters;
-    StructuredBuffer<uint> last_face;
-    StructuredBuffer<uint> touch_count;
-    StructuredBuffer<float4> last_dirac;
+    StructuredBuffer<uint> last_surface;
+    StructuredBuffer<uint> prim_hit_count;
+    StructuredBuffer<float4> last_delta;
     StructuredBuffer<VolumeState> last_state;
-    StructuredBuffer<int> tri_collection;
+    StructuredBuffer<int> hit_log;
+
+    // Ray parameters
     StructuredBuffer<float3> ray_origins;
     StructuredBuffer<float3> ray_directions;
     Cam camera;
 
+    // Primitive data
     StructuredBuffer<float3> means;
     StructuredBuffer<float3> scales;
     StructuredBuffer<float4> quats;
     StructuredBuffer<float> densities;
     StructuredBuffer<float> features;
 
+    // Rendering parameters
     size_t sh_degree;
     size_t max_iters;
     float tmin;
     float tmax;
-    StructuredBuffer<float4> initial_drgb;
+    StructuredBuffer<float4> initial_accumulated_drgb;
     float max_prim_size;
     OptixTraversableHandle handle;
 };
+
+// =============================================================================
+// Ray Tracing Pipeline
+// =============================================================================
 
 class RayPipeline {
 public:
@@ -87,16 +102,16 @@ public:
         void* image_out,
         uint sh_degree,
         float tmin, float tmax,
-        float4* initial_drgb,
+        float4* initial_accumulated_drgb,
         Cam* camera = nullptr,
         size_t max_iters = 10000,
         float max_prim_size = 3.0f,
         uint* iters = nullptr,
-        uint* last_face = nullptr,
-        uint* touch_count = nullptr,
-        float4* last_dirac = nullptr,
+        uint* last_surface = nullptr,
+        uint* prim_hit_count = nullptr,
+        float4* last_delta = nullptr,
         VolumeState* last_state = nullptr,
-        int* tri_collection = nullptr,
+        int* hit_log = nullptr,
         int* d_touch_count = nullptr,
         int* d_touch_inds = nullptr
     );

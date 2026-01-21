@@ -13,9 +13,13 @@
 // limitations under the License.
 
 #pragma once
-#include "glm/glm.hpp"
+#include <cuda_runtime.h>
 #include <optix.h>
 #include <optix_types.h>
+
+// =============================================================================
+// OptiX SBT Record Template
+// =============================================================================
 
 template <typename T>
 struct SbtRecord
@@ -24,51 +28,76 @@ struct SbtRecord
     T data;
 };
 
-template <typename T> struct StructuredBuffer {
-  T *data;
-  size_t size;
+// =============================================================================
+// Structured Buffer (matches Slang StructuredBuffer layout)
+// =============================================================================
+
+template <typename T>
+struct StructuredBuffer {
+    T *data;
+    size_t size;
 };
 
+// =============================================================================
+// Hit Data: primitive parameters at intersection
+// =============================================================================
 
 struct HitData {
     float3 scales;
     float3 mean;
     float4 quat;
-    float height;
+    float density;
 };
 
-struct VolumeState//((packed))
+// =============================================================================
+// Volume Rendering State (must match Slang VolumeState layout exactly)
+// =============================================================================
+
+struct VolumeState
 {
-  float2 distortion_parts;
-  float2 cum_sum;
-  float3 padding;
-  // Integration state (ray parameter and delta extinction/color)
-  float t;
-  float4 drgb;  // delta (density, r, g, b) - accumulated contribution derivative
+    // Distortion loss computation
+    float2 distortion_parts;
+    float2 cum_sum;
 
-  // Volume Rendering State (transmittance and accumulated color)
-  float logT;
-  float3 C;
+    // Depth accumulation (stored in padding[0])
+    float3 padding;
+
+    // Current ray parameter
+    float t;
+
+    // Accumulated density and density-weighted color: (sigma, sigma*r, sigma*g, sigma*b)
+    float4 accumulated_drgb;
+
+    // Volume rendering state
+    float log_transmittance;  // log(T) for numerical stability
+    float3 color;             // Accumulated color C = sum(w_i * c_i)
 };
 
-// Always on GPU
+// =============================================================================
+// Primitive Collection (GPU-resident)
+// =============================================================================
+
 struct Primitives {
-  float3 *means;
-  float3 *scales;
-  float4 *quats;
-  float *densities;
-  size_t num_prims;
-  float *features;
-  size_t feature_size;
+    float3 *means;
+    float3 *scales;
+    float4 *quats;
+    float *densities;
+    size_t num_prims;
+    float *features;
+    size_t feature_size;
 
-  OptixAabb *aabbs;
-  size_t prev_alloc_size;
+    OptixAabb *aabbs;
+    size_t prev_alloc_size;
 };
+
+// =============================================================================
+// Camera Parameters (must match Slang Camera layout exactly)
+// =============================================================================
 
 struct Cam {
-    float fx, fy;
-    int height;
-    int width;
-    float3 U, V, W;
-    float3 eye;
+    float fx, fy;           // Focal lengths
+    int image_height;       // Image dimensions
+    int image_width;
+    float3 U, V, W;         // Camera basis vectors
+    float3 eye;             // Camera position
 };
