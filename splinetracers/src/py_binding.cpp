@@ -24,12 +24,12 @@
 
 #include "Forward.h"
 #include "GAS.h"
-#include "create_aabbs.h"
+#include "cuda_kernels.h"
 #include "exception.h"
-//#include "ply_file_loader.h"
 
 namespace py = pybind11;
 using namespace pybind11::literals; // to bring in the `_a` literal
+
 #define CHECK_CUDA(x)                                                          \
   TORCH_CHECK(x.device().is_cuda(), #x " must be a CUDA tensor")
 #define CHECK_DEVICE(x)                                                        \

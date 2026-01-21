@@ -60,20 +60,16 @@ set(SLANG_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/splinetracers/slang")
 pybind11_add_module(ellipsoid_splinetracer MODULE
   ${TRACER_DIR}/Forward.cpp
   ${TRACER_DIR}/Forward.h
-  ${TRACER_DIR}/GAS.cpp
   ${TRACER_DIR}/GAS.h
   ${TRACER_DIR}/py_binding.cpp
   ${TRACER_DIR}/structs.h
   ${TRACER_DIR}/CUDABuffer.h
-  ${TRACER_DIR}/create_aabbs.cu
-  ${TRACER_DIR}/create_aabbs.h
-  ${TRACER_DIR}/initialize_density.cu
-  ${TRACER_DIR}/initialize_density.h
+  ${TRACER_DIR}/cuda_kernels.cu
+  ${TRACER_DIR}/cuda_kernels.h
 )
 
 set_source_files_properties(
-  ${TRACER_DIR}/create_aabbs.cu
-  ${TRACER_DIR}/initialize_density.cu
+  ${TRACER_DIR}/cuda_kernels.cu
   PROPERTIES LANGUAGE CUDA
 )
 
@@ -84,14 +80,6 @@ slang_ptx_embed(
   TARGET       ellipsoid_splinetracer
   NAME         shaders_ptx
   SLANG_FILE   ${SLANG_DIR}/shaders.slang
-  INCLUDE_DIRS ${SLANG_DIR}
-  NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS} ${OptiX_ROOT}/include
-)
-
-slang_ptx_embed(
-  TARGET       ellipsoid_splinetracer
-  NAME         fast_shaders_ptx
-  SLANG_FILE   ${SLANG_DIR}/fast_shaders.slang
   INCLUDE_DIRS ${SLANG_DIR}
   NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS} ${OptiX_ROOT}/include
 )

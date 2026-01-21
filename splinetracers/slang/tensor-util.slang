@@ -13,7 +13,6 @@
 // limitations under the License.
 
 import sh;
-import sh_half;
 
 float3 get_float3(TensorView<float> view, uint ind) {
     return {
