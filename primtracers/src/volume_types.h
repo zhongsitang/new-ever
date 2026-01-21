@@ -44,8 +44,8 @@ struct IntegratorState
   float2 distortion_parts;
   float2 cum_sum;
 
-  // Depth accumulator (stored in padding for memory layout compatibility)
-  float3 padding;
+  // Depth accumulator ([0] used, [1-2] reserved for memory layout compatibility)
+  float3 depth_accum;
 
   // Current ray parameter t
   float t;

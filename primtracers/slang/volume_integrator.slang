@@ -44,8 +44,8 @@ struct IntegratorState : IDifferentiable
     float2 distortion_parts;
     float2 cum_sum;
 
-    // Depth accumulator (stored in padding for memory layout compatibility)
-    float3 padding;
+    // Depth accumulator ([0] used, [1-2] reserved for memory layout compatibility)
+    float3 depth_accum;
 
     // Current ray parameter t
     float t;
@@ -154,7 +154,7 @@ IntegratorState inverse_update_dual(
     }
 
     const float segment_depth = max(segment_depth_val, 0.f);
-    new_state.padding[0] = state.padding[0] - safe_exp(-state.logT) * segment_depth;
+    new_state.depth_accum[0] = state.depth_accum[0] - safe_exp(-state.logT) * segment_depth;
 
     // Distortion Loss computation
     let m = tukey_power_ladder((new_state.t + state.t) / 2 * PRE_MULTI, LADDER_P);
@@ -211,7 +211,7 @@ IntegratorState update(
     }
 
     const float segment_depth = max(segment_depth_val, 0.f);
-    new_state.padding[0] = state.padding[0] + safe_exp(-state.logT) * segment_depth;
+    new_state.depth_accum[0] = state.depth_accum[0] + safe_exp(-state.logT) * segment_depth;
 
     // Distortion Loss computation
     let m = tukey_power_ladder((new_state.t + state.t) / 2 * PRE_MULTI, LADDER_P);
@@ -241,7 +241,7 @@ RenderOutput extract_color(in IntegratorState state, in float tmin)
 {
     return {
         state.C,
-        state.padding[0],
+        state.depth_accum[0],
         state.distortion_parts.x - state.distortion_parts.y
     };
 }
