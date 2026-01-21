@@ -13,6 +13,13 @@
 // limitations under the License.
 
 #pragma once
+#include "Forward.h"
 #include "structs.h"
 
+// AABB creation
 void create_aabbs(Primitives &prims);
+
+// Density initialization
+void initialize_density(Params *params, OptixAabb *aabbs, int *d_touch_count=NULL, int *d_touch_inds=NULL);
+void initialize_density_so(Params *params);
+void initialize_density_zero(Params *params);

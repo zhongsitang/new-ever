@@ -15,7 +15,7 @@
 #include "Forward.h"
 #include "exception.h"
 #include "CUDABuffer.h"
-#include "initialize_density.h"
+#include "cuda_kernels.h"
 
 #include <optix_stubs.h>
 #include <optix_stack_size.h>

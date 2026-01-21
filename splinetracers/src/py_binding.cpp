@@ -24,7 +24,7 @@
 
 #include "Forward.h"
 #include "GAS.h"
-#include "create_aabbs.h"
+#include "cuda_kernels.h"
 #include "exception.h"
 
 namespace py = pybind11;
