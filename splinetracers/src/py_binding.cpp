@@ -26,7 +26,6 @@
 #include "GAS.h"
 #include "create_aabbs.h"
 #include "exception.h"
-//#include "ply_file_loader.h"
 
 namespace py = pybind11;
 using namespace pybind11::literals; // to bring in the `_a` literal
