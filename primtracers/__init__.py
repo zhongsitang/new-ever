@@ -18,11 +18,11 @@ from typing import Any
 import torch
 from torch.autograd import Function
 
-from . import ellipsoid_tracer as sp
+from . import ellipsoid_tracer as tracer
 from . import backwards_kernel
 from . import sh_kernel
 
-otx = sp.OptixContext(torch.device("cuda:0"))
+otx = tracer.OptixContext(torch.device("cuda:0"))
 
 
 # =============================================================================
@@ -47,7 +47,7 @@ class PrimTracer(Function):
         return_extras: bool = False,
     ):
         ctx.device = rayo.device
-        ctx.prims = sp.Primitives(ctx.device)
+        ctx.prims = tracer.Primitives(ctx.device)
         assert mean.device == ctx.device
         mean = mean.contiguous()
         scale = scale.contiguous()
@@ -56,8 +56,8 @@ class PrimTracer(Function):
         color = color.contiguous()
         ctx.prims.add_primitives(mean, scale, quat, density, color)
 
-        ctx.gas = sp.GAS(otx, ctx.device, ctx.prims, True, False, True)
-        ctx.forward = sp.Forward(otx, ctx.device, ctx.prims, True)
+        ctx.gas = tracer.GAS(otx, ctx.device, ctx.prims, True, False, True)
+        ctx.forward = tracer.Forward(otx, ctx.device, ctx.prims, True)
         ctx.max_iters = max_iters
         out = ctx.forward.trace_rays(ctx.gas, rayo, rayd, tmin, tmax, ctx.max_iters, max_prim_size)
         ctx.saved = out["saved"]
