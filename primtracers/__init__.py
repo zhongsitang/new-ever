@@ -57,9 +57,9 @@ class PrimTracer(Function):
         ctx.prims.add_primitives(mean, scale, quat, density, color)
 
         ctx.gas = tracer.GAS(otx, ctx.device, ctx.prims, True, False, True)
-        ctx.forward = tracer.Forward(otx, ctx.device, ctx.prims, True)
+        ctx.pipeline = tracer.RayPipeline(otx, ctx.device, ctx.prims, True)
         ctx.max_iters = max_iters
-        out = ctx.forward.trace_rays(ctx.gas, rayo, rayd, tmin, tmax, ctx.max_iters, max_prim_size)
+        out = ctx.pipeline.trace_rays(ctx.gas, rayo, rayd, tmin, tmax, ctx.max_iters, max_prim_size)
         ctx.saved = out["saved"]
         ctx.max_prim_size = max_prim_size
         ctx.tmin = tmin

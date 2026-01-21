@@ -284,7 +284,7 @@ PYBIND11_MODULE(ellipsoid_tracer, m) {
   py::class_<fesPyGas>(m, "GAS").def(
       py::init<const fesOptixContext &, const torch::Device &,
                const fesPyPrimitives &, const bool, const bool, const bool>());
-  py::class_<fesPyRayPipeline>(m, "Forward")
+  py::class_<fesPyRayPipeline>(m, "RayPipeline")
       .def(py::init<const fesOptixContext &, const torch::Device &,
                     const fesPyPrimitives &, const bool>())
       .def("trace_rays", &fesPyRayPipeline::trace_rays)
