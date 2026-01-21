@@ -231,8 +231,9 @@ IntegratorState update(
 struct RenderOutput : IDifferentiable
 {
     float3 C;              // Accumulated color
+    float alpha;           // Opacity (1 - transmittance)
     float depth;           // Expected depth
-    float distortion_loss; // Distortion regularization loss
+    float distortion_loss; // Distortion regularization loss (moved to extras in Python)
 };
 
 /// Extract final color and depth from volume state.
@@ -241,6 +242,7 @@ RenderOutput extract_color(in IntegratorState state, in float tmin)
 {
     return {
         state.C,
+        -safe_expm1(-state.logT),  // alpha = 1 - exp(-logT)
         state.depth_accum[0],
         state.distortion_parts.x - state.distortion_parts.y
     };

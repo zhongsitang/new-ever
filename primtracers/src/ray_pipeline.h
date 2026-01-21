@@ -43,7 +43,7 @@ using HitGroupSbtRecord = SbtRecord<HitGroupData>;
 // Launch parameters - must match slang layout exactly
 // Note: StructuredBuffer<T> = {T* data, size_t size} (16 bytes with padding)
 struct Params {
-    StructuredBuffer<float4> image;                    // Rendered RGBA output
+    StructuredBuffer<float> image;                     // Rendered output (R, G, B, A, depth) per ray
     StructuredBuffer<uint> iters;                      // Iteration count per ray
     StructuredBuffer<uint> last_prim;                  // Last primitive hit
     StructuredBuffer<uint> primitive_hit_count;        // Hit count per primitive
@@ -63,7 +63,7 @@ struct Params {
     size_t sh_degree;                                  // Spherical harmonics degree
     size_t max_iters;                                  // Maximum iterations per ray
     float tmin;                                        // Minimum ray t
-    float tmax;                                        // Maximum ray t
+    StructuredBuffer<float> tmax;                      // Maximum ray t (per-ray)
     StructuredBuffer<float4> initial_contrib;          // Initial accumulated contribution
     float max_prim_size;                               // Maximum primitive size
     OptixTraversableHandle handle;                     // BVH acceleration structure
@@ -84,9 +84,9 @@ public:
         size_t num_rays,
         float3* ray_origins,
         float3* ray_directions,
-        float4* image_out,
+        float* image_out,                          // (R, G, B, A, depth) * num_rays
         uint sh_degree,
-        float tmin, float tmax,
+        float tmin, float* tmax,                   // tmax is now per-ray
         float4* initial_contrib,
         Cam* camera = nullptr,
         size_t max_iters = 10000,

@@ -273,10 +273,10 @@ void backwards_kernel(
     TensorView<float> dL_dinitial_contrib,
     TensorView<int32_t> primitive_hit_count,
 
-    TensorView<float> dL_doutputs,
+    TensorView<float> dL_doutputs,  // (R, G, B, A, depth, distortion_loss)
 
     float tmin,
-    float tmax,
+    TensorView<float> tmax,  // Per-ray tmax
     float max_prim_size,
     uint max_iters)
 {
@@ -288,23 +288,23 @@ void backwards_kernel(
     var dual_state = get_state(last_state, ray_ind);
     let direction = get_float3(ray_directions, ray_ind);
     let origin = get_float3(ray_origins, ray_ind) + tmin*direction;
+    let ray_tmax = tmax[ray_ind];  // Per-ray tmax
     bool skip_close = false;
 
     var deriv_state = diffPair(dual_state, {});
     float start_t = dual_state.t;
     let bw_origin = origin + dual_state.t * direction;
 
-    let dL_dC = get_float4(dL_doutputs, ray_ind);
-    let dL_ddistortion_loss = dL_doutputs[ray_ind, 4];
+    // dL_doutputs format: (R, G, B, A, depth, distortion_loss)
     RenderOutput.Differential dL_doutput;
-    dL_doutput.C = {dL_dC.x, dL_dC.y, dL_dC.z};
-    dL_doutput.depth = dL_dC.w;
-    dL_doutput.distortion_loss = dL_ddistortion_loss;
+    dL_doutput.C = {dL_doutputs[ray_ind, 0], dL_doutputs[ray_ind, 1], dL_doutputs[ray_ind, 2]};
+    dL_doutput.alpha = dL_doutputs[ray_ind, 3];
+    dL_doutput.depth = dL_doutputs[ray_ind, 4];
+    dL_doutput.distortion_loss = dL_doutputs[ray_ind, 5];
 
     uint num_iters = max(min(iters[ray_ind], max_iters), 0);
     if (iters[ray_ind] >= max_iters-1 || iters[ray_ind] <= 0) return;
     var dtmin = diffPair(tmin, {});
-    var dtmax = diffPair(tmax, {});
     bwd_diff(extract_color)(deriv_state, dtmin, dL_doutput);
 
     let feature_size = model.features.size(1);
@@ -326,7 +326,7 @@ void backwards_kernel(
             old_sample.delta_contrib = {0.f, 0.f, 0.f, 0.f};
         }
 
-        IntegratorState old_dual_state = inverse_update_dual(dual_state, sample, old_sample, tmin, tmax);
+        IntegratorState old_dual_state = inverse_update_dual(dual_state, sample, old_sample, tmin, ray_tmax);
 
         let old_deriv_state = run_update(
                 old_dual_state,
@@ -336,7 +336,7 @@ void backwards_kernel(
                 mod(hit_id, HITS_PER_PRIMITIVE),
                 ray_ind,
                 deriv_state,
-                origin, direction, tmin, tmax, sh_degree, max_prim_size,
+                origin, direction, tmin, ray_tmax, sh_degree, max_prim_size,
                 model);
         int itemp;
         primitive_hit_count.InterlockedAdd((uint)floor(hit_id / HITS_PER_PRIMITIVE), 1, itemp);

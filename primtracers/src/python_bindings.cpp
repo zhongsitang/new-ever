@@ -219,14 +219,19 @@ public:
   }
   py::dict trace_rays(const fesPyGas &gas, const torch::Tensor &ray_origins,
                       const torch::Tensor &ray_directions, float tmin,
-                      float tmax, const size_t max_iters,
+                      const torch::Tensor &tmax, const size_t max_iters,
                       const float max_prim_size) {
     torch::AutoGradMode enable_grad(false);
     CHECK_FLOAT_DIM3(ray_origins);
     CHECK_FLOAT_DIM3(ray_directions);
+    CHECK_INPUT(tmax);
+    CHECK_DEVICE(tmax);
+    CHECK_FLOAT(tmax);
     const size_t num_rays = ray_origins.numel() / 3;
-    torch::Tensor color;
-    color = torch::zeros({(long)num_rays, 4},
+    TORCH_CHECK(tmax.numel() == (long)num_rays, "tmax must have the same number of elements as rays");
+
+    // Output: 5 floats per ray (R, G, B, A, depth)
+    torch::Tensor color = torch::zeros({(long)num_rays, 5},
                          torch::device(device).dtype(torch::kFloat32));
     torch::Tensor hit_collection =
         torch::zeros({(long)(num_rays * max_iters)},
@@ -246,8 +251,9 @@ public:
     pipeline.trace_rays(gas.gas.gas_handle, num_rays,
                        reinterpret_cast<float3 *>(ray_origins.data_ptr()),
                        reinterpret_cast<float3 *>(ray_directions.data_ptr()),
-                       reinterpret_cast<float4 *>(color.data_ptr()),
-                       sh_degree, tmin, tmax,
+                       reinterpret_cast<float *>(color.data_ptr()),
+                       sh_degree, tmin,
+                       reinterpret_cast<float *>(tmax.data_ptr()),
                        reinterpret_cast<float4 *>(initial_contrib.data_ptr()),
                        NULL,
                        max_iters, max_prim_size,
