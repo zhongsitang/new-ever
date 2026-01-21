@@ -188,7 +188,7 @@ void RayPipeline::trace_rays(
     float tmin, float tmax,
     float4* initial_contrib,
     Cam* camera,
-    size_t max_hits,
+    size_t max_iters,
     float max_prim_size,
     uint* iters,
     uint* last_prim,
@@ -205,13 +205,13 @@ void RayPipeline::trace_rays(
     params_.image = {image_out, num_rays};
     params_.last_state = {last_state, num_rays};
     params_.last_delta_contrib = {last_delta_contrib, num_rays};
-    params_.hit_collection = {hit_collection, num_rays * max_hits};
+    params_.hit_collection = {hit_collection, num_rays * max_iters};
     params_.iters = {iters, num_rays};
     params_.last_prim = {last_prim, num_rays};
     params_.primitive_hit_count = {primitive_hit_count, num_prims};
     params_.sh_degree = sh_degree;
     params_.max_prim_size = max_prim_size;
-    params_.max_hits = max_hits;
+    params_.max_iters = max_iters;
     params_.ray_origins = {ray_origins, num_rays};
     params_.ray_directions = {ray_directions, num_rays};
     params_.tmin = tmin;

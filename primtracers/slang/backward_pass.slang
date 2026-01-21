@@ -278,7 +278,7 @@ void backwards_kernel(
     float tmin,
     float tmax,
     float max_prim_size,
-    uint max_hits)
+    uint max_iters)
 {
     uint3 dispatchIdx = cudaThreadIdx() + cudaBlockIdx() * cudaBlockDim();
     uint ray_ind = dispatchIdx.x;
@@ -301,8 +301,8 @@ void backwards_kernel(
     dL_doutput.depth = dL_dC.w;
     dL_doutput.distortion_loss = dL_ddistortion_loss;
 
-    uint num_iters = max(min(iters[ray_ind], max_hits), 0);
-    if (iters[ray_ind] >= max_hits-1 || iters[ray_ind] <= 0) return;
+    uint num_iters = max(min(iters[ray_ind], max_iters), 0);
+    if (iters[ray_ind] >= max_iters-1 || iters[ray_ind] <= 0) return;
     var dtmin = diffPair(tmin, {});
     var dtmax = diffPair(tmax, {});
     bwd_diff(extract_color)(deriv_state, dtmin, dL_doutput);

@@ -98,7 +98,7 @@ RWStructuredBuffer<float>       features;   // SH coefficients for color
 
 // Rendering parameters
 size_t sh_degree;                           // Spherical harmonics degree
-size_t max_hits;                            // Maximum hits per ray
+size_t max_iters;                           // Maximum iterations per ray
 float tmin;                                 // Minimum ray t
 float tmax;                                 // Maximum ray t
 RWStructuredBuffer<float4>      initial_contrib;  // Initial accumulated contribution
@@ -277,7 +277,7 @@ void render_volume()
     uint hit_id;
 
     int iter = 0;
-    while (state.logT < LOG_CUTOFF && iter < max_hits)
+    while (state.logT < LOG_CUTOFF && iter < max_iters)
     {
         let start_t = abs(state.t);
 
@@ -318,7 +318,7 @@ void render_volume()
             hit_collection[idx.x + iter * dim.x] = hit_id;
             iter++;
 
-            if (!(state.logT < LOG_CUTOFF && iter < max_hits)) break;
+            if (!(state.logT < LOG_CUTOFF && iter < max_iters)) break;
         }
         if (end) break;
     }
