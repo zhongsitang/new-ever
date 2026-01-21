@@ -43,30 +43,30 @@ using HitGroupSbtRecord = SbtRecord<HitGroupData>;
 // Launch parameters - must match slang layout exactly
 // Note: StructuredBuffer<T> = {T* data, size_t size} (16 bytes with padding)
 struct Params {
-    StructuredBuffer<float4> image;
-    StructuredBuffer<uint> iters;
-    StructuredBuffer<uint> last_face;
-    StructuredBuffer<uint> touch_count;
-    StructuredBuffer<float4> last_dirac;
-    StructuredBuffer<VolumeState> last_state;
-    StructuredBuffer<int> tri_collection;
+    StructuredBuffer<float4> image;                    // Rendered RGBA output
+    StructuredBuffer<uint> iters;                      // Iteration count per ray
+    StructuredBuffer<uint> last_prim;                  // Last primitive hit
+    StructuredBuffer<uint> primitive_hit_count;        // Hit count per primitive
+    StructuredBuffer<float4> last_delta_contrib;       // Last sample delta contribution
+    StructuredBuffer<IntegratorState> last_state;          // Final volume state per ray
+    StructuredBuffer<int> hit_collection;              // Collected hit IDs for backward pass
     StructuredBuffer<float3> ray_origins;
     StructuredBuffer<float3> ray_directions;
     Cam camera;
 
-    StructuredBuffer<float3> means;
-    StructuredBuffer<float3> scales;
-    StructuredBuffer<float4> quats;
-    StructuredBuffer<float> densities;
-    StructuredBuffer<float> features;
+    StructuredBuffer<float3> means;                    // Ellipsoid centers
+    StructuredBuffer<float3> scales;                   // Ellipsoid radii
+    StructuredBuffer<float4> quats;                    // Ellipsoid rotations (quaternion wxyz)
+    StructuredBuffer<float> densities;                 // Ellipsoid densities
+    StructuredBuffer<float> features;                  // SH coefficients for color
 
-    size_t sh_degree;
-    size_t max_iters;
-    float tmin;
-    float tmax;
-    StructuredBuffer<float4> initial_drgb;
-    float max_prim_size;
-    OptixTraversableHandle handle;
+    size_t sh_degree;                                  // Spherical harmonics degree
+    size_t max_iters;                                  // Maximum iterations per ray
+    float tmin;                                        // Minimum ray t
+    float tmax;                                        // Maximum ray t
+    StructuredBuffer<float4> initial_contrib;          // Initial accumulated contribution
+    float max_prim_size;                               // Maximum primitive size
+    OptixTraversableHandle handle;                     // BVH acceleration structure
 };
 
 class RayPipeline {
@@ -84,21 +84,21 @@ public:
         size_t num_rays,
         float3* ray_origins,
         float3* ray_directions,
-        void* image_out,
+        float4* image_out,
         uint sh_degree,
         float tmin, float tmax,
-        float4* initial_drgb,
+        float4* initial_contrib,
         Cam* camera = nullptr,
         size_t max_iters = 10000,
         float max_prim_size = 3.0f,
         uint* iters = nullptr,
-        uint* last_face = nullptr,
-        uint* touch_count = nullptr,
-        float4* last_dirac = nullptr,
-        VolumeState* last_state = nullptr,
-        int* tri_collection = nullptr,
-        int* d_touch_count = nullptr,
-        int* d_touch_inds = nullptr
+        uint* last_prim = nullptr,
+        uint* primitive_hit_count = nullptr,
+        float4* last_delta_contrib = nullptr,
+        IntegratorState* last_state = nullptr,
+        int* hit_collection = nullptr,
+        int* d_hit_count = nullptr,
+        int* d_hit_inds = nullptr
     );
 
     void reset_features(const Primitives& model);

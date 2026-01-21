@@ -147,43 +147,54 @@ public:
             fast_build) {}
 };
 
+/// Saved state for backward pass computation
 struct fesSavedForBackward {
 public:
-  torch::Tensor states, diracs, faces, touch_count, iters;
+  torch::Tensor states;              // Final volume state per ray
+  torch::Tensor delta_contribs;      // Last sample delta contribution
+  torch::Tensor last_prims;          // Last primitive hit per ray
+  torch::Tensor primitive_hit_count; // Hit count per primitive
+  torch::Tensor iters;               // Iteration count per ray
   size_t num_prims;
   size_t num_rays;
   size_t num_float_per_state;
   torch::Device device;
+
   fesSavedForBackward(torch::Device device)
-      : num_prims(0), num_rays(0), num_float_per_state(sizeof(VolumeState) / sizeof(float)),
+      : num_prims(0), num_rays(0), num_float_per_state(sizeof(IntegratorState) / sizeof(float)),
         device(device) {}
+
   fesSavedForBackward(size_t num_rays, size_t num_prims, torch::Device device)
-      : num_prims(num_prims), num_float_per_state(sizeof(VolumeState) / sizeof(float)),
+      : num_prims(num_prims), num_float_per_state(sizeof(IntegratorState) / sizeof(float)),
         device(device) {
     allocate(num_rays);
   }
+
   uint *iters_data_ptr() { return reinterpret_cast<uint *>(iters.data_ptr()); }
-  uint *touch_count_data_ptr() { return reinterpret_cast<uint *>(touch_count.data_ptr()); }
-  uint *faces_data_ptr() { return reinterpret_cast<uint *>(faces.data_ptr()); }
-  float4 *diracs_data_ptr() {
-    return reinterpret_cast<float4 *>(diracs.data_ptr());
+  uint *primitive_hit_count_data_ptr() { return reinterpret_cast<uint *>(primitive_hit_count.data_ptr()); }
+  uint *last_prims_data_ptr() { return reinterpret_cast<uint *>(last_prims.data_ptr()); }
+  float4 *delta_contribs_data_ptr() {
+    return reinterpret_cast<float4 *>(delta_contribs.data_ptr());
   }
-  VolumeState *states_data_ptr() {
-    return reinterpret_cast<VolumeState *>(states.data_ptr());
+  IntegratorState *states_data_ptr() {
+    return reinterpret_cast<IntegratorState *>(states.data_ptr());
   }
+
+  // Property accessors
   torch::Tensor get_states() { return states; }
-  torch::Tensor get_diracs() { return diracs; }
-  torch::Tensor get_faces() { return faces; }
+  torch::Tensor get_delta_contribs() { return delta_contribs; }
+  torch::Tensor get_last_prims() { return last_prims; }
   torch::Tensor get_iters() { return iters; }
-  torch::Tensor get_touch_count() { return touch_count; }
+  torch::Tensor get_primitive_hit_count() { return primitive_hit_count; }
+
   void allocate(size_t num_rays) {
     states = torch::zeros({(long)num_rays, (long)num_float_per_state},
                           torch::device(device).dtype(torch::kFloat32));
-    diracs = torch::zeros({(long)num_rays, 4},
+    delta_contribs = torch::zeros({(long)num_rays, 4},
                           torch::device(device).dtype(torch::kFloat32));
-    faces = torch::zeros({(long)num_rays},
+    last_prims = torch::zeros({(long)num_rays},
                          torch::device(device).dtype(torch::kInt32));
-    touch_count = torch::zeros({(long)num_prims},
+    primitive_hit_count = torch::zeros({(long)num_prims},
                          torch::device(device).dtype(torch::kInt32));
     iters = torch::zeros({(long)num_rays},
                          torch::device(device).dtype(torch::kInt32));
@@ -217,17 +228,17 @@ public:
     torch::Tensor color;
     color = torch::zeros({(long)num_rays, 4},
                          torch::device(device).dtype(torch::kFloat32));
-    torch::Tensor tri_collection =
+    torch::Tensor hit_collection =
         torch::zeros({(long)(num_rays * max_iters)},
                      torch::device(device).dtype(torch::kInt32));
 
-    torch::Tensor initial_drgb = torch::zeros(
+    torch::Tensor initial_contrib = torch::zeros(
         {(long)num_rays, 4},
         torch::device(device).dtype(torch::kFloat32));
-    torch::Tensor initial_touch_count = torch::zeros(
+    torch::Tensor initial_hit_count = torch::zeros(
         {1},
         torch::device(device).dtype(torch::kInt32));
-    torch::Tensor initial_touch_inds = torch::zeros(
+    torch::Tensor initial_hit_inds = torch::zeros(
         {(long)num_prims},
         torch::device(device).dtype(torch::kInt32));
 
@@ -235,25 +246,25 @@ public:
     pipeline.trace_rays(gas.gas.gas_handle, num_rays,
                        reinterpret_cast<float3 *>(ray_origins.data_ptr()),
                        reinterpret_cast<float3 *>(ray_directions.data_ptr()),
-                       reinterpret_cast<void *>(color.data_ptr()),
+                       reinterpret_cast<float4 *>(color.data_ptr()),
                        sh_degree, tmin, tmax,
-                       reinterpret_cast<float4 *>(initial_drgb.data_ptr()),
+                       reinterpret_cast<float4 *>(initial_contrib.data_ptr()),
                        NULL,
                        max_iters, max_prim_size,
                        saved_for_backward.iters_data_ptr(),
-                       saved_for_backward.faces_data_ptr(),
-                       saved_for_backward.touch_count_data_ptr(),
-                       saved_for_backward.diracs_data_ptr(),
+                       saved_for_backward.last_prims_data_ptr(),
+                       saved_for_backward.primitive_hit_count_data_ptr(),
+                       saved_for_backward.delta_contribs_data_ptr(),
                        saved_for_backward.states_data_ptr(),
-                       reinterpret_cast<int *>(tri_collection.data_ptr()),
-                       reinterpret_cast<int *>(initial_touch_count.data_ptr()),
-                       reinterpret_cast<int *>(initial_touch_inds.data_ptr()));
+                       reinterpret_cast<int *>(hit_collection.data_ptr()),
+                       reinterpret_cast<int *>(initial_hit_count.data_ptr()),
+                       reinterpret_cast<int *>(initial_hit_inds.data_ptr()));
     return py::dict("color"_a = color,
                     "saved"_a = saved_for_backward,
-                    "tri_collection"_a = tri_collection,
-                    "initial_drgb"_a = initial_drgb,
-                    "initial_touch_inds"_a = initial_touch_inds,
-                    "initial_touch_count"_a = initial_touch_count);
+                    "hit_collection"_a = hit_collection,
+                    "initial_contrib"_a = initial_contrib,
+                    "initial_hit_inds"_a = initial_hit_inds,
+                    "initial_hit_count"_a = initial_hit_count);
   }
 };
 
@@ -262,10 +273,10 @@ PYBIND11_MODULE(ellipsoid_tracer, m) {
       .def(py::init<const torch::Device &>());
   py::class_<fesSavedForBackward>(m, "SavedForBackward")
       .def_property_readonly("states", &fesSavedForBackward::get_states)
-      .def_property_readonly("diracs", &fesSavedForBackward::get_diracs)
-      .def_property_readonly("touch_count", &fesSavedForBackward::get_touch_count)
+      .def_property_readonly("delta_contribs", &fesSavedForBackward::get_delta_contribs)
+      .def_property_readonly("primitive_hit_count", &fesSavedForBackward::get_primitive_hit_count)
       .def_property_readonly("iters", &fesSavedForBackward::get_iters)
-      .def_property_readonly("faces", &fesSavedForBackward::get_faces);
+      .def_property_readonly("last_prims", &fesSavedForBackward::get_last_prims);
   py::class_<fesPyPrimitives>(m, "Primitives")
       .def(py::init<const torch::Device &>())
       .def("add_primitives", &fesPyPrimitives::add_primitives)
@@ -273,7 +284,7 @@ PYBIND11_MODULE(ellipsoid_tracer, m) {
   py::class_<fesPyGas>(m, "GAS").def(
       py::init<const fesOptixContext &, const torch::Device &,
                const fesPyPrimitives &, const bool, const bool, const bool>());
-  py::class_<fesPyRayPipeline>(m, "Forward")
+  py::class_<fesPyRayPipeline>(m, "RayPipeline")
       .def(py::init<const fesOptixContext &, const torch::Device &,
                     const fesPyPrimitives &, const bool>())
       .def("trace_rays", &fesPyRayPipeline::trace_rays)

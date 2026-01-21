@@ -131,8 +131,8 @@ __global__ void find_enclosing_primitives_kernel(
     const size_t num_prims,
     const float tmin,
     const glm::vec3 *rayos,
-    int *touch_indices,
-    int *touch_count)
+    int *hit_indices,
+    int *hit_count)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < 0 || i >= num_prims)
@@ -159,8 +159,8 @@ __global__ void find_enclosing_primitives_kernel(
         dmin += SQR(rayo.z - aabb.maxZ);
 
     if (dmin <= tmin * tmin) {
-        int pos = atomicAdd(touch_count, 1);
-        touch_indices[pos] = i;
+        int pos = atomicAdd(hit_count, 1);
+        hit_indices[pos] = i;
     }
 }
 
@@ -175,19 +175,19 @@ __global__ void accumulate_initial_samples_kernel(
     const float tmin,
     const glm::vec3 *rayos,
     const glm::vec3 *rayds,
-    float *initial_drgb,
-    int *touch_indices,
-    int *touch_count)
+    float *initial_contrib,
+    int *hit_indices,
+    int *hit_count)
 {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     int i = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (i >= *touch_count) return;
+    if (i >= *hit_count) return;
     if (j >= num_rays) return;
 
     glm::vec3 rayo = rayos[j] + tmin * glm::normalize(rayds[j]);
 
-    const int prim_ind = touch_indices[i];
+    const int prim_ind = hit_indices[i];
     const glm::vec4 quat = glm::normalize(quats[prim_ind]);
     const glm::vec3 center = means[prim_ind];
     const glm::vec3 size = scales[prim_ind];
@@ -202,19 +202,19 @@ __global__ void accumulate_initial_samples_kernel(
             features[prim_ind * 3 + 1] * SH_C0 + 0.5,
             features[prim_ind * 3 + 2] * SH_C0 + 0.5,
         };
-        atomicAdd(initial_drgb + 4 * j + 0, density);
-        atomicAdd(initial_drgb + 4 * j + 1, density * color.x);
-        atomicAdd(initial_drgb + 4 * j + 2, density * color.y);
-        atomicAdd(initial_drgb + 4 * j + 3, density * color.z);
+        atomicAdd(initial_contrib + 4 * j + 0, density);
+        atomicAdd(initial_contrib + 4 * j + 1, density * color.x);
+        atomicAdd(initial_contrib + 4 * j + 2, density * color.y);
+        atomicAdd(initial_contrib + 4 * j + 3, density * color.z);
     }
 }
 
-void init_ray_start_samples(Params *params, OptixAabb *aabbs, int *d_touch_count, int *d_touch_inds) {
+void init_ray_start_samples(Params *params, OptixAabb *aabbs, int *d_hit_count, int *d_hit_inds) {
     const size_t block_size = 1024;
     const size_t ray_block_size = 64;
     const size_t second_block_size = 16;
     int num_prims = params->means.size;
-    int num_rays = params->initial_drgb.size;
+    int num_rays = params->initial_contrib.size;
 
     dim3 grid_dim(
         (num_prims + block_size - 1) / block_size,
@@ -222,28 +222,28 @@ void init_ray_start_samples(Params *params, OptixAabb *aabbs, int *d_touch_count
     );
     dim3 block_dim(block_size, ray_block_size);
 
-    bool initialize_tensors = d_touch_count == NULL;
+    bool initialize_tensors = d_hit_count == NULL;
     if (initialize_tensors) {
-        cudaMalloc((void**)&d_touch_inds, num_prims * sizeof(int));
-        cudaMalloc((void**)&d_touch_count, sizeof(int));
+        cudaMalloc((void**)&d_hit_inds, num_prims * sizeof(int));
+        cudaMalloc((void**)&d_hit_count, sizeof(int));
     }
-    cudaMemset(d_touch_count, 0, sizeof(int));
+    cudaMemset(d_hit_count, 0, sizeof(int));
 
     find_enclosing_primitives_kernel<<<grid_dim.x, block_dim.x>>>(
         aabbs,
         num_prims,
         params->tmin,
         (glm::vec3 *)(params->ray_origins.data),
-        d_touch_inds,
-        d_touch_count);
+        d_hit_inds,
+        d_hit_count);
 
-    int touch_count;
-    cudaMemcpy(&touch_count, d_touch_count, sizeof(int), cudaMemcpyDeviceToHost);
+    int hit_count;
+    cudaMemcpy(&hit_count, d_hit_count, sizeof(int), cudaMemcpyDeviceToHost);
 
-    if (touch_count > 0) {
+    if (hit_count > 0) {
         dim3 init_grid_dim(
             (num_rays + ray_block_size - 1) / ray_block_size,
-            (touch_count + second_block_size - 1) / second_block_size,
+            (hit_count + second_block_size - 1) / second_block_size,
             1
         );
         dim3 init_block_dim(ray_block_size, second_block_size, 1);
@@ -259,16 +259,16 @@ void init_ray_start_samples(Params *params, OptixAabb *aabbs, int *d_touch_count
             params->tmin,
             (glm::vec3 *)(params->ray_origins.data),
             (glm::vec3 *)(params->ray_directions.data),
-            (float *)(params->initial_drgb.data),
-            d_touch_inds,
-            d_touch_count);
+            (float *)(params->initial_contrib.data),
+            d_hit_inds,
+            d_hit_count);
 
         CUDA_SYNC_CHECK();
     }
 
     if (initialize_tensors) {
-        cudaFree(d_touch_inds);
-        cudaFree(d_touch_count);
+        cudaFree(d_hit_inds);
+        cudaFree(d_hit_count);
     }
 }
 
@@ -280,7 +280,7 @@ __global__ void accumulate_initial_samples_single_kernel(
     const float *features,
     const size_t num_prims,
     const glm::vec3 *rayo,
-    float *initial_drgb)
+    float *initial_contrib)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < 0 || i >= num_prims)
@@ -311,10 +311,10 @@ __global__ void accumulate_initial_samples_single_kernel(
             features[i * 3 + 1] * SH_C0 + 0.5,
             features[i * 3 + 2] * SH_C0 + 0.5,
         };
-        atomicAdd(initial_drgb + 0, density);
-        atomicAdd(initial_drgb + 1, density * color.x);
-        atomicAdd(initial_drgb + 2, density * color.y);
-        atomicAdd(initial_drgb + 3, density * color.z);
+        atomicAdd(initial_contrib + 0, density);
+        atomicAdd(initial_contrib + 1, density * color.x);
+        atomicAdd(initial_contrib + 2, density * color.y);
+        atomicAdd(initial_contrib + 3, density * color.z);
     }
 }
 
@@ -330,7 +330,7 @@ void init_ray_start_samples_single(Params *params) {
         (float *)(params->features.data),
         num_prims,
         (glm::vec3 *)(params->ray_origins.data),
-        (float *)(params->initial_drgb.data));
+        (float *)(params->initial_contrib.data));
 
     CUDA_SYNC_CHECK();
 }

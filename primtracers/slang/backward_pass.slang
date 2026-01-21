@@ -12,11 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#define tri_per_g 2
+// =============================================================================
+// Backward Pass for Ellipsoid Volume Rendering
+// =============================================================================
+//
+// This module implements the backward pass (gradient computation) for
+// differentiable volume rendering of ellipsoid primitives.
+//
+// Hit ID encoding (same as forward pass):
+//   hit_id = prim_index * HITS_PER_PRIMITIVE + hit_type
+//   where hit_type: 1 = entry, 0 = exit
+// =============================================================================
+
+#define HITS_PER_PRIMITIVE 2
+#define HIT_TYPE_EXIT 0
+#define HIT_TYPE_ENTRY 1
+
 import volume_integrator;
 import ellipsoid_intersect;
 import safe_math;
 import spherical_harmonics;
+
+// =============================================================================
+// Tensor Utilities
+// =============================================================================
 
 float3 get_float3(TensorView<float> view, uint ind) {
     return {
@@ -42,27 +61,28 @@ float4 get_float4(TensorView<float> view, uint ind) {
         view[ind, 3]
     };
 }
-Features get_feats(in TensorView<float> features, in uint prim_ind, in uint sh_degree) {
+
+Features get_feats(in TensorView<float> features, in uint prim_index, in uint sh_degree) {
     Features feat;
-    feat.f0 = get_float3(features, prim_ind, 0);
+    feat.f0 = get_float3(features, prim_index, 0);
     if (sh_degree > 0) {
-        feat.f1 = get_float3(features, prim_ind, 1);
-        feat.f2 = get_float3(features, prim_ind, 2);
-        feat.f3 = get_float3(features, prim_ind, 3);
+        feat.f1 = get_float3(features, prim_index, 1);
+        feat.f2 = get_float3(features, prim_index, 2);
+        feat.f3 = get_float3(features, prim_index, 3);
         if (sh_degree > 1) {
-            feat.f4 = get_float3(features, prim_ind, 4);
-            feat.f5 = get_float3(features, prim_ind, 5);
-            feat.f6 = get_float3(features, prim_ind, 6);
-            feat.f7 = get_float3(features, prim_ind, 7);
-            feat.f8 = get_float3(features, prim_ind, 8);
+            feat.f4 = get_float3(features, prim_index, 4);
+            feat.f5 = get_float3(features, prim_index, 5);
+            feat.f6 = get_float3(features, prim_index, 6);
+            feat.f7 = get_float3(features, prim_index, 7);
+            feat.f8 = get_float3(features, prim_index, 8);
             if (sh_degree > 2) {
-                feat.f9 = get_float3(features, prim_ind, 9);
-                feat.f10 = get_float3(features, prim_ind, 10);
-                feat.f11 = get_float3(features, prim_ind, 11);
-                feat.f12 = get_float3(features, prim_ind, 12);
-                feat.f13 = get_float3(features, prim_ind, 13);
-                feat.f14 = get_float3(features, prim_ind, 14);
-                feat.f15 = get_float3(features, prim_ind, 15);
+                feat.f9 = get_float3(features, prim_index, 9);
+                feat.f10 = get_float3(features, prim_index, 10);
+                feat.f11 = get_float3(features, prim_index, 11);
+                feat.f12 = get_float3(features, prim_index, 12);
+                feat.f13 = get_float3(features, prim_index, 13);
+                feat.f14 = get_float3(features, prim_index, 14);
+                feat.f15 = get_float3(features, prim_index, 15);
             }
         }
     }
@@ -74,12 +94,6 @@ void atomic_add_float3(TensorView<float> view, uint ind, uint feat_ind, float3 v
     view.InterlockedAdd(uint3(ind, feat_ind, 0u), val.x, temp);
     view.InterlockedAdd(uint3(ind, feat_ind, 1u), val.y, temp);
     view.InterlockedAdd(uint3(ind, feat_ind, 2u), val.z, temp);
-}
-
-void atomic_add_float2(TensorView<float> view, uint ind, float2 val) {
-    float temp;
-    view.InterlockedAdd(uint2(ind, 0u), val.x, temp);
-    view.InterlockedAdd(uint2(ind, 1u), val.y, temp);
 }
 
 void atomic_add_float3(TensorView<float> view, uint ind, float3 val) {
@@ -97,7 +111,8 @@ void atomic_add_float4(TensorView<float> view, uint ind, float4 val) {
     view.InterlockedAdd(uint2(ind, 3u), val.w, temp);
 }
 
-VolumeState get_state(TensorView<float> view, uint ind) {
+/// Load IntegratorState from tensor.
+IntegratorState get_state(TensorView<float> view, uint ind) {
     return {
         float2(view[ind, 0], view[ind, 1]),
         float2(view[ind, 2], view[ind, 3]),
@@ -110,13 +125,20 @@ VolumeState get_state(TensorView<float> view, uint ind) {
     };
 }
 
+// =============================================================================
+// Gradient Model
+// =============================================================================
+
+/// Container for model parameters and their gradients.
 struct DualModel {
+    // Forward parameters
     TensorView<float> means;
     TensorView<float> scales;
     TensorView<float> quats;
     TensorView<float> densities;
     TensorView<float> features;
 
+    // Gradient outputs
     TensorView<float> dL_dmeans;
     TensorView<float> dL_dscales;
     TensorView<float> dL_dquats;
@@ -124,25 +146,27 @@ struct DualModel {
     TensorView<float> dL_dfeatures;
     TensorView<float> dL_drayos;
     TensorView<float> dL_drayds;
-    TensorView<float> dL_dmeans2D;
 };
 
-DifferentialPair<VolumeState>
-run_update(in VolumeState old_dual_state, 
+// =============================================================================
+// Backward Pass Core Functions
+// =============================================================================
+
+/// Run backward pass for a single volume update step.
+DifferentialPair<IntegratorState>
+run_update(in IntegratorState old_dual_state,
            in SamplePoint old_sample,
            in SamplePoint sample,
-           in uint prim_ind,
-           in uint face_id,
+           in uint prim_index,
+           in uint hit_type,
            in uint ray_ind,
-           in DifferentialPair<VolumeState> deriv_state,
+           in DifferentialPair<IntegratorState> deriv_state,
            in float3 origin,
            in float3 direction,
            in float tmin,
            in float tmax,
            in uint sh_degree,
            in float max_prim_size,
-           in float4x4 wct,
-           in float4x4 inv_wct,
            inout DualModel model)
 {
     var old_deriv_state = diffPair(from_dual(old_dual_state, old_sample), {});
@@ -151,12 +175,12 @@ run_update(in VolumeState old_dual_state,
 
     bwd_diff(update)(old_deriv_state, deriv_sample, tmin, tmax, max_prim_size, deriv_state.d);
 
-    // Propagate to ctrl pt
-    let mean = get_float3(model.means, prim_ind);
-    let scale = get_float3(model.scales, prim_ind);
-    let quat = get_float4(model.quats, prim_ind);
-    let density = model.densities[prim_ind];
-    Features feat = get_feats(model.features, prim_ind, sh_degree);
+    // Propagate gradients to primitive parameters
+    let mean = get_float3(model.means, prim_index);
+    let scale = get_float3(model.scales, prim_index);
+    let quat = get_float4(model.quats, prim_index);
+    let density = model.densities[prim_index];
+    Features feat = get_feats(model.features, prim_index, sh_degree);
     float3 color = eval_color(direction, feat, sh_degree);
 
     var deriv_origin = diffPair(origin, {});
@@ -168,13 +192,13 @@ run_update(in VolumeState old_dual_state,
     var deriv_density = diffPair(density, {});
 
     bwd_diff(safe_intersect)(deriv_origin, deriv_direction,
-        deriv_scales, deriv_mean, deriv_quat, deriv_color, deriv_density, face_id, skip_close, deriv_sample.d);
+        deriv_scales, deriv_mean, deriv_quat, deriv_color, deriv_density, hit_type, skip_close, deriv_sample.d);
 
-    atomic_add_float3(model.dL_dmeans, prim_ind, deriv_mean.d);
-    atomic_add_float3(model.dL_dscales, prim_ind, deriv_scales.d);
-    atomic_add_float4(model.dL_dquats, prim_ind, deriv_quat.d);
+    atomic_add_float3(model.dL_dmeans, prim_index, deriv_mean.d);
+    atomic_add_float3(model.dL_dscales, prim_index, deriv_scales.d);
+    atomic_add_float4(model.dL_dquats, prim_index, deriv_quat.d);
     float temp;
-    model.dL_ddensities.InterlockedAdd(prim_ind, deriv_density.d, temp);
+    model.dL_ddensities.InterlockedAdd(prim_index, deriv_density.d, temp);
 
     float3 d_rayd = deriv_direction.d;
     deriv_direction = diffPair(direction, {});
@@ -182,25 +206,25 @@ run_update(in VolumeState old_dual_state,
     bwd_diff(eval_color)(deriv_direction, d_feat, sh_degree, deriv_color.d);
     d_rayd += deriv_direction.d;
 
-    atomic_add_float3(model.dL_dfeatures, prim_ind, 0u, d_feat.d.f0);
+    atomic_add_float3(model.dL_dfeatures, prim_index, 0u, d_feat.d.f0);
     if (sh_degree > 0) {
-        atomic_add_float3(model.dL_dfeatures, prim_ind, 1u, d_feat.d.f1);
-        atomic_add_float3(model.dL_dfeatures, prim_ind, 2u, d_feat.d.f2);
-        atomic_add_float3(model.dL_dfeatures, prim_ind, 3u, d_feat.d.f3);
+        atomic_add_float3(model.dL_dfeatures, prim_index, 1u, d_feat.d.f1);
+        atomic_add_float3(model.dL_dfeatures, prim_index, 2u, d_feat.d.f2);
+        atomic_add_float3(model.dL_dfeatures, prim_index, 3u, d_feat.d.f3);
         if (sh_degree > 1) {
-            atomic_add_float3(model.dL_dfeatures, prim_ind, 4u, d_feat.d.f4);
-            atomic_add_float3(model.dL_dfeatures, prim_ind, 5u, d_feat.d.f5);
-            atomic_add_float3(model.dL_dfeatures, prim_ind, 6u, d_feat.d.f6);
-            atomic_add_float3(model.dL_dfeatures, prim_ind, 7u, d_feat.d.f7);
-            atomic_add_float3(model.dL_dfeatures, prim_ind, 8u, d_feat.d.f8);
+            atomic_add_float3(model.dL_dfeatures, prim_index, 4u, d_feat.d.f4);
+            atomic_add_float3(model.dL_dfeatures, prim_index, 5u, d_feat.d.f5);
+            atomic_add_float3(model.dL_dfeatures, prim_index, 6u, d_feat.d.f6);
+            atomic_add_float3(model.dL_dfeatures, prim_index, 7u, d_feat.d.f7);
+            atomic_add_float3(model.dL_dfeatures, prim_index, 8u, d_feat.d.f8);
             if (sh_degree > 2) {
-                atomic_add_float3(model.dL_dfeatures, prim_ind, 9u, d_feat.d.f9);
-                atomic_add_float3(model.dL_dfeatures, prim_ind, 10u, d_feat.d.f10);
-                atomic_add_float3(model.dL_dfeatures, prim_ind, 11u, d_feat.d.f11);
-                atomic_add_float3(model.dL_dfeatures, prim_ind, 12u, d_feat.d.f12);
-                atomic_add_float3(model.dL_dfeatures, prim_ind, 13u, d_feat.d.f13);
-                atomic_add_float3(model.dL_dfeatures, prim_ind, 14u, d_feat.d.f14);
-                atomic_add_float3(model.dL_dfeatures, prim_ind, 15u, d_feat.d.f15);
+                atomic_add_float3(model.dL_dfeatures, prim_index, 9u, d_feat.d.f9);
+                atomic_add_float3(model.dL_dfeatures, prim_index, 10u, d_feat.d.f10);
+                atomic_add_float3(model.dL_dfeatures, prim_index, 11u, d_feat.d.f11);
+                atomic_add_float3(model.dL_dfeatures, prim_index, 12u, d_feat.d.f12);
+                atomic_add_float3(model.dL_dfeatures, prim_index, 13u, d_feat.d.f13);
+                atomic_add_float3(model.dL_dfeatures, prim_index, 14u, d_feat.d.f14);
+                atomic_add_float3(model.dL_dfeatures, prim_index, 15u, d_feat.d.f15);
             }
         }
     }
@@ -208,69 +232,48 @@ run_update(in VolumeState old_dual_state,
     atomic_add_float3(model.dL_drayos, ray_ind, deriv_origin.d);
     atomic_add_float3(model.dL_drayds, ray_ind, d_rayd);
 
-    float3 xyd = project(mean, wct);
-
-    var d_xy = diffPair(float2(xyd.x, xyd.y), {});
-    var d_dist = diffPair(xyd.z, {});
-    var d_inv_wct = diffPair(inv_wct, {});
-
-    bwd_diff(inv_project)(d_xy, d_dist, d_inv_wct, deriv_mean.d);
-    atomic_add_float2(model.dL_dmeans2D, prim_ind, d_xy.d);
     return old_deriv_state;
 }
 
-SamplePoint load_sample(in uint older_tri_ind, in DualModel model, in float3 origin, float3 direction, uint sh_degree, bool skip_close)
+/// Load sample point from a hit ID.
+SamplePoint load_sample(in uint hit_id, in DualModel model, in float3 origin, float3 direction, uint sh_degree, bool skip_close)
 {
-    let older_prim_ind = (uint)floor(older_tri_ind / tri_per_g);
-    let older_face_id = mod(older_tri_ind, tri_per_g);
+    let prim_index = (uint)floor(hit_id / HITS_PER_PRIMITIVE);
+    let hit_type = mod(hit_id, HITS_PER_PRIMITIVE);
 
+    let mean = get_float3(model.means, prim_index);
+    let scale = get_float3(model.scales, prim_index);
+    let quat = get_float4(model.quats, prim_index);
+    let density = model.densities[prim_index];
 
-    let older_mean = get_float3(model.means, older_prim_ind);
-
-    let older_scale = get_float3(model.scales, older_prim_ind);
-    let older_quat = get_float4(model.quats, older_prim_ind);
-
-    let older_density = model.densities[older_prim_ind];
-
-    Features older_feat = get_feats(model.features, older_prim_ind, sh_degree);
-    float3 older_color = eval_color(direction, older_feat, sh_degree);
+    Features feat = get_feats(model.features, prim_index, sh_degree);
+    float3 color = eval_color(direction, feat, sh_degree);
 
     return safe_intersect(origin, direction,
-        older_scale, older_mean, older_quat, older_color, older_density, older_face_id, skip_close);
+        scale, mean, quat, color, density, hit_type, skip_close);
 }
 
-[Differentiable]
-float3 project(in float3 xyz, in float4x4 wct) {
-  float4 xyzw = float4(xyz, 1.f);
-  let p_view = mul(xyzw, wct);
-  float2 pix2d = {safe_div(p_view.x, p_view.z), safe_div(p_view.y, p_view.z)};
-  return {pix2d.x, pix2d.y, p_view.z};
-}
+// =============================================================================
+// CUDA Kernels
+// =============================================================================
 
-[Differentiable]
-float3 inv_project(in float2 xy, in float dist, float4x4 inv_wvt) {
-  let p_hom = float4(xy * dist, dist, 1.f);
-  let out = mul(p_hom, inv_wvt);
-  return {out.x, out.y, out.z};
-}
-
+/// Main backward pass kernel.
 [AutoPyBindCUDA]
 [CUDAKernel]
 void backwards_kernel(
     TensorView<float> last_state,
-    TensorView<float> last_dirac,
+    TensorView<float> last_delta_contrib,
     TensorView<int> iters,
-    TensorView<int> tri_collection,
+    TensorView<int> hit_collection,
 
     TensorView<float> ray_origins,
     TensorView<float> ray_directions,
     DualModel model,
-    TensorView<float> initial_drgb,
-    TensorView<float> dL_dinital_drgb,
-    TensorView<int32_t> touch_count,
+    TensorView<float> initial_contrib,
+    TensorView<float> dL_dinitial_contrib,
+    TensorView<int32_t> primitive_hit_count,
 
     TensorView<float> dL_doutputs,
-    TensorView<float> wcts,
 
     float tmin,
     float tmax,
@@ -307,92 +310,81 @@ void backwards_kernel(
     let feature_size = model.features.size(1);
     let sh_degree = int(sqrt(feature_size))-1;
 
-    uint start_id = ray_ind * max_iters;
-    let wct_ind = (ray_ind < wcts.size(0)) ? ray_ind : 0;
-    float4x4 wct = {
-        wcts[wct_ind, 0, 0], wcts[wct_ind, 0, 1], wcts[wct_ind, 0, 2], wcts[wct_ind, 0, 3],
-        wcts[wct_ind, 1, 0], wcts[wct_ind, 1, 1], wcts[wct_ind, 1, 2], wcts[wct_ind, 1, 3],
-        wcts[wct_ind, 2, 0], wcts[wct_ind, 2, 1], wcts[wct_ind, 2, 2], wcts[wct_ind, 2, 3],
-        wcts[wct_ind, 3, 0], wcts[wct_ind, 3, 1], wcts[wct_ind, 3, 2], wcts[wct_ind, 3, 3],
-    };
+    uint hit_id = hit_collection[ray_ind + max(num_iters-1, 0) * ray_origins.size(0)];
+    SamplePoint sample = load_sample(hit_id, model, origin, direction, sh_degree, skip_close);
 
-    float4x4 inv_wct = inverse(wct);
-
-    uint tri_ind = tri_collection[ray_ind + max(num_iters-1, 0) * ray_origins.size(0)];
-    SamplePoint sample = load_sample(tri_ind, model, origin, direction, sh_degree, skip_close);
-
-    // load old sample here because the next loop is about to load the older one instead
+    // Iterate backward through hits
     for (int i=num_iters; i-->0; )
     {
-        uint old_tri_ind;
+        uint old_hit_id;
         SamplePoint old_sample;
         if (i-1 >= 0) {
-            old_tri_ind = tri_collection[ray_ind + (i-1) * ray_origins.size(0)];
-            old_sample = load_sample(old_tri_ind, model, origin, direction, sh_degree, skip_close);
+            old_hit_id = hit_collection[ray_ind + (i-1) * ray_origins.size(0)];
+            old_sample = load_sample(old_hit_id, model, origin, direction, sh_degree, skip_close);
         } else {
             old_sample.t = 0;
-            old_sample.dirac = {0.f, 0.f, 0.f, 0.f};
+            old_sample.delta_contrib = {0.f, 0.f, 0.f, 0.f};
         }
 
-
-        VolumeState old_dual_state = inverse_update_dual(dual_state, sample, old_sample, tmin, tmax);
+        IntegratorState old_dual_state = inverse_update_dual(dual_state, sample, old_sample, tmin, tmax);
 
         let old_deriv_state = run_update(
-                old_dual_state, 
+                old_dual_state,
                 old_sample,
                 sample,
-                (uint)floor(tri_ind / tri_per_g),
-                mod(tri_ind, tri_per_g),
+                (uint)floor(hit_id / HITS_PER_PRIMITIVE),
+                mod(hit_id, HITS_PER_PRIMITIVE),
                 ray_ind,
                 deriv_state,
                 origin, direction, tmin, tmax, sh_degree, max_prim_size,
-                wct, inv_wct, model);
+                model);
         int itemp;
-        touch_count.InterlockedAdd((uint)floor(tri_ind / tri_per_g), 1, itemp);
+        primitive_hit_count.InterlockedAdd((uint)floor(hit_id / HITS_PER_PRIMITIVE), 1, itemp);
 
-        tri_ind = old_tri_ind;
+        hit_id = old_hit_id;
         dual_state = old_dual_state;
         sample = old_sample;
 
         deriv_state = diffPair(old_dual_state, old_deriv_state.d);
-
     }
     float temp;
-    dL_dinital_drgb[ray_ind, 0u] = deriv_state.d.drgb.x;
-    dL_dinital_drgb[ray_ind, 1u] = deriv_state.d.drgb.y;
-    dL_dinital_drgb[ray_ind, 2u] = deriv_state.d.drgb.z;
-    dL_dinital_drgb[ray_ind, 3u] = deriv_state.d.drgb.w;
+    dL_dinitial_contrib[ray_ind, 0u] = deriv_state.d.accumulated_contrib.x;
+    dL_dinitial_contrib[ray_ind, 1u] = deriv_state.d.accumulated_contrib.y;
+    dL_dinitial_contrib[ray_ind, 2u] = deriv_state.d.accumulated_contrib.z;
+    dL_dinitial_contrib[ray_ind, 3u] = deriv_state.d.accumulated_contrib.w;
 }
 
+/// Mix density and color into contribution vector.
 [Differentiable]
-float4 mix_drgb(float density, float3 color) {
+float4 mix_contrib(float density, float3 color) {
     return {density, density*color.x, density*color.y, density*color.z};
 }
 
+/// Backward pass for initial contribution (rays starting inside primitives).
 [AutoPyBindCUDA]
 [CUDAKernel]
-void backwards_initial_drgb_kernel(
+void backwards_initial_contrib_kernel(
     TensorView<float> ray_origins,
     TensorView<float> ray_directions,
     DualModel model,
-    TensorView<float> initial_drgb,
-    TensorView<int32_t> initial_inds,
-    TensorView<float> dL_dinital_drgb,
-    TensorView<int32_t> touch_count,
+    TensorView<float> initial_contrib,
+    TensorView<int32_t> initial_prim_indices,
+    TensorView<float> dL_dinitial_contrib,
+    TensorView<int32_t> primitive_hit_count,
     float tmin,
 )
 {
     uint thread_j = cudaThreadIdx().x + cudaBlockIdx().x * cudaBlockDim().x;
     uint thread_i = cudaThreadIdx().y + cudaBlockIdx().y * cudaBlockDim().y;
-    if (thread_i >= initial_inds.size(0) || thread_j >= ray_directions.size(0))
+    if (thread_i >= initial_prim_indices.size(0) || thread_j >= ray_directions.size(0))
         return;
 
-    uint prim_ind = initial_inds[thread_i];
+    uint prim_index = initial_prim_indices[thread_i];
     uint ray_ind = thread_j;
 
-    float3 mean = get_float3(model.means, prim_ind);
-    float4 quat = get_float4(model.quats, prim_ind);
-    float3 scales = get_float3(model.scales, prim_ind);
+    float3 mean = get_float3(model.means, prim_index);
+    float4 quat = get_float4(model.quats, prim_index);
+    float3 scales = get_float3(model.scales, prim_index);
     float3 rayd = get_float3(ray_directions, ray_ind);
     float3 rayo = get_float3(ray_origins, 0) + tmin * rayd;
     float3 clip_scale = max(scales, 1e-8);
@@ -402,16 +394,16 @@ void backwards_initial_drgb_kernel(
     let Trayo = safe_div(mul(rayo - mean, R), clip_scale);
     if (length(Trayo) <= 1) {
         float temp;
-        let density = model.densities[prim_ind];
+        let density = model.densities[prim_index];
         int sh_degree = 0;
-        Features feat = get_feats(model.features, prim_ind, sh_degree);
+        Features feat = get_feats(model.features, prim_index, sh_degree);
         float3 color = eval_color(rayd, feat, sh_degree);
         var deriv_color = diffPair(color, {});
         var deriv_density = diffPair(density, {});
-        float4 vdL_dinital_drgb = get_float4(dL_dinital_drgb, ray_ind);
-        bwd_diff(mix_drgb)(deriv_density, deriv_color, vdL_dinital_drgb);
+        float4 vdL_dinitial_contrib = get_float4(dL_dinitial_contrib, ray_ind);
+        bwd_diff(mix_contrib)(deriv_density, deriv_color, vdL_dinitial_contrib);
 
-        model.dL_ddensities.InterlockedAdd(prim_ind, deriv_density.d, temp);
+        model.dL_ddensities.InterlockedAdd(prim_index, deriv_density.d, temp);
 
         var deriv_direction = diffPair(rayd, {});
         var d_feat = diffPair(feat, {});
@@ -421,6 +413,6 @@ void backwards_initial_drgb_kernel(
             d_feat.d.f0.y,
             d_feat.d.f0.z
         };
-        atomic_add_float3(model.dL_dfeatures, prim_ind, 0, dfeat);
+        atomic_add_float3(model.dL_dfeatures, prim_index, 0, dfeat);
     }
 }

@@ -43,6 +43,7 @@ list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 find_package(pybind11 REQUIRED)
 find_package(CUDAToolkit REQUIRED)
+find_package(glm REQUIRED)
 
 include(FindOptiX)
 include(FindTorch)
@@ -107,6 +108,7 @@ target_link_libraries(sh_kernel PRIVATE Torch::Torch)
 target_link_libraries(ellipsoid_tracer PRIVATE
   OptiX::OptiX
   Torch::Torch
+  glm::glm
 )
 
 target_compile_options(ellipsoid_tracer PRIVATE
@@ -114,6 +116,9 @@ target_compile_options(ellipsoid_tracer PRIVATE
 )
 
 if(MSVC)
+  # Prevent Windows.h from defining min/max macros
+  add_compile_definitions(NOMINMAX)
+
   set_target_properties(ellipsoid_tracer PROPERTIES
     MSVC_RUNTIME_LIBRARY "MultiThreadedDLL"
     CUDA_RUNTIME_LIBRARY Shared

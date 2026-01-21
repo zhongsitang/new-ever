@@ -34,21 +34,28 @@ struct HitData {
     float3 scales;
     float3 mean;
     float4 quat;
-    float height;
+    float density;
 };
 
-struct VolumeState//((packed))
+/// Volume rendering state - must match slang IntegratorState layout exactly
+struct IntegratorState
 {
+  // Distortion loss components (for regularization)
   float2 distortion_parts;
   float2 cum_sum;
-  float3 padding;
-  // Integration state (ray parameter and delta extinction/color)
-  float t;
-  float4 drgb;  // delta (density, r, g, b) - accumulated contribution derivative
 
-  // Volume Rendering State (transmittance and accumulated color)
-  float logT;
-  float3 C;
+  // Depth accumulator ([0] used, [1-2] reserved for memory layout compatibility)
+  float3 depth_accum;
+
+  // Current ray parameter t
+  float t;
+
+  // Accumulated density-weighted contributions: (density, r*density, g*density, b*density)
+  float4 accumulated_contrib;
+
+  // Volume rendering state
+  float logT;   // Log of accumulated optical depth (negative log transmittance)
+  float3 C;     // Accumulated color
 };
 
 // Always on GPU
