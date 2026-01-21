@@ -187,11 +187,6 @@ public:
   torch::Tensor get_iters() { return iters; }
   torch::Tensor get_primitive_hit_count() { return primitive_hit_count; }
 
-  // Legacy accessors for backward compatibility
-  torch::Tensor get_diracs() { return delta_contribs; }
-  torch::Tensor get_faces() { return last_prims; }
-  torch::Tensor get_touch_count() { return primitive_hit_count; }
-
   void allocate(size_t num_rays) {
     states = torch::zeros({(long)num_rays, (long)num_float_per_state},
                           torch::device(device).dtype(torch::kFloat32));
@@ -264,13 +259,10 @@ public:
                        reinterpret_cast<int *>(hit_collection.data_ptr()),
                        reinterpret_cast<int *>(initial_touch_count.data_ptr()),
                        reinterpret_cast<int *>(initial_touch_inds.data_ptr()));
-    // Return with both new and legacy names for backward compatibility
     return py::dict("color"_a = color,
                     "saved"_a = saved_for_backward,
                     "hit_collection"_a = hit_collection,
-                    "tri_collection"_a = hit_collection,  // Legacy alias
                     "initial_contrib"_a = initial_contrib,
-                    "initial_drgb"_a = initial_contrib,   // Legacy alias
                     "initial_touch_inds"_a = initial_touch_inds,
                     "initial_touch_count"_a = initial_touch_count);
   }
@@ -284,11 +276,7 @@ PYBIND11_MODULE(ellipsoid_tracer, m) {
       .def_property_readonly("delta_contribs", &fesSavedForBackward::get_delta_contribs)
       .def_property_readonly("primitive_hit_count", &fesSavedForBackward::get_primitive_hit_count)
       .def_property_readonly("iters", &fesSavedForBackward::get_iters)
-      .def_property_readonly("last_prims", &fesSavedForBackward::get_last_prims)
-      // Legacy aliases for backward compatibility
-      .def_property_readonly("diracs", &fesSavedForBackward::get_diracs)
-      .def_property_readonly("touch_count", &fesSavedForBackward::get_touch_count)
-      .def_property_readonly("faces", &fesSavedForBackward::get_faces);
+      .def_property_readonly("last_prims", &fesSavedForBackward::get_last_prims);
   py::class_<fesPyPrimitives>(m, "Primitives")
       .def(py::init<const torch::Device &>())
       .def("add_primitives", &fesPyPrimitives::add_primitives)
