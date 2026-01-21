@@ -27,378 +27,367 @@
 #include "create_aabbs.h"
 #include "exception.h"
 #include "backward_kernel.h"
-//#include "ply_file_loader.h"
 
 namespace py = pybind11;
-using namespace pybind11::literals; // to bring in the `_a` literal
-#define CHECK_CUDA(x)                                                          \
-  TORCH_CHECK(x.device().is_cuda(), #x " must be a CUDA tensor")
-#define CHECK_DEVICE(x)                                                        \
-  TORCH_CHECK(x.device() == this->device, #x " must be on the same device")
-#define CHECK_CONTIGUOUS(x)                                                    \
-  TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
-#define CHECK_FLOAT(x)                                                         \
-  TORCH_CHECK(x.dtype() == torch::kFloat32, #x " must have float32 type")
-#define CHECK_INPUT(x)                                                         \
-  CHECK_CUDA(x);                                                               \
-  CHECK_CONTIGUOUS(x)
-#define CHECK_FLOAT_DIM3(x)                                                    \
-  CHECK_INPUT(x);                                                              \
-  CHECK_DEVICE(x);                                                             \
-  CHECK_FLOAT(x);                                                              \
-  TORCH_CHECK(x.size(-1) == 3, #x " must have last dimension with size 3")
-#define CHECK_FLOAT_DIM4(x)                                                    \
-  CHECK_INPUT(x);                                                              \
-  CHECK_DEVICE(x);                                                             \
-  CHECK_FLOAT(x);                                                              \
-  TORCH_CHECK(x.size(-1) == 4, #x " must have last dimension with size 4")
-#define CHECK_FLOAT_DIM4_CPU(x)                                                \
-  CHECK_CONTIGUOUS(x);                                                         \
-  CHECK_FLOAT(x);                                                              \
-  TORCH_CHECK(x.size(-1) == 4, #x " must have last dimension with size 4")
-#define CHECK_FLOAT_DIM3_CPU(x)                                                \
-  CHECK_CONTIGUOUS(x);                                                         \
-  CHECK_FLOAT(x);                                                              \
-  TORCH_CHECK(x.size(-1) == 3, #x " must have last dimension with size 3")
+using namespace pybind11::literals;
 
-static void context_log_cb(unsigned int level, const char *tag,
-                           const char *message, void * /*cbdata */) {
+#define CHECK_CUDA(x) TORCH_CHECK(x.device().is_cuda(), #x " must be a CUDA tensor")
+#define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
+#define CHECK_FLOAT(x) TORCH_CHECK(x.dtype() == torch::kFloat32, #x " must have float32 type")
+#define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
+
+static void context_log_cb(unsigned int level, const char *tag, const char *message, void *) {}
+
+// Global AABB buffer
+static OptixAabb *G_AABBS = nullptr;
+static size_t G_NUM_AABBS = 0;
+
+// Global OptixContext (singleton per device)
+static std::unordered_map<int, OptixDeviceContext> g_optix_contexts;
+
+static OptixDeviceContext get_optix_context(int device_index) {
+    auto it = g_optix_contexts.find(device_index);
+    if (it != g_optix_contexts.end()) {
+        return it->second;
+    }
+
+    CUDA_CHECK(cudaSetDevice(device_index));
+    CUDA_CHECK(cudaFree(0));
+    OPTIX_CHECK(optixInit());
+
+    OptixDeviceContextOptions options = {};
+    options.logCallbackFunction = &context_log_cb;
+    options.logCallbackLevel = 4;
+
+    CUcontext cuCtx = 0;
+    OptixDeviceContext context;
+    OPTIX_CHECK(optixDeviceContextCreate(cuCtx, &options, &context));
+
+    g_optix_contexts[device_index] = context;
+    return context;
 }
 
-OptixAabb *D_AABBS = 0;
-size_t NUM_AABBS = 0;
-
-struct fesOptixContext {
-public:
-  OptixDeviceContext context = nullptr;
-  uint device;
-  fesOptixContext(const torch::Device &device) : device(device.index()) {
-    CUDA_CHECK(cudaSetDevice(device.index()));
-    {
-      // Initialize CUDA
-      CUDA_CHECK(cudaFree(0));
-      // Initialize the OptiX API, loading all API entry points
-      OPTIX_CHECK(optixInit());
-      // Specify context options
-      OptixDeviceContextOptions options = {};
-      options.logCallbackFunction = &context_log_cb;
-      options.logCallbackLevel = 4;
-      // Associate a CUDA context (and therefore a specific GPU) with this
-      // device context
-      CUcontext cuCtx = 0; // zero means take the current context
-      OPTIX_CHECK(optixDeviceContextCreate(cuCtx, &options, &context));
-    }
-  }
-  ~fesOptixContext() { OPTIX_CHECK_NOTHROW(optixDeviceContextDestroy(context)); }
+// Saved tensors for backward pass
+struct SplineTracerSaved : public torch::autograd::AutogradContext {
+    torch::Tensor states, iters, tri_collection;
+    torch::Tensor means, scales, quats, densities, features;
+    torch::Tensor rayo, rayd, wcts;
+    torch::Tensor initial_drgb, initial_inds;
+    float tmin, tmax, max_prim_size;
+    size_t max_iters;
+    bool has_wcts;
 };
 
-struct fesPyPrimitives {
+// Forward declaration
+class SplineTracerFunction : public torch::autograd::Function<SplineTracerFunction> {
 public:
-  Primitives model;
-  torch::Device device;
-  fesPyPrimitives(const torch::Device &device) : device(device) {}
-  void add_primitives(const torch::Tensor &means, const torch::Tensor &scales,
-                      const torch::Tensor &quats, const torch::Tensor half_attribs,
-                      const torch::Tensor &densities,
-                      const torch::Tensor &colors) {
-    const int64_t numPrimitives = means.size(0);
-    CHECK_FLOAT_DIM3(means);
-    CHECK_FLOAT_DIM3(scales);
-    CHECK_FLOAT_DIM4(quats);
-    CHECK_FLOAT_DIM3(colors);
-    TORCH_CHECK(scales.size(0) == numPrimitives,
-                "All inputs (scales) must have the same 0 dimension")
-    TORCH_CHECK(quats.size(0) == numPrimitives,
-                "All inputs (quats) must have the same 0 dimension")
-    TORCH_CHECK(colors.size(0) == numPrimitives,
-                "All inputs (colors) must have the same 0 dimension")
-    TORCH_CHECK(densities.size(0) == numPrimitives,
-                "All inputs (densities) must have the same 0 dimension")
-    TORCH_CHECK(colors.size(2) == 3, "Features must have 3 channels. (N, d, 3)")
-    model.feature_size = colors.size(1);
-    model.half_attribs = reinterpret_cast<half *>(half_attribs.data_ptr<torch::Half>());
+    static torch::autograd::variable_list forward(
+        torch::autograd::AutogradContext *ctx,
+        const torch::Tensor& mean,
+        const torch::Tensor& scale,
+        const torch::Tensor& quat,
+        const torch::Tensor& density,
+        const torch::Tensor& features,
+        const torch::Tensor& rayo,
+        const torch::Tensor& rayd,
+        float tmin,
+        float tmax,
+        float max_prim_size,
+        const torch::Tensor& wcts,
+        size_t max_iters
+    );
 
-    model.means = reinterpret_cast<float3 *>(means.data_ptr());
-    model.scales = reinterpret_cast<float3 *>(scales.data_ptr());
-    model.quats = reinterpret_cast<float4 *>(quats.data_ptr());
-
-    model.densities = reinterpret_cast<float *>(densities.data_ptr());
-    model.features = reinterpret_cast<float *>(colors.data_ptr());
-    model.num_prims = numPrimitives;
-    model.prev_alloc_size = NUM_AABBS;
-    model.aabbs = D_AABBS;
-    create_aabbs(model);
-    D_AABBS = model.aabbs;
-    NUM_AABBS = std::max(model.num_prims, NUM_AABBS);
-  }
-  void set_features(const torch::Tensor &colors) {
-    CHECK_FLOAT_DIM3(colors);
-    TORCH_CHECK(colors.size(0) == model.num_prims,
-                "All inputs (colors) must have the same 0 dimension");
-    model.features = reinterpret_cast<float *>(colors.data_ptr());
-  }
+    static torch::autograd::variable_list backward(
+        torch::autograd::AutogradContext *ctx,
+        torch::autograd::variable_list grad_outputs
+    );
 };
 
-struct fesPyGas {
-public:
-  GAS gas;
-  fesPyGas(const fesOptixContext &context, const torch::Device &device,
-        const fesPyPrimitives &model, const bool enable_anyhit,
-        const bool fast_build, const bool enable_rebuild)
-      : gas(context.context, device.index(), model.model, enable_anyhit,
-            fast_build) {}
-};
-
-struct fesSavedForBackward {
-public:
-  torch::Tensor states, diracs, faces, touch_count, iters;
-  size_t num_prims;
-  size_t num_rays;
-  size_t num_float_per_state;
-  torch::Device device;
-  fesSavedForBackward(torch::Device device)
-      : num_prims(0), num_rays(0), num_float_per_state(sizeof(SplineState) / sizeof(float)),
-        device(device) {}
-  fesSavedForBackward(size_t num_rays, size_t num_prims, torch::Device device)
-      : num_prims(num_prims), num_float_per_state(sizeof(SplineState) / sizeof(float)),
-        device(device) {
-    allocate(num_rays);
-  }
-  uint *iters_data_ptr() { return reinterpret_cast<uint *>(iters.data_ptr()); }
-  uint *touch_count_data_ptr() { return reinterpret_cast<uint *>(touch_count.data_ptr()); }
-  uint *faces_data_ptr() { return reinterpret_cast<uint *>(faces.data_ptr()); }
-  float4 *diracs_data_ptr() {
-    return reinterpret_cast<float4 *>(diracs.data_ptr());
-  }
-  SplineState *states_data_ptr() {
-    return reinterpret_cast<SplineState *>(states.data_ptr());
-  }
-  torch::Tensor get_states() { return states; }
-  torch::Tensor get_diracs() { return diracs; }
-  torch::Tensor get_faces() { return faces; }
-  torch::Tensor get_iters() { return iters; }
-  torch::Tensor get_touch_count() { return touch_count; }
-  void allocate(size_t num_rays) {
-    states = torch::zeros({(long)num_rays, (long)num_float_per_state},
-                          torch::device(device).dtype(torch::kFloat32));
-    diracs = torch::zeros({(long)num_rays, 4},
-                          torch::device(device).dtype(torch::kFloat32));
-    faces = torch::zeros({(long)num_rays},
-                         torch::device(device).dtype(torch::kInt32));
-    touch_count = torch::zeros({(long)num_prims},
-                         torch::device(device).dtype(torch::kInt32));
-    iters = torch::zeros({(long)num_rays},
-                         torch::device(device).dtype(torch::kInt32));
-    this->num_rays = num_rays;
-  }
-};
-
-struct fesPyForward {
-public:
-  Forward forward;
-  torch::Device device;
-  size_t num_prims;
-  uint sh_degree;
-  fesPyForward(const fesOptixContext &context, const torch::Device &device,
-            const fesPyPrimitives &model, const bool enable_backward)
-      : device(device),
-        forward(context.context, device.index(), model.model, enable_backward),
-        num_prims(model.model.num_prims),
-        sh_degree(sqrt(model.model.feature_size) - 1) {}
-  void update_model(const fesPyPrimitives &model) {
-    forward.reset_features(model.model);
-  }
-  py::dict trace_rays(const fesPyGas &gas, const torch::Tensor &ray_origins,
-                      const torch::Tensor &ray_directions, float tmin,
-                      float tmax, const size_t max_iters,
-                      const float max_prim_size) {
-    torch::AutoGradMode enable_grad(false);
-    CHECK_FLOAT_DIM3(ray_origins);
-    CHECK_FLOAT_DIM3(ray_directions);
-    const size_t num_rays = ray_origins.numel() / 3;
-    torch::Tensor color;
-    color = torch::zeros({(long)num_rays, 4},
-                         torch::device(device).dtype(torch::kFloat32));
-    torch::Tensor tri_collection =
-        torch::zeros({(long)(num_rays * max_iters)},
-                     torch::device(device).dtype(torch::kInt32));
-
-    torch::Tensor initial_drgb = torch::zeros(
-        {(long)num_rays, 4},
-        torch::device(device).dtype(torch::kFloat32));
-    torch::Tensor initial_touch_count = torch::zeros(
-        {1},
-        torch::device(device).dtype(torch::kInt32));
-    torch::Tensor initial_touch_inds = torch::zeros(
-        {(long)num_prims},
-        torch::device(device).dtype(torch::kInt32));
-
-    fesSavedForBackward saved_for_backward(num_rays, num_prims, device);
-    forward.trace_rays(gas.gas.gas_handle, num_rays,
-                       reinterpret_cast<float3 *>(ray_origins.data_ptr()),
-                       reinterpret_cast<float3 *>(ray_directions.data_ptr()),
-                       reinterpret_cast<void *>(color.data_ptr()),
-                       sh_degree, tmin, tmax,
-                       reinterpret_cast<float4 *>(initial_drgb.data_ptr()),
-                       NULL,
-                       max_iters, max_prim_size,
-                       saved_for_backward.iters_data_ptr(),
-                       saved_for_backward.faces_data_ptr(),
-                       saved_for_backward.touch_count_data_ptr(),
-                       saved_for_backward.diracs_data_ptr(),
-                       saved_for_backward.states_data_ptr(),
-                       reinterpret_cast<int *>(tri_collection.data_ptr()),
-                       reinterpret_cast<int *>(initial_touch_count.data_ptr()),
-                       reinterpret_cast<int *>(initial_touch_inds.data_ptr()));
-    return py::dict("color"_a = color,
-                    "saved"_a = saved_for_backward,
-                    "tri_collection"_a = tri_collection,
-                    "initial_drgb"_a = initial_drgb,
-                    "initial_touch_inds"_a = initial_touch_inds,
-                    "initial_touch_count"_a = initial_touch_count);
-  }
-};
-
-// Wrapper function for backward kernel
-void py_backwards_kernel(
-    const torch::Tensor& last_state,
-    const torch::Tensor& iters,
-    const torch::Tensor& tri_collection,
-    const torch::Tensor& ray_origins,
-    const torch::Tensor& ray_directions,
-    const torch::Tensor& means,
-    const torch::Tensor& scales,
-    const torch::Tensor& quats,
-    const torch::Tensor& densities,
+torch::autograd::variable_list SplineTracerFunction::forward(
+    torch::autograd::AutogradContext *ctx,
+    const torch::Tensor& mean,
+    const torch::Tensor& scale,
+    const torch::Tensor& quat,
+    const torch::Tensor& density,
     const torch::Tensor& features,
-    torch::Tensor& dL_dmeans,
-    torch::Tensor& dL_dscales,
-    torch::Tensor& dL_dquats,
-    torch::Tensor& dL_ddensities,
-    torch::Tensor& dL_dfeatures,
-    torch::Tensor& dL_drayos,
-    torch::Tensor& dL_drayds,
-    torch::Tensor& dL_dmeans2D,
-    torch::Tensor& dL_dinitial_drgb,
-    torch::Tensor& touch_count,
-    const torch::Tensor& dL_doutputs,
-    const torch::Tensor& wcts,
+    const torch::Tensor& rayo,
+    const torch::Tensor& rayd,
     float tmin,
     float tmax,
     float max_prim_size,
+    const torch::Tensor& wcts,
     size_t max_iters
 ) {
-    uint32_t num_rays = ray_origins.size(0);
-    uint32_t num_prims = means.size(0);
-    uint32_t feature_size = features.size(1);
-    uint32_t num_wcts = wcts.size(0);
+    torch::NoGradGuard no_grad;
 
-    launch_backwards_kernel(
-        last_state.data_ptr<float>(),
-        iters.data_ptr<int>(),
+    auto device = rayo.device();
+    int device_index = device.index();
+    OptixDeviceContext optix_ctx = get_optix_context(device_index);
+
+    // Make contiguous
+    auto mean_c = mean.contiguous();
+    auto scale_c = scale.contiguous();
+    auto quat_c = quat.contiguous();
+    auto density_c = density.contiguous();
+    auto features_c = features.contiguous();
+    auto rayo_c = rayo.contiguous();
+    auto rayd_c = rayd.contiguous();
+
+    size_t num_prims = mean_c.size(0);
+    size_t num_rays = rayo_c.size(0);
+    size_t feature_size = features_c.size(1);
+    uint sh_degree = static_cast<uint>(sqrt(static_cast<double>(feature_size))) - 1;
+
+    // Create half_attribs for GAS
+    auto half_attribs = torch::cat({mean_c, scale_c, quat_c}, 1).to(torch::kFloat16).contiguous();
+
+    // Setup primitives
+    Primitives model;
+    model.means = reinterpret_cast<float3*>(mean_c.data_ptr<float>());
+    model.scales = reinterpret_cast<float3*>(scale_c.data_ptr<float>());
+    model.quats = reinterpret_cast<float4*>(quat_c.data_ptr<float>());
+    model.densities = density_c.data_ptr<float>();
+    model.features = features_c.data_ptr<float>();
+    model.half_attribs = reinterpret_cast<half*>(half_attribs.data_ptr<at::Half>());
+    model.num_prims = num_prims;
+    model.feature_size = feature_size;
+    model.prev_alloc_size = G_NUM_AABBS;
+    model.aabbs = G_AABBS;
+
+    create_aabbs(model);
+    G_AABBS = model.aabbs;
+    G_NUM_AABBS = std::max(model.num_prims, G_NUM_AABBS);
+
+    // Build GAS
+    GAS gas(optix_ctx, device_index, model, true, false);
+
+    // Create Forward tracer
+    Forward forward(optix_ctx, device_index, model, true);
+
+    // Allocate outputs
+    auto color = torch::zeros({(long)num_rays, 4}, torch::device(device).dtype(torch::kFloat32));
+    auto tri_collection = torch::zeros({(long)(num_rays * max_iters)}, torch::device(device).dtype(torch::kInt32));
+    auto initial_drgb = torch::zeros({(long)num_rays, 4}, torch::device(device).dtype(torch::kFloat32));
+    auto initial_touch_count = torch::zeros({1}, torch::device(device).dtype(torch::kInt32));
+    auto initial_touch_inds = torch::zeros({(long)num_prims}, torch::device(device).dtype(torch::kInt32));
+
+    // State tensors
+    size_t num_float_per_state = sizeof(SplineState) / sizeof(float);
+    auto states = torch::zeros({(long)num_rays, (long)num_float_per_state}, torch::device(device).dtype(torch::kFloat32));
+    auto diracs = torch::zeros({(long)num_rays, 4}, torch::device(device).dtype(torch::kFloat32));
+    auto faces = torch::zeros({(long)num_rays}, torch::device(device).dtype(torch::kInt32));
+    auto touch_count = torch::zeros({(long)num_prims}, torch::device(device).dtype(torch::kInt32));
+    auto iters = torch::zeros({(long)num_rays}, torch::device(device).dtype(torch::kInt32));
+
+    // Trace rays
+    forward.trace_rays(
+        gas.gas_handle, num_rays,
+        reinterpret_cast<float3*>(rayo_c.data_ptr<float>()),
+        reinterpret_cast<float3*>(rayd_c.data_ptr<float>()),
+        color.data_ptr<void>(),
+        sh_degree, tmin, tmax,
+        reinterpret_cast<float4*>(initial_drgb.data_ptr<float>()),
+        nullptr,
+        max_iters, max_prim_size,
+        reinterpret_cast<uint*>(iters.data_ptr<int>()),
+        reinterpret_cast<uint*>(faces.data_ptr<int>()),
+        reinterpret_cast<uint*>(touch_count.data_ptr<int>()),
+        reinterpret_cast<float4*>(diracs.data_ptr<float>()),
+        reinterpret_cast<SplineState*>(states.data_ptr<float>()),
         tri_collection.data_ptr<int>(),
-        ray_origins.data_ptr<float>(),
-        ray_directions.data_ptr<float>(),
-        means.data_ptr<float>(),
-        scales.data_ptr<float>(),
-        quats.data_ptr<float>(),
-        densities.data_ptr<float>(),
-        features.data_ptr<float>(),
-        dL_dmeans.data_ptr<float>(),
-        dL_dscales.data_ptr<float>(),
-        dL_dquats.data_ptr<float>(),
-        dL_ddensities.data_ptr<float>(),
-        dL_dfeatures.data_ptr<float>(),
-        dL_drayos.data_ptr<float>(),
-        dL_drayds.data_ptr<float>(),
-        dL_dmeans2D.data_ptr<float>(),
-        dL_dinitial_drgb.data_ptr<float>(),
-        touch_count.data_ptr<int>(),
-        dL_doutputs.data_ptr<float>(),
-        wcts.data_ptr<float>(),
-        tmin, tmax, max_prim_size,
-        static_cast<uint32_t>(max_iters),
-        num_rays, num_prims, feature_size, num_wcts,
-        nullptr
+        initial_touch_count.data_ptr<int>(),
+        initial_touch_inds.data_ptr<int>()
     );
+
+    // Compute distortion loss
+    auto states_reshaped = states.reshape({(long)num_rays, -1});
+    auto distortion_pt1 = states_reshaped.select(1, 0);
+    auto distortion_pt2 = states_reshaped.select(1, 1);
+    auto distortion_loss = distortion_pt1 - distortion_pt2;
+
+    // Get initial_inds
+    int touch_cnt = initial_touch_count.item<int>();
+    auto initial_inds = initial_touch_inds.slice(0, 0, touch_cnt);
+
+    // Save for backward
+    ctx->save_for_backward({
+        states, iters, tri_collection,
+        mean_c, scale_c, quat_c, density_c, features_c,
+        rayo_c, rayd_c, wcts,
+        initial_drgb, initial_inds
+    });
+    ctx->saved_data["tmin"] = tmin;
+    ctx->saved_data["tmax"] = tmax;
+    ctx->saved_data["max_prim_size"] = max_prim_size;
+    ctx->saved_data["max_iters"] = static_cast<int64_t>(max_iters);
+    ctx->saved_data["has_wcts"] = wcts.numel() > 0;
+
+    // Output: [color (4), distortion_loss (1)]
+    auto output = torch::cat({color, distortion_loss.unsqueeze(1)}, 1);
+
+    return {output};
 }
 
-// Wrapper function for initial drgb backward kernel
-void py_backwards_initial_drgb_kernel(
-    const torch::Tensor& ray_origins,
-    const torch::Tensor& ray_directions,
-    const torch::Tensor& means,
-    const torch::Tensor& scales,
-    const torch::Tensor& quats,
-    const torch::Tensor& densities,
-    const torch::Tensor& features,
-    torch::Tensor& dL_ddensities,
-    torch::Tensor& dL_dfeatures,
-    const torch::Tensor& initial_inds,
-    torch::Tensor& dL_dinitial_drgb,
-    torch::Tensor& touch_count,
-    float tmin
+torch::autograd::variable_list SplineTracerFunction::backward(
+    torch::autograd::AutogradContext *ctx,
+    torch::autograd::variable_list grad_outputs
 ) {
-    uint32_t num_rays = ray_directions.size(0);
-    uint32_t num_initial_inds = initial_inds.size(0);
-    uint32_t feature_size = features.size(1);
+    auto saved = ctx->get_saved_variables();
+    auto states = saved[0];
+    auto iters = saved[1];
+    auto tri_collection = saved[2];
+    auto mean = saved[3];
+    auto scale = saved[4];
+    auto quat = saved[5];
+    auto density = saved[6];
+    auto features = saved[7];
+    auto rayo = saved[8];
+    auto rayd = saved[9];
+    auto wcts = saved[10];
+    auto initial_drgb = saved[11];
+    auto initial_inds = saved[12];
 
-    launch_backwards_initial_drgb_kernel(
-        ray_origins.data_ptr<float>(),
-        ray_directions.data_ptr<float>(),
-        means.data_ptr<float>(),
-        scales.data_ptr<float>(),
-        quats.data_ptr<float>(),
-        densities.data_ptr<float>(),
-        features.data_ptr<float>(),
-        dL_ddensities.data_ptr<float>(),
-        dL_dfeatures.data_ptr<float>(),
-        initial_inds.data_ptr<int>(),
-        dL_dinitial_drgb.data_ptr<float>(),
-        touch_count.data_ptr<int>(),
-        tmin,
-        num_rays, num_initial_inds, feature_size,
-        nullptr
+    float tmin = ctx->saved_data["tmin"].toDouble();
+    float tmax = ctx->saved_data["tmax"].toDouble();
+    float max_prim_size = ctx->saved_data["max_prim_size"].toDouble();
+    size_t max_iters = ctx->saved_data["max_iters"].toInt();
+    bool has_wcts = ctx->saved_data["has_wcts"].toBool();
+
+    auto device = rayo.device();
+    size_t num_prims = mean.size(0);
+    size_t num_rays = rayo.size(0);
+    size_t feature_size = features.size(1);
+
+    // Allocate gradients
+    auto dL_dmeans = torch::zeros({(long)num_prims, 3}, torch::device(device).dtype(torch::kFloat32));
+    auto dL_dscales = torch::zeros({(long)num_prims, 3}, torch::device(device).dtype(torch::kFloat32));
+    auto dL_dquats = torch::zeros({(long)num_prims, 4}, torch::device(device).dtype(torch::kFloat32));
+    auto dL_ddensities = torch::zeros({(long)num_prims}, torch::device(device).dtype(torch::kFloat32));
+    auto dL_dfeatures = torch::zeros_like(features);
+    auto dL_drayo = torch::zeros({(long)num_rays, 3}, torch::device(device).dtype(torch::kFloat32));
+    auto dL_drayd = torch::zeros({(long)num_rays, 3}, torch::device(device).dtype(torch::kFloat32));
+    auto dL_dmeans2D = torch::zeros({(long)num_prims, 2}, torch::device(device).dtype(torch::kFloat32));
+    auto touch_count = torch::zeros({(long)num_prims}, torch::device(device).dtype(torch::kInt32));
+    auto dL_dinitial_drgb = torch::zeros({(long)num_rays, 4}, torch::device(device).dtype(torch::kFloat32));
+
+    auto grad_output = grad_outputs[0].contiguous();
+    auto wcts_safe = has_wcts ? wcts : torch::ones({1, 4, 4}, torch::device(device).dtype(torch::kFloat32));
+
+    if (iters.sum().item<int>() > 0) {
+        launch_backwards_kernel(
+            states.data_ptr<float>(),
+            iters.data_ptr<int>(),
+            tri_collection.data_ptr<int>(),
+            rayo.data_ptr<float>(),
+            rayd.data_ptr<float>(),
+            mean.data_ptr<float>(),
+            scale.data_ptr<float>(),
+            quat.data_ptr<float>(),
+            density.data_ptr<float>(),
+            features.data_ptr<float>(),
+            dL_dmeans.data_ptr<float>(),
+            dL_dscales.data_ptr<float>(),
+            dL_dquats.data_ptr<float>(),
+            dL_ddensities.data_ptr<float>(),
+            dL_dfeatures.data_ptr<float>(),
+            dL_drayo.data_ptr<float>(),
+            dL_drayd.data_ptr<float>(),
+            dL_dmeans2D.data_ptr<float>(),
+            dL_dinitial_drgb.data_ptr<float>(),
+            touch_count.data_ptr<int>(),
+            grad_output.data_ptr<float>(),
+            wcts_safe.data_ptr<float>(),
+            tmin, tmax, max_prim_size,
+            static_cast<uint32_t>(max_iters),
+            static_cast<uint32_t>(num_rays),
+            static_cast<uint32_t>(num_prims),
+            static_cast<uint32_t>(feature_size),
+            static_cast<uint32_t>(wcts_safe.size(0)),
+            nullptr
+        );
+
+        if (initial_inds.size(0) > 0) {
+            launch_backwards_initial_drgb_kernel(
+                rayo.data_ptr<float>(),
+                rayd.data_ptr<float>(),
+                mean.data_ptr<float>(),
+                scale.data_ptr<float>(),
+                quat.data_ptr<float>(),
+                density.data_ptr<float>(),
+                features.data_ptr<float>(),
+                dL_ddensities.data_ptr<float>(),
+                dL_dfeatures.data_ptr<float>(),
+                initial_inds.data_ptr<int>(),
+                dL_dinitial_drgb.data_ptr<float>(),
+                touch_count.data_ptr<int>(),
+                tmin,
+                static_cast<uint32_t>(num_rays),
+                static_cast<uint32_t>(initial_inds.size(0)),
+                static_cast<uint32_t>(feature_size),
+                nullptr
+            );
+        }
+    }
+
+    // Clamp gradients
+    float v = 1e3f;
+    float mean_v = 1e3f;
+    dL_dmeans = dL_dmeans.clamp(-mean_v, mean_v);
+    dL_dscales = dL_dscales.clamp(-v, v);
+    dL_dquats = dL_dquats.clamp(-v, v);
+    dL_ddensities = dL_ddensities.clamp(-50.0f, 50.0f).reshape(density.sizes());
+    dL_dfeatures = dL_dfeatures.clamp(-v, v);
+    dL_drayo = dL_drayo.clamp(-v, v);
+    dL_drayd = dL_drayd.clamp(-v, v);
+
+    if (!has_wcts) {
+        dL_dmeans2D = torch::Tensor();  // None
+    }
+
+    // Return gradients for: mean, scale, quat, density, features, rayo, rayd, tmin, tmax, max_prim_size, wcts, max_iters
+    return {
+        dL_dmeans,      // mean
+        dL_dscales,     // scale
+        dL_dquats,      // quat
+        dL_ddensities,  // density
+        dL_dfeatures,   // features
+        dL_drayo,       // rayo
+        dL_drayd,       // rayd
+        torch::Tensor(), // tmin (no grad)
+        torch::Tensor(), // tmax (no grad)
+        torch::Tensor(), // max_prim_size (no grad)
+        dL_dmeans2D,     // wcts -> returns dL_dmeans2D
+        torch::Tensor()  // max_iters (no grad)
+    };
+}
+
+// Simple wrapper function
+torch::Tensor trace_rays(
+    const torch::Tensor& mean,
+    const torch::Tensor& scale,
+    const torch::Tensor& quat,
+    const torch::Tensor& density,
+    const torch::Tensor& features,
+    const torch::Tensor& rayo,
+    const torch::Tensor& rayd,
+    float tmin,
+    float tmax,
+    float max_prim_size,
+    const torch::Tensor& wcts,
+    size_t max_iters
+) {
+    auto result = SplineTracerFunction::apply(
+        mean, scale, quat, density, features,
+        rayo, rayd, tmin, tmax, max_prim_size, wcts, max_iters
     );
+    return result[0];
 }
 
 PYBIND11_MODULE(ellipsoid_splinetracer, m) {
-  py::class_<fesOptixContext>(m, "OptixContext")
-      .def(py::init<const torch::Device &>());
-  py::class_<fesSavedForBackward>(m, "SavedForBackward")
-      .def_property_readonly("states", &fesSavedForBackward::get_states)
-      .def_property_readonly("diracs", &fesSavedForBackward::get_diracs)
-      .def_property_readonly("touch_count", &fesSavedForBackward::get_touch_count)
-      .def_property_readonly("iters", &fesSavedForBackward::get_iters)
-      .def_property_readonly("faces", &fesSavedForBackward::get_faces);
-  py::class_<fesPyPrimitives>(m, "Primitives")
-      .def(py::init<const torch::Device &>())
-      .def("add_primitives", &fesPyPrimitives::add_primitives)
-      .def("set_features", &fesPyPrimitives::set_features);
-  py::class_<fesPyGas>(m, "GAS").def(
-      py::init<const fesOptixContext &, const torch::Device &,
-               const fesPyPrimitives &, const bool, const bool, const bool>());
-  py::class_<fesPyForward>(m, "Forward")
-      .def(py::init<const fesOptixContext &, const torch::Device &,
-                    const fesPyPrimitives &, const bool>())
-      .def("trace_rays", &fesPyForward::trace_rays)
-      .def("update_model", &fesPyForward::update_model);
-
-  // Backward kernel functions
-  m.def("backwards_kernel", &py_backwards_kernel, "Run backward kernel",
-        "last_state"_a, "iters"_a, "tri_collection"_a,
-        "ray_origins"_a, "ray_directions"_a,
-        "means"_a, "scales"_a, "quats"_a, "densities"_a, "features"_a,
-        "dL_dmeans"_a, "dL_dscales"_a, "dL_dquats"_a, "dL_ddensities"_a, "dL_dfeatures"_a,
-        "dL_drayos"_a, "dL_drayds"_a, "dL_dmeans2D"_a,
-        "dL_dinitial_drgb"_a, "touch_count"_a,
-        "dL_doutputs"_a, "wcts"_a,
-        "tmin"_a, "tmax"_a, "max_prim_size"_a, "max_iters"_a);
-
-  m.def("backwards_initial_drgb_kernel", &py_backwards_initial_drgb_kernel,
-        "Run backward kernel for initial drgb",
-        "ray_origins"_a, "ray_directions"_a,
-        "means"_a, "scales"_a, "quats"_a, "densities"_a, "features"_a,
-        "dL_ddensities"_a, "dL_dfeatures"_a,
-        "initial_inds"_a, "dL_dinitial_drgb"_a, "touch_count"_a, "tmin"_a);
+    m.def("trace_rays", &trace_rays,
+          "Trace rays through ellipsoid spline primitives with automatic differentiation",
+          "mean"_a, "scale"_a, "quat"_a, "density"_a, "features"_a,
+          "rayo"_a, "rayd"_a,
+          "tmin"_a = 0.0f, "tmax"_a = 1000.0f, "max_prim_size"_a = 3.0f,
+          "wcts"_a = torch::Tensor(), "max_iters"_a = 500);
 }
