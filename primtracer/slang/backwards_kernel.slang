@@ -98,16 +98,15 @@ void atomic_add_float4(TensorView<float> view, uint ind, float4 val) {
     view.InterlockedAdd(uint2(ind, 3u), val.w, temp);
 }
 
-SplineState get_state(TensorView<float> view, uint ind) {
+IntegrationState get_state(TensorView<float> view, uint ind) {
     return {
-        float2(view[ind, 0], view[ind, 1]),
-        float2(view[ind, 2], view[ind, 3]),
-        float3(view[ind, 4], view[ind, 5], view[ind, 6]),
-        view[ind, 7],
-        float4(view[ind, 8], view[ind, 9], view[ind, 10], view[ind, 11]),
-
-        view[ind, 12],
-        float3(view[ind, 13], view[ind, 14], view[ind, 15]),
+        float2(view[ind, 0], view[ind, 1]),   // distortion_parts
+        float2(view[ind, 2], view[ind, 3]),   // cum_sum
+        float3(view[ind, 4], view[ind, 5], view[ind, 6]),  // depth_accum
+        view[ind, 7],                          // t
+        float4(view[ind, 8], view[ind, 9], view[ind, 10], view[ind, 11]),  // sample
+        view[ind, 12],                         // log_transmittance
+        float3(view[ind, 13], view[ind, 14], view[ind, 15]),  // color
     };
 }
 
@@ -128,14 +127,14 @@ struct DualModel {
     TensorView<float> dL_dmeans2D;
 };
 
-DifferentialPair<SplineState>
-run_update(in SplineState old_dual_state, 
-           in ControlPoint old_ctrl_pt,
-           in ControlPoint ctrl_pt,
+DifferentialPair<IntegrationState>
+run_update(in IntegrationState old_dual_state, 
+           in Sample old_ctrl_pt,
+           in Sample ctrl_pt,
            in uint prim_ind,
            in uint face_id,
            in uint ray_ind,
-           in DifferentialPair<SplineState> deriv_state,
+           in DifferentialPair<IntegrationState> deriv_state,
            in float3 origin,
            in float3 direction,
            in float tmin,
@@ -220,7 +219,7 @@ run_update(in SplineState old_dual_state,
     return old_deriv_state;
 }
 
-ControlPoint load_ctrl_pt(in uint older_tri_ind, in DualModel model, in float3 origin, float3 direction, uint sh_degree, bool skip_close)
+Sample load_ctrl_pt(in uint older_tri_ind, in DualModel model, in float3 origin, float3 direction, uint sh_degree, bool skip_close)
 {
     let older_prim_ind = (uint)floor(older_tri_ind / tri_per_g);
     let older_face_id = mod(older_tri_ind, tri_per_g);
@@ -294,7 +293,7 @@ void backwards_kernel(
 
     let dL_dC = get_float4(dL_doutputs, ray_ind);
     let dL_ddistortion_loss = dL_doutputs[ray_ind, 4];
-    SplineOutput.Differential dL_doutput;
+    RenderOutput.Differential dL_doutput;
     dL_doutput.C = {dL_dC.x, dL_dC.y, dL_dC.z};
     dL_doutput.depth = dL_dC.w;
     dL_doutput.distortion_loss = dL_ddistortion_loss;
@@ -320,23 +319,23 @@ void backwards_kernel(
     float4x4 inv_wct = inverse(wct);
 
     uint tri_ind = tri_collection[ray_ind + max(num_iters-1, 0) * ray_origins.size(0)];
-    ControlPoint ctrl_pt = load_ctrl_pt(tri_ind, model, origin, direction, sh_degree, skip_close);
+    Sample ctrl_pt = load_ctrl_pt(tri_ind, model, origin, direction, sh_degree, skip_close);
 
     // load old ctrl_pt here because the next loop is about to load the older one instead
     for (int i=num_iters; i-->0; )
     {
         uint old_tri_ind;
-        ControlPoint old_ctrl_pt;
+        Sample old_ctrl_pt;
         if (i-1 >= 0) {
             old_tri_ind = tri_collection[ray_ind + (i-1) * ray_origins.size(0)];
             old_ctrl_pt = load_ctrl_pt(old_tri_ind, model, origin, direction, sh_degree, skip_close);
         } else {
             old_ctrl_pt.t = 0;
-            old_ctrl_pt.dirac = {0.f, 0.f, 0.f, 0.f};
+            old_ctrl_pt.value = {0.f, 0.f, 0.f, 0.f};
         }
 
 
-        SplineState old_dual_state = inverse_update_dual(dual_state, ctrl_pt, old_ctrl_pt, tmin, tmax);
+        IntegrationState old_dual_state = inverse_update_dual(dual_state, ctrl_pt, old_ctrl_pt, tmin, tmax);
 
         let old_deriv_state = run_update(
                 old_dual_state, 
@@ -359,10 +358,10 @@ void backwards_kernel(
 
     }
     float temp;
-    dL_dinital_drgb[ray_ind, 0u] = deriv_state.d.drgb.x;
-    dL_dinital_drgb[ray_ind, 1u] = deriv_state.d.drgb.y;
-    dL_dinital_drgb[ray_ind, 2u] = deriv_state.d.drgb.z;
-    dL_dinital_drgb[ray_ind, 3u] = deriv_state.d.drgb.w;
+    dL_dinital_drgb[ray_ind, 0u] = deriv_state.d.sample.x;
+    dL_dinital_drgb[ray_ind, 1u] = deriv_state.d.sample.y;
+    dL_dinital_drgb[ray_ind, 2u] = deriv_state.d.sample.z;
+    dL_dinital_drgb[ray_ind, 3u] = deriv_state.d.sample.w;
 }
 
 [Differentiable]

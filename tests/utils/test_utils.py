@@ -12,23 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import splinetracers
+import primtracer
 from tests import quad
 
 METHODS = [
-    splinetracers,
+    primtracer,
 ]
 
 SYM_METHODS = [
-    splinetracers,
+    primtracer,
 ]
 
 ALL_QUAD_PAIRS = [
-    (splinetracers, quad.query_ellipsoid),
+    (primtracer, quad.query_ellipsoid),
 ]
 
 QUAD_PAIRS = [
-    (splinetracers, quad.query_ellipsoid),
+    (primtracer, quad.query_ellipsoid),
 ]
 
 ALPHA_QUAD_PAIRS = [

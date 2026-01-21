@@ -42,15 +42,15 @@ struct HitAttr {
 };
 
 // LaunchParams
-RWStructuredBuffer<float4>      image;
-RWStructuredBuffer<uint>        iters;
-RWStructuredBuffer<uint>        last_face;
-RWStructuredBuffer<uint>        touch_count;
-RWStructuredBuffer<float4>      last_dirac;
-RWStructuredBuffer<SplineState> last_state;
-RWStructuredBuffer<int> tri_collection;
-StructuredBuffer<float3>      ray_origins;
-StructuredBuffer<float3>      ray_directions;
+RWStructuredBuffer<float4>            image;
+RWStructuredBuffer<uint>              iters;
+RWStructuredBuffer<uint>              last_face;
+RWStructuredBuffer<uint>              touch_count;
+RWStructuredBuffer<float4>            last_sample;
+RWStructuredBuffer<IntegrationState>  last_state;
+RWStructuredBuffer<int>               tri_collection;
+StructuredBuffer<float3>              ray_origins;
+StructuredBuffer<float3>              ray_directions;
 Camera camera;
 
 RWStructuredBuffer<float3> means;
@@ -63,13 +63,13 @@ size_t sh_degree;
 size_t max_iters;
 float tmin;
 float tmax;
-RWStructuredBuffer<float4> initial_drgb;
+RWStructuredBuffer<float4> initial_sample;
 float max_prim_size;
 RaytracingAccelerationStructure traversable;
 
 
-ControlPoint get_ctrl_pt(uint tri, float t) {
-    ControlPoint ctrl_pt;
+Sample get_sample(uint tri, float t) {
+    Sample sample;
     let prim_ind = tri / 2;
     let hitkind = tri % 2;
     let height = densities[prim_ind];
@@ -79,12 +79,12 @@ ControlPoint get_ctrl_pt(uint tri, float t) {
     feat.f0 = get_sh(sh_feats, 0);
     float3 rayd = {0, 0, 1};
     let color = eval_sh_col0(rayd, feat);
-    ctrl_pt.t = t;
-    ctrl_pt.dirac.x = dirac_height;
-    ctrl_pt.dirac.y = dirac_height * color.x;
-    ctrl_pt.dirac.z = dirac_height * color.y;
-    ctrl_pt.dirac.w = dirac_height * color.z;
-    return ctrl_pt;
+    sample.t = t;
+    sample.value.x = dirac_height;
+    sample.value.y = dirac_height * color.x;
+    sample.value.z = dirac_height * color.y;
+    sample.value.w = dirac_height * color.z;
+    return sample;
 }
 
 [shader("intersection")]
@@ -180,13 +180,13 @@ void rg_float()
     const uint3 dim = DispatchRaysDimensions();
     float3 direction = l2_normalize(ray_directions[idx.x]);
     float3 origin = ray_origins[idx.x] + tmin * ray_directions[idx.x];
-    SplineState state = make_empty_state();
+    IntegrationState state = make_empty_state();
     state.t = 0;
-    state.drgb = initial_drgb[idx.x];
+    state.sample = initial_sample[idx.x];
 
     let start_id = idx.x * max_iters;
 
-    ControlPoint ctrl_pt = {};
+    Sample sample = {};
     uint last_tri = -1;
     float prev_t = state.t;
     uint next_tri = -1;
@@ -195,7 +195,7 @@ void rg_float()
     uint tri;
 
     int iter = 0;
-    while (state.logT < LOG_CUTOFF && iter < max_iters)
+    while (state.log_transmittance < LOG_CUTOFF && iter < max_iters)
     {
         let start_t = abs(state.t);
 
@@ -217,27 +217,27 @@ void rg_float()
 
         bool end = false;
         for (int i=0; i<BUFFER_SIZE; i++) {
-            ctrl_pt.t = buf.t[i];
+            sample.t = buf.t[i];
             tri = buf.idx[i];
-            if (ctrl_pt.t > 1e9) {
+            if (sample.t > 1e9) {
                 end = true;
                 break;
             }
-            ctrl_pt = get_ctrl_pt(tri, ctrl_pt.t);
-            state = update(state, ctrl_pt, tmin, tmax, max_prim_size);
+            sample = get_sample(tri, sample.t);
+            state = update(state, sample, tmin, tmax, max_prim_size);
             touch_count[tri / tri_per_g]++;
             tri_collection[idx.x + iter * dim.x] = tri;
             iter++;
-            if (!(state.logT < LOG_CUTOFF && iter < max_iters)) break;
+            if (!(state.log_transmittance < LOG_CUTOFF && iter < max_iters)) break;
         }
         if (end) break;
 
     }
     let output = extract_color(state, tmin);
-    image[idx.x] = {output.C.x, output.C.y, output.C.z, output.depth};
-    let dual_state = to_dual(state, ctrl_pt);
+    image[idx.x] = {output.color.x, output.color.y, output.color.z, output.depth};
+    let dual_state = to_dual(state, sample);
     last_state[idx.x] = dual_state;
-    last_dirac[idx.x] = ctrl_pt.dirac;
+    last_sample[idx.x] = sample.value;
     last_face[idx.x] = last_tri;
     iters[idx.x] = iter;
 }

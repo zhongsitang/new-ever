@@ -1,20 +1,18 @@
 [workspace]
 authors = ["tangzhongsi <tangzhongsi@qq.com>"]
 channels = ["conda-forge", "schrodinger"]
-name = "new-ever"
+name = "primtracer"
 platforms = ["win-64", "linux-64"]
-version = "0.1.0"
+version = "1.0.0"
 
 [system-requirements]
 cuda = "12.9"
 libc = "2.31"
 
 [tasks]
-configure-ever = {cmd = "cmake -B build -DCMAKE_BUILD_TYPE=Release -G Ninja  ." }
-build-ever = {cmd = "cmake --build build --config Release", depends-on = [
-    "configure-ever",
-] }
-clean-ever = {cmd = "rm -rf build" }
+configure = {cmd = "cmake -B build -DCMAKE_BUILD_TYPE=Release -G Ninja ." }
+build = {cmd = "cmake --build build --config Release", depends-on = ["configure"] }
+clean = {cmd = "rm -rf build" }
 
 [dependencies]
 # compile toolchain
