@@ -12,19 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from absl.testing import absltest
-from absl.testing import parameterized
-from utils.test_utils import METHODS, SYM_METHODS, QUAD_PAIRS
+"""Tests for spherical harmonics evaluation."""
+
 import numpy as np
 import torch
-from icecream import ic
+from absl.testing import absltest
+from absl.testing import parameterized
+
 from utils.math_util import l2_normalize_th
-import random
+
+# Slang-compiled module for SH evaluation
+import eval_sh
+
 torch.set_printoptions(precision=10)
 np.set_printoptions(precision=10)
 
-import eval_sh
-
+# SH constants
 C0 = 0.28209479177387814
 C1 = 0.4886025119029199
 C2 = [
@@ -53,11 +56,12 @@ C4 = [
     0.47308734787878004,
     -1.7701307697799304,
     0.6258357354491761,
-]   
+]
 
 
 def RGB2SH(rgb):
     return (rgb - 0.5) / C0
+
 
 def SH2RGB(sh):
     return sh * C0 + 0.5
@@ -121,13 +125,15 @@ def eval_sh_py(deg: int, sh, dirs):
                             0.6258357354491761 * (xx * (xx - 3 * yy) - yy * (3 * xx - yy)) * sh[..., 24])
     return result
 
+
 device = torch.device('cuda')
+
+
 class SHGradCheckTest(parameterized.TestCase):
 
     @parameterized.product(
-        N = [1],
-        sh_degree = [0, 1],#, 2, 3],
-        # sh_degree = [0],
+        N=[1],
+        sh_degree=[0, 1],
     )
     def test_deriv_sph(self, N, sh_degree):
         features = torch.rand((N, (sh_degree+1)**2, 3), device=device)
@@ -137,32 +143,32 @@ class SHGradCheckTest(parameterized.TestCase):
         rayd = torch.tensor([[0, 0, 1]], dtype=torch.float32).to(device)
 
         features = torch.nn.Parameter(features)
-        
+
         def l2_loss(features):
             return eval_sh.eval_sh(means, features, rayo, sh_degree)
+
         def l2_loss_th(features):
             shs_view = features.transpose(1, 2).view(
                 -1, 3, (sh_degree + 1) ** 2
             )
-            dir_pp = means - rayo.repeat(
-                N, 1
-            )
+            dir_pp = means - rayo.repeat(N, 1)
             dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
             rgb1 = (eval_sh_py(sh_degree, shs_view, dir_pp_normalized) + 0.5).clip(min=0)
             return rgb1
+
         shs_view = features.transpose(1, 2).view(
             -1, 3, (sh_degree + 1) ** 2
         )
-        dir_pp = means - rayo.repeat(
-            N, 1
-        )
+        dir_pp = means - rayo.repeat(N, 1)
         dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
         rgb1 = (eval_sh_py(sh_degree, shs_view, dir_pp_normalized) + 0.5).clip(min=0)
+
         for i in range(3):
             grad = torch.nn.functional.one_hot(torch.tensor([i]), 3).to(device)
-            out, total_vjp = torch.autograd.functional.vjp(l2_loss, (features), grad) 
+            out, total_vjp = torch.autograd.functional.vjp(l2_loss, (features), grad)
             out_th, total_vjp_th = torch.autograd.functional.vjp(l2_loss_th, (features), grad)
             np.testing.assert_allclose(total_vjp.cpu().numpy(), total_vjp_th.cpu().numpy(), atol=1e-6, rtol=1e-6)
+
         torch.autograd.gradcheck(l2_loss, (features), eps=1e-4, atol=1e-2)
 
 

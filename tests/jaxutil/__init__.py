@@ -12,24 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from splinetracers import fast_ellipsoid_splinetracer
-from tests import quad
-
-METHODS = [
-    fast_ellipsoid_splinetracer,
-]
-
-SYM_METHODS = [
-    fast_ellipsoid_splinetracer,
-]
-
-ALL_QUAD_PAIRS = [
-    (fast_ellipsoid_splinetracer, quad.query_ellipsoid),
-]
-
-QUAD_PAIRS = [
-    (fast_ellipsoid_splinetracer, quad.query_ellipsoid),
-]
-
-ALPHA_QUAD_PAIRS = [
-]
+from . import safe_math
+from . import quadrature

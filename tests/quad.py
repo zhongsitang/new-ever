@@ -19,8 +19,8 @@ from jax import config
 config.update("jax_enable_x64", True)
 import numpy as np
 
-from utils import math_util
-from jaxutil import safe_math, quadrature
+from .utils import math_util
+from .jaxutil import safe_math, quadrature
 
 def query_tetra( tdist, rayo, rayd, params):
     xs = rayo.reshape(1, 3) + tdist.reshape(-1, 1) * rayd.reshape(1, 3)

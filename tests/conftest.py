@@ -12,24 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from splinetracers import fast_ellipsoid_splinetracer
-from tests import quad
+"""Pytest configuration for test discovery and path setup."""
 
-METHODS = [
-    fast_ellipsoid_splinetracer,
-]
+import sys
+from pathlib import Path
 
-SYM_METHODS = [
-    fast_ellipsoid_splinetracer,
-]
+# Add project root to Python path for imports
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
-ALL_QUAD_PAIRS = [
-    (fast_ellipsoid_splinetracer, quad.query_ellipsoid),
-]
-
-QUAD_PAIRS = [
-    (fast_ellipsoid_splinetracer, quad.query_ellipsoid),
-]
-
-ALPHA_QUAD_PAIRS = [
-]
+# Add tests directory to Python path for relative imports
+tests_dir = Path(__file__).parent
+if str(tests_dir) not in sys.path:
+    sys.path.insert(0, str(tests_dir))

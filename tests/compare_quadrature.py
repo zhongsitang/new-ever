@@ -12,16 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from absl.testing import absltest
-from absl.testing import parameterized
-from utils.test_utils import METHODS, SYM_METHODS, ALL_QUAD_PAIRS, QUAD_PAIRS
+"""Tests comparing quadrature methods for ray tracing."""
+
 import numpy as np
 import torch
-from icecream import ic
+from absl.testing import absltest
+from absl.testing import parameterized
+
+from utils.test_utils import ALL_QUAD_PAIRS, QUAD_PAIRS
 from utils.math_util import l2_normalize_th
+import quad
+
 torch.set_printoptions(precision=10)
 np.set_printoptions(precision=10)
-from splinetracers import quad
 
 device = torch.device('cuda')
 

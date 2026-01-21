@@ -12,18 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from absl.testing import absltest
-from absl.testing import parameterized
-from utils.test_utils import METHODS, SYM_METHODS, QUAD_PAIRS
+"""Tests for gradient checking of ray tracing methods."""
+
 import numpy as np
 import torch
-from icecream import ic
+from absl.testing import absltest
+from absl.testing import parameterized
+
+from utils.test_utils import METHODS
 from utils.math_util import l2_normalize_th
-import random
+
 torch.set_printoptions(precision=10)
 np.set_printoptions(precision=10)
-
-import eval_sh
 
 device = torch.device('cuda')
 
