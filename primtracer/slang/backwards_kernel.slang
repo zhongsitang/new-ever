@@ -76,12 +76,6 @@ void atomic_add_float3(TensorView<float> view, uint ind, uint feat_ind, float3 v
     view.InterlockedAdd(uint3(ind, feat_ind, 2u), val.z, temp);
 }
 
-void atomic_add_float2(TensorView<float> view, uint ind, float2 val) {
-    float temp;
-    view.InterlockedAdd(uint2(ind, 0u), val.x, temp);
-    view.InterlockedAdd(uint2(ind, 1u), val.y, temp);
-}
-
 void atomic_add_float3(TensorView<float> view, uint ind, float3 val) {
     float temp;
     view.InterlockedAdd(uint2(ind, 0u), val.x, temp);
@@ -123,11 +117,10 @@ struct DualModel {
     TensorView<float> dL_dfeatures;
     TensorView<float> dL_drayos;
     TensorView<float> dL_drayds;
-    TensorView<float> dL_dmeans2D;
 };
 
 DifferentialPair<IntegrationState>
-run_update(in IntegrationState old_dual_state, 
+run_update(in IntegrationState old_dual_state,
            in Sample old_ctrl_pt,
            in Sample ctrl_pt,
            in uint prim_ind,
@@ -140,8 +133,6 @@ run_update(in IntegrationState old_dual_state,
            in float tmax,
            in uint sh_degree,
            in float max_prim_size,
-           in float4x4 wct,
-           in float4x4 inv_wct,
            inout DualModel model)
 {
     var old_deriv_state = diffPair(from_dual(old_dual_state, old_ctrl_pt), {});
@@ -207,14 +198,6 @@ run_update(in IntegrationState old_dual_state,
     atomic_add_float3(model.dL_drayos, ray_ind, deriv_origin.d);
     atomic_add_float3(model.dL_drayds, ray_ind, d_rayd);
 
-    float3 xyd = project(mean, wct);
-
-    var d_xy = diffPair(float2(xyd.x, xyd.y), {});
-    var d_dist = diffPair(xyd.z, {});
-    var d_inv_wct = diffPair(inv_wct, {});
-
-    bwd_diff(inv_project)(d_xy, d_dist, d_inv_wct, deriv_mean.d);
-    atomic_add_float2(model.dL_dmeans2D, prim_ind, d_xy.d);
     return old_deriv_state;
 }
 
@@ -223,12 +206,9 @@ Sample load_ctrl_pt(in uint older_tri_ind, in DualModel model, in float3 origin,
     let older_prim_ind = (uint)floor(older_tri_ind / tri_per_g);
     let older_face_id = mod(older_tri_ind, tri_per_g);
 
-
     let older_mean = get_float3(model.means, older_prim_ind);
-
     let older_scale = get_float3(model.scales, older_prim_ind);
     let older_quat = get_float4(model.quats, older_prim_ind);
-
     let older_density = model.densities[older_prim_ind];
 
     Features older_feat = get_feats(model.features, older_prim_ind, sh_degree);
@@ -236,21 +216,6 @@ Sample load_ctrl_pt(in uint older_tri_ind, in DualModel model, in float3 origin,
 
     return safe_intersect(origin, direction,
         older_scale, older_mean, older_quat, older_color, older_density, older_face_id, skip_close);
-}
-
-[Differentiable]
-float3 project(in float3 xyz, in float4x4 wct) {
-  float4 xyzw = float4(xyz, 1.f);
-  let p_view = mul(xyzw, wct);
-  float2 pix2d = {safe_div(p_view.x, p_view.z), safe_div(p_view.y, p_view.z)};
-  return {pix2d.x, pix2d.y, p_view.z};
-}
-
-[Differentiable]
-float3 inv_project(in float2 xy, in float dist, float4x4 inv_wvt) {
-  let p_hom = float4(xy * dist, dist, 1.f);
-  let out = mul(p_hom, inv_wvt);
-  return {out.x, out.y, out.z};
 }
 
 [AutoPyBindCUDA]
@@ -269,7 +234,6 @@ void backwards_kernel(
     TensorView<int32_t> touch_count,
 
     TensorView<float> dL_doutputs,
-    TensorView<float> wcts,
 
     float tmin,
     float tmax,
@@ -306,17 +270,6 @@ void backwards_kernel(
     let feature_size = model.features.size(1);
     let sh_degree = int(sqrt(feature_size))-1;
 
-    uint start_id = ray_ind * max_iters;
-    let wct_ind = (ray_ind < wcts.size(0)) ? ray_ind : 0;
-    float4x4 wct = {
-        wcts[wct_ind, 0, 0], wcts[wct_ind, 0, 1], wcts[wct_ind, 0, 2], wcts[wct_ind, 0, 3],
-        wcts[wct_ind, 1, 0], wcts[wct_ind, 1, 1], wcts[wct_ind, 1, 2], wcts[wct_ind, 1, 3],
-        wcts[wct_ind, 2, 0], wcts[wct_ind, 2, 1], wcts[wct_ind, 2, 2], wcts[wct_ind, 2, 3],
-        wcts[wct_ind, 3, 0], wcts[wct_ind, 3, 1], wcts[wct_ind, 3, 2], wcts[wct_ind, 3, 3],
-    };
-
-    float4x4 inv_wct = inverse(wct);
-
     uint tri_ind = tri_collection[ray_ind + max(num_iters-1, 0) * ray_origins.size(0)];
     Sample ctrl_pt = load_ctrl_pt(tri_ind, model, origin, direction, sh_degree, skip_close);
 
@@ -337,7 +290,7 @@ void backwards_kernel(
         IntegrationState old_dual_state = inverse_update_dual(dual_state, ctrl_pt, old_ctrl_pt, tmin, tmax);
 
         let old_deriv_state = run_update(
-                old_dual_state, 
+                old_dual_state,
                 old_ctrl_pt,
                 ctrl_pt,
                 (uint)floor(tri_ind / tri_per_g),
@@ -345,7 +298,7 @@ void backwards_kernel(
                 ray_ind,
                 deriv_state,
                 origin, direction, tmin, tmax, sh_degree, max_prim_size,
-                wct, inv_wct, model);
+                model);
         int itemp;
         touch_count.InterlockedAdd((uint)floor(tri_ind / tri_per_g), 1, itemp);
 

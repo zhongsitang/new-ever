@@ -59,8 +59,6 @@ class VolumeRenderer(Function):
         t_near: float,
         t_far: float,
         max_prim_size: float,
-        mean2d: torch.Tensor,
-        world_to_clip: torch.Tensor,
         max_samples: int,
         return_extras: bool = False,
     ):
@@ -101,7 +99,7 @@ class VolumeRenderer(Function):
 
         ctx.save_for_backward(
             mean, scale, quat, density, sh_coeffs, ray_origin, ray_direction,
-            prim_sequence, world_to_clip, out['initial_drgb'], initial_inds
+            prim_sequence, out['initial_drgb'], initial_inds
         )
 
         if return_extras:
@@ -127,7 +125,6 @@ class VolumeRenderer(Function):
             ray_origin,
             ray_direction,
             prim_sequence,
-            world_to_clip,
             initial_sample,
             initial_inds,
         ) = ctx.saved_tensors
@@ -144,7 +141,6 @@ class VolumeRenderer(Function):
         grad_sh_coeffs = torch.zeros_like(sh_coeffs)
         grad_ray_origin = torch.zeros((num_rays, 3), dtype=torch.float32, device=device)
         grad_ray_direction = torch.zeros((num_rays, 3), dtype=torch.float32, device=device)
-        grad_means2d = torch.zeros((num_prims, 2), dtype=torch.float32, device=device)
         hit_count = torch.zeros((num_prims), dtype=torch.int32, device=device)
         grad_initial_sample = torch.zeros((num_rays, 4), dtype=torch.float32, device=device)
 
@@ -163,7 +159,6 @@ class VolumeRenderer(Function):
                 grad_sh_coeffs,
                 grad_ray_origin,
                 grad_ray_direction,
-                grad_means2d,
             )
 
             backwards_kernel.backwards_kernel(
@@ -180,7 +175,6 @@ class VolumeRenderer(Function):
                 grad_initial_sample,
                 hit_count,
                 grad_output.contiguous(),
-                world_to_clip if world_to_clip is not None else torch.ones((1, 4, 4), device=device, dtype=torch.float32),
                 ctx.t_near,
                 ctx.t_far,
                 ctx.max_prim_size,
@@ -210,7 +204,6 @@ class VolumeRenderer(Function):
         # Gradient clipping for numerical stability
         grad_clip = 1e3
         mean_clip = 1e3
-        grad_means2d = None if world_to_clip is None else grad_means2d
 
         return (
             grad_means.clip(min=-mean_clip, max=mean_clip),
@@ -223,8 +216,6 @@ class VolumeRenderer(Function):
             None,  # t_near
             None,  # t_far
             None,  # max_prim_size
-            grad_means2d,
-            None,  # world_to_clip
             None,  # max_samples
             None,  # return_extras
         )
@@ -241,8 +232,6 @@ def trace_rays(
     t_near: float = 0.0,
     t_far: float = 1000,
     max_prim_size: float = 3,
-    grad_means2d: Optional[torch.Tensor] = None,
-    world_to_clip: Optional[torch.Tensor] = None,
     max_samples: int = 500,
     return_extras: bool = False,
 ):
@@ -272,10 +261,6 @@ def trace_rays(
         Far clipping distance along ray
     max_prim_size : float
         Maximum primitive size for acceleration structure
-    grad_means2d : torch.Tensor, optional
-        Output tensor for 2D mean gradients (for screen-space loss)
-    world_to_clip : torch.Tensor, optional
-        World-to-clip transformation matrices for 2D gradient computation
     max_samples : int
         Maximum number of primitive intersections per ray
     return_extras : bool
@@ -298,8 +283,6 @@ def trace_rays(
         t_near,
         t_far,
         max_prim_size,
-        grad_means2d,
-        world_to_clip,
         max_samples,
         return_extras,
     )
