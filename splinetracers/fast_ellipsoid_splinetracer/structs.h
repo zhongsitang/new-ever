@@ -14,7 +14,6 @@
 
 #pragma once
 #include "glm/glm.hpp"
-#include <cuda_fp16.h>
 #include <optix.h>
 #include <optix_types.h>
 
@@ -54,13 +53,12 @@ struct SplineState//((packed))
 
 // Always on GPU
 struct Primitives {
-  __half *half_attribs;
-  float3 *means; 
-  float3 *scales; 
-  float4 *quats; 
-  float *densities; 
+  float3 *means;
+  float3 *scales;
+  float4 *quats;
+  float *densities;
   size_t num_prims;
-  float *features; 
+  float *features;
   size_t feature_size;
 
   OptixAabb *aabbs;

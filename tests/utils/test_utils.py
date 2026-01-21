@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from splinetracers import fast_ellipsoid_splinetracer
-from splinetracers import quad
+from tests import quad
 
 METHODS = [
     fast_ellipsoid_splinetracer,

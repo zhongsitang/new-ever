@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import optix_intrinsics;
-
 uint mod(uint a, uint b) {
   __intrinsic_asm "$0 % $1";
 }

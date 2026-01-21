@@ -63,8 +63,7 @@ class SplineTracer(Function):
         density = density.contiguous()
         quat = quat.contiguous()
         color = color.contiguous()
-        half_attribs = torch.cat([mean, scale, quat], dim=1).half().contiguous()
-        ctx.prims.add_primitives(mean, scale, quat, half_attribs, density, color)
+        ctx.prims.add_primitives(mean, scale, quat, density, color)
 
         ctx.gas = sp.GAS(otx, ctx.device, ctx.prims, True, False, True)
 
@@ -87,7 +86,7 @@ class SplineTracer(Function):
         initial_inds = out['initial_touch_inds'][:out['initial_touch_count'][0]]
 
         ctx.save_for_backward(
-            mean, scale, quat, density, color, rayo, rayd, tri_collection, wcts, out['initial_drgb'], initial_inds, half_attribs
+            mean, scale, quat, density, color, rayo, rayd, tri_collection, wcts, out['initial_drgb'], initial_inds
         )
 
         if return_extras:
@@ -116,7 +115,6 @@ class SplineTracer(Function):
             wcts,
             initial_drgb,
             initial_inds,
-            half_attribs
         ) = ctx.saved_tensors
         device = ctx.device
 

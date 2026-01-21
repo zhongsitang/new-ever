@@ -97,7 +97,7 @@ public:
   torch::Device device;
   fesPyPrimitives(const torch::Device &device) : device(device) {}
   void add_primitives(const torch::Tensor &means, const torch::Tensor &scales,
-                      const torch::Tensor &quats, const torch::Tensor half_attribs,
+                      const torch::Tensor &quats,
                       const torch::Tensor &densities,
                       const torch::Tensor &colors) {
     const int64_t numPrimitives = means.size(0);
@@ -115,7 +115,6 @@ public:
                 "All inputs (densities) must have the same 0 dimension")
     TORCH_CHECK(colors.size(2) == 3, "Features must have 3 channels. (N, d, 3)")
     model.feature_size = colors.size(1);
-    model.half_attribs = reinterpret_cast<half *>(half_attribs.data_ptr<torch::Half>());
 
     model.means = reinterpret_cast<float3 *>(means.data_ptr());
     model.scales = reinterpret_cast<float3 *>(scales.data_ptr());
