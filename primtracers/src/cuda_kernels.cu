@@ -263,7 +263,7 @@ void init_ray_start_samples(Params *params, OptixAabb *aabbs, int *d_touch_count
     const size_t ray_block_size = 64;
     const size_t second_block_size = 16;
     int num_prims = params->means.size;
-    int num_rays = params->initial_drgb.size;
+    int num_rays = params->initial_accumulated_drgb.size;
 
     dim3 grid_dim(
         (num_prims + block_size - 1) / block_size,
@@ -308,7 +308,7 @@ void init_ray_start_samples(Params *params, OptixAabb *aabbs, int *d_touch_count
             params->tmin,
             params->ray_origins.data,
             params->ray_directions.data,
-            reinterpret_cast<float*>(params->initial_drgb.data),
+            reinterpret_cast<float*>(params->initial_accumulated_drgb.data),
             d_touch_inds,
             d_touch_count);
 
@@ -367,7 +367,7 @@ void init_ray_start_samples_single(Params *params) {
         params->features.data,
         num_prims,
         params->ray_origins.data,
-        reinterpret_cast<float*>(params->initial_drgb.data));
+        reinterpret_cast<float*>(params->initial_accumulated_drgb.data));
 
     CUDA_SYNC_CHECK();
 }
