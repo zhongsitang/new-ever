@@ -17,21 +17,21 @@ import safe_math;
 #define PRE_MULTI 1000
 #define LADDER_P -0.1
 
-struct SplineState : IDifferentiable
+struct VolumeState : IDifferentiable
 {
   float2 distortion_parts;
   float2 cum_sum;
   float3 padding;
-  // Spline state
+  // Integration state (ray parameter and delta extinction/color)
   float t;
-  float4 drgb;
+  float4 drgb;  // delta (density, r, g, b) - accumulated contribution derivative
 
-  // Volume Rendering State
+  // Volume Rendering State (transmittance and accumulated color)
   float logT;
   float3 C;
 };
 
-SplineState make_empty_state() {
+VolumeState make_initial_state() {
   return {
     float2(0.f),
     float2(0.f),
@@ -44,7 +44,7 @@ SplineState make_empty_state() {
   };
 }
 
-struct ControlPoint : IDifferentiable
+struct SampleContribution : IDifferentiable
 {
   float t;
   float4 dirac;
@@ -56,30 +56,30 @@ bool AlmostEqualRelative(float A, float B,
     return abs(A - B) <= max(abs(A), abs(B)) * maxRelDiff;
 }
 
-SplineState to_dual(in SplineState state, in ControlPoint ctrl_pt)
+VolumeState to_dual(in VolumeState state, in SampleContribution sample)
 {
-  SplineState dual_state = state;
+  VolumeState dual_state = state;
   return dual_state;
 }
 
-SplineState from_dual(in SplineState state, in ControlPoint ctrl_pt)
+VolumeState from_dual(in VolumeState state, in SampleContribution sample)
 {
-  SplineState dual_state = state;
+  VolumeState dual_state = state;
   return dual_state;
 }
 
-SplineState inverse_update_dual(
-    in SplineState new_state,
-    in ControlPoint new_ctrl_pt,
-    in ControlPoint ctrl_pt,
+VolumeState inverse_update_dual(
+    in VolumeState new_state,
+    in SampleContribution new_sample,
+    in SampleContribution sample,
     in float t_min,
     in float t_max)
 {
-  const float t = ctrl_pt.t;
+  const float t = sample.t;
   const float dt = max(new_state.t - t, 0.f);
 
-  SplineState state = {};
-  state.drgb = new_state.drgb - new_ctrl_pt.dirac;
+  VolumeState state = {};
+  state.drgb = new_state.drgb - new_sample.dirac;
 
   state.t = t;
 
@@ -121,18 +121,18 @@ SplineState inverse_update_dual(
 
 
 [Differentiable]
-SplineState update(
-    in SplineState state,
-    in ControlPoint ctrl_pt,
+VolumeState update(
+    in VolumeState state,
+    in SampleContribution sample,
     no_diff in float t_min,
     no_diff in float t_max,
     no_diff in float max_prim_size)
 {
-  const float t = ctrl_pt.t;
+  const float t = sample.t;
   const float dt = max(t - state.t, 0.f);
 
-  SplineState new_state;
-  new_state.drgb = state.drgb + ctrl_pt.dirac;
+  VolumeState new_state;
+  new_state.drgb = state.drgb + sample.dirac;
   new_state.t = t;
 
   float4 drgb = state.drgb;
@@ -172,14 +172,14 @@ SplineState update(
   return new_state;
 }
 
-struct SplineOutput: IDifferentiable {
+struct RenderOutput: IDifferentiable {
   float3 C;
   float depth;
   float distortion_loss;
 };
 
 [Differentiable]
-SplineOutput extract_color(in SplineState state, in float tmin) {
+RenderOutput extract_color(in VolumeState state, in float tmin) {
   // let opacity = 1-exp(-state.logT);
   return {
     state.C,

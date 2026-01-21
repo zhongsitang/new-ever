@@ -194,7 +194,7 @@ void Forward::trace_rays(
     uint* last_face,
     uint* touch_count,
     float4* last_dirac,
-    SplineState* last_state,
+    VolumeState* last_state,
     int* tri_collection,
     int* d_touch_count,
     int* d_touch_inds)

@@ -16,7 +16,7 @@
 #define tri_per_g 2
 #define LOG_CUTOFF 5.54
 #define BUFFER_SIZE 16
-import spline_machine;
+import volume_integrator;
 import tri_intersect;
 import safe_math;
 import sh;
@@ -46,7 +46,7 @@ RWStructuredBuffer<uint>        iters;
 RWStructuredBuffer<uint>        last_face;
 RWStructuredBuffer<uint>        touch_count;
 RWStructuredBuffer<float4>      last_dirac;
-RWStructuredBuffer<SplineState> last_state;
+RWStructuredBuffer<VolumeState> last_state;
 RWStructuredBuffer<int> tri_collection;
 StructuredBuffer<float3>      ray_origins;
 StructuredBuffer<float3>      ray_directions;
@@ -67,8 +67,8 @@ float max_prim_size;
 RaytracingAccelerationStructure traversable;
 
 
-ControlPoint get_ctrl_pt(uint tri, float t) {
-    ControlPoint ctrl_pt;
+SampleContribution get_sample(uint tri, float t) {
+    SampleContribution sample;
     let prim_ind = tri / 2;
     let hitkind = tri % 2;
     let height = densities[prim_ind];
@@ -78,12 +78,12 @@ ControlPoint get_ctrl_pt(uint tri, float t) {
     feat.f0 = get_sh(sh_feats, 0);
     float3 rayd = {0, 0, 1};
     let color = eval_sh_col0(rayd, feat);
-    ctrl_pt.t = t;
-    ctrl_pt.dirac.x = dirac_height;
-    ctrl_pt.dirac.y = dirac_height * color.x;
-    ctrl_pt.dirac.z = dirac_height * color.y;
-    ctrl_pt.dirac.w = dirac_height * color.z;
-    return ctrl_pt;
+    sample.t = t;
+    sample.dirac.x = dirac_height;
+    sample.dirac.y = dirac_height * color.x;
+    sample.dirac.z = dirac_height * color.y;
+    sample.dirac.w = dirac_height * color.z;
+    return sample;
 }
 
 [shader("intersection")]
@@ -179,13 +179,13 @@ void rg_float()
     const uint3 dim = DispatchRaysDimensions();
     float3 direction = l2_normalize(ray_directions[idx.x]);
     float3 origin = ray_origins[idx.x] + tmin * ray_directions[idx.x];
-    SplineState state = make_empty_state();
+    VolumeState state = make_initial_state();
     state.t = 0;
     state.drgb = initial_drgb[idx.x];
 
     let start_id = idx.x * max_iters;
 
-    ControlPoint ctrl_pt = {};
+    SampleContribution sample = {};
     uint last_tri = -1;
     float prev_t = state.t;
     uint next_tri = -1;
@@ -216,14 +216,14 @@ void rg_float()
 
         bool end = false;
         for (int i=0; i<BUFFER_SIZE; i++) {
-            ctrl_pt.t = buf.t[i];
+            sample.t = buf.t[i];
             tri = buf.idx[i];
-            if (ctrl_pt.t > 1e9) {
+            if (sample.t > 1e9) {
                 end = true;
                 break;
             }
-            ctrl_pt = get_ctrl_pt(tri, ctrl_pt.t);
-            state = update(state, ctrl_pt, tmin, tmax, max_prim_size);
+            sample = get_sample(tri, sample.t);
+            state = update(state, sample, tmin, tmax, max_prim_size);
             touch_count[tri / tri_per_g]++;
             tri_collection[idx.x + iter * dim.x] = tri;
             iter++;
@@ -234,9 +234,9 @@ void rg_float()
     }
     let output = extract_color(state, tmin);
     image[idx.x] = {output.C.x, output.C.y, output.C.z, output.depth};
-    let dual_state = to_dual(state, ctrl_pt);
+    let dual_state = to_dual(state, sample);
     last_state[idx.x] = dual_state;
-    last_dirac[idx.x] = ctrl_pt.dirac;
+    last_dirac[idx.x] = sample.dirac;
     last_face[idx.x] = last_tri;
     iters[idx.x] = iter;
 }

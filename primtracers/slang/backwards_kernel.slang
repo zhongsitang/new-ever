@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #define tri_per_g 2
-import spline_machine;
+import volume_integrator;
 import tri_intersect;
 import safe_math;
 import sh;
@@ -97,7 +97,7 @@ void atomic_add_float4(TensorView<float> view, uint ind, float4 val) {
     view.InterlockedAdd(uint2(ind, 3u), val.w, temp);
 }
 
-SplineState get_state(TensorView<float> view, uint ind) {
+VolumeState get_state(TensorView<float> view, uint ind) {
     return {
         float2(view[ind, 0], view[ind, 1]),
         float2(view[ind, 2], view[ind, 3]),
@@ -127,14 +127,14 @@ struct DualModel {
     TensorView<float> dL_dmeans2D;
 };
 
-DifferentialPair<SplineState>
-run_update(in SplineState old_dual_state, 
-           in ControlPoint old_ctrl_pt,
-           in ControlPoint ctrl_pt,
+DifferentialPair<VolumeState>
+run_update(in VolumeState old_dual_state, 
+           in SampleContribution old_sample,
+           in SampleContribution sample,
            in uint prim_ind,
            in uint face_id,
            in uint ray_ind,
-           in DifferentialPair<SplineState> deriv_state,
+           in DifferentialPair<VolumeState> deriv_state,
            in float3 origin,
            in float3 direction,
            in float tmin,
@@ -145,11 +145,11 @@ run_update(in SplineState old_dual_state,
            in float4x4 inv_wct,
            inout DualModel model)
 {
-    var old_deriv_state = diffPair(from_dual(old_dual_state, old_ctrl_pt), {});
-    var deriv_ctrl_pt = diffPair(ctrl_pt, {});
+    var old_deriv_state = diffPair(from_dual(old_dual_state, old_sample), {});
+    var deriv_sample = diffPair(sample, {});
     bool skip_close = false;
 
-    bwd_diff(update)(old_deriv_state, deriv_ctrl_pt, tmin, tmax, max_prim_size, deriv_state.d);
+    bwd_diff(update)(old_deriv_state, deriv_sample, tmin, tmax, max_prim_size, deriv_state.d);
 
     // Propagate to ctrl pt
     let mean = get_float3(model.means, prim_ind);
@@ -168,7 +168,7 @@ run_update(in SplineState old_dual_state,
     var deriv_density = diffPair(density, {});
 
     bwd_diff(safe_intersect)(deriv_origin, deriv_direction,
-        deriv_scales, deriv_mean, deriv_quat, deriv_color, deriv_density, face_id, skip_close, deriv_ctrl_pt.d);
+        deriv_scales, deriv_mean, deriv_quat, deriv_color, deriv_density, face_id, skip_close, deriv_sample.d);
 
     atomic_add_float3(model.dL_dmeans, prim_ind, deriv_mean.d);
     atomic_add_float3(model.dL_dscales, prim_ind, deriv_scales.d);
@@ -219,7 +219,7 @@ run_update(in SplineState old_dual_state,
     return old_deriv_state;
 }
 
-ControlPoint load_ctrl_pt(in uint older_tri_ind, in DualModel model, in float3 origin, float3 direction, uint sh_degree, bool skip_close)
+SampleContribution load_sample(in uint older_tri_ind, in DualModel model, in float3 origin, float3 direction, uint sh_degree, bool skip_close)
 {
     let older_prim_ind = (uint)floor(older_tri_ind / tri_per_g);
     let older_face_id = mod(older_tri_ind, tri_per_g);
@@ -293,7 +293,7 @@ void backwards_kernel(
 
     let dL_dC = get_float4(dL_doutputs, ray_ind);
     let dL_ddistortion_loss = dL_doutputs[ray_ind, 4];
-    SplineOutput.Differential dL_doutput;
+    RenderOutput.Differential dL_doutput;
     dL_doutput.C = {dL_dC.x, dL_dC.y, dL_dC.z};
     dL_doutput.depth = dL_dC.w;
     dL_doutput.distortion_loss = dL_ddistortion_loss;
@@ -319,28 +319,28 @@ void backwards_kernel(
     float4x4 inv_wct = inverse(wct);
 
     uint tri_ind = tri_collection[ray_ind + max(num_iters-1, 0) * ray_origins.size(0)];
-    ControlPoint ctrl_pt = load_ctrl_pt(tri_ind, model, origin, direction, sh_degree, skip_close);
+    SampleContribution sample = load_sample(tri_ind, model, origin, direction, sh_degree, skip_close);
 
-    // load old ctrl_pt here because the next loop is about to load the older one instead
+    // load old sample here because the next loop is about to load the older one instead
     for (int i=num_iters; i-->0; )
     {
         uint old_tri_ind;
-        ControlPoint old_ctrl_pt;
+        SampleContribution old_sample;
         if (i-1 >= 0) {
             old_tri_ind = tri_collection[ray_ind + (i-1) * ray_origins.size(0)];
-            old_ctrl_pt = load_ctrl_pt(old_tri_ind, model, origin, direction, sh_degree, skip_close);
+            old_sample = load_sample(old_tri_ind, model, origin, direction, sh_degree, skip_close);
         } else {
-            old_ctrl_pt.t = 0;
-            old_ctrl_pt.dirac = {0.f, 0.f, 0.f, 0.f};
+            old_sample.t = 0;
+            old_sample.dirac = {0.f, 0.f, 0.f, 0.f};
         }
 
 
-        SplineState old_dual_state = inverse_update_dual(dual_state, ctrl_pt, old_ctrl_pt, tmin, tmax);
+        VolumeState old_dual_state = inverse_update_dual(dual_state, sample, old_sample, tmin, tmax);
 
         let old_deriv_state = run_update(
                 old_dual_state, 
-                old_ctrl_pt,
-                ctrl_pt,
+                old_sample,
+                sample,
                 (uint)floor(tri_ind / tri_per_g),
                 mod(tri_ind, tri_per_g),
                 ray_ind,
@@ -352,7 +352,7 @@ void backwards_kernel(
 
         tri_ind = old_tri_ind;
         dual_state = old_dual_state;
-        ctrl_pt = old_ctrl_pt;
+        sample = old_sample;
 
         deriv_state = diffPair(old_dual_state, old_deriv_state.d);
 

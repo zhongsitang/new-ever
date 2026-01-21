@@ -155,10 +155,10 @@ public:
   size_t num_float_per_state;
   torch::Device device;
   fesSavedForBackward(torch::Device device)
-      : num_prims(0), num_rays(0), num_float_per_state(sizeof(SplineState) / sizeof(float)),
+      : num_prims(0), num_rays(0), num_float_per_state(sizeof(VolumeState) / sizeof(float)),
         device(device) {}
   fesSavedForBackward(size_t num_rays, size_t num_prims, torch::Device device)
-      : num_prims(num_prims), num_float_per_state(sizeof(SplineState) / sizeof(float)),
+      : num_prims(num_prims), num_float_per_state(sizeof(VolumeState) / sizeof(float)),
         device(device) {
     allocate(num_rays);
   }
@@ -168,8 +168,8 @@ public:
   float4 *diracs_data_ptr() {
     return reinterpret_cast<float4 *>(diracs.data_ptr());
   }
-  SplineState *states_data_ptr() {
-    return reinterpret_cast<SplineState *>(states.data_ptr());
+  VolumeState *states_data_ptr() {
+    return reinterpret_cast<VolumeState *>(states.data_ptr());
   }
   torch::Tensor get_states() { return states; }
   torch::Tensor get_diracs() { return diracs; }
@@ -257,7 +257,7 @@ public:
   }
 };
 
-PYBIND11_MODULE(ellipsoid_splinetracer, m) {
+PYBIND11_MODULE(ellipsoid_primtracer, m) {
   py::class_<fesOptixContext>(m, "OptixContext")
       .def(py::init<const torch::Device &>());
   py::class_<fesSavedForBackward>(m, "SavedForBackward")

@@ -15,7 +15,7 @@
 #define epsilon 1e-20
 static const float TINY_VAL = 1.0754944e-20;
 #define tri_per_g 2
-import spline_machine;
+import volume_integrator;
 import safe_math;
 
 [Differentiable]
@@ -266,7 +266,7 @@ float density_multi(
 }
 
 [Differentiable]
-ControlPoint intersect(
+SampleContribution intersect(
     float3 rayo, float3 rayd, float3 scales, float3 mean, float4 quat, float3 color, float density, uint face_id, no_diff bool skip_close
 ) {
     float2 minmaxt = ray_intersect_ellipsoid(rayo - mean, rayd, scales, quat);
@@ -274,7 +274,7 @@ ControlPoint intersect(
 
     float dirac_multi = ((face_id == 1) ? density : -density);
 
-    ControlPoint out = {
+    SampleContribution out = {
         t, dirac_multi, dirac_multi*color.x, dirac_multi*color.y, dirac_multi*color.z 
     };
     return out;
@@ -287,7 +287,7 @@ float3 rotate_vector2(float3 v, float4 q)
 }
 
 [Differentiable]
-ControlPoint safe_intersect(
+SampleContribution safe_intersect(
     float3 rayo, float3 rayd, float3 scales, float3 mean, float4 quat, float3 color, float density, uint face_id, no_diff bool skip_close
 ) {
     float2 minmaxt = safe_ray_intersect_ellipsoid(rayo - mean, rayd, scales, quat);
@@ -295,7 +295,7 @@ ControlPoint safe_intersect(
     float t = (face_id == 1) ? minmaxt.x : minmaxt.y;
     float dirac_multi = ((face_id == 1) ? density : -density);
 
-    ControlPoint out = {
+    SampleContribution out = {
         t, dirac_multi, dirac_multi*color.x, dirac_multi*color.y, dirac_multi*color.z 
     };
     return out;

@@ -37,16 +37,16 @@ struct HitData {
     float height;
 };
 
-struct SplineState//((packed))
+struct VolumeState//((packed))
 {
   float2 distortion_parts;
   float2 cum_sum;
   float3 padding;
-  // Spline state
+  // Integration state (ray parameter and delta extinction/color)
   float t;
-  float4 drgb;
+  float4 drgb;  // delta (density, r, g, b) - accumulated contribution derivative
 
-  // Volume Rendering State
+  // Volume Rendering State (transmittance and accumulated color)
   float logT;
   float3 C;
 };

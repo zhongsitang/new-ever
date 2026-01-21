@@ -48,7 +48,7 @@ struct Params {
     StructuredBuffer<uint> last_face;
     StructuredBuffer<uint> touch_count;
     StructuredBuffer<float4> last_dirac;
-    StructuredBuffer<SplineState> last_state;
+    StructuredBuffer<VolumeState> last_state;
     StructuredBuffer<int> tri_collection;
     StructuredBuffer<float3> ray_origins;
     StructuredBuffer<float3> ray_directions;
@@ -95,7 +95,7 @@ public:
         uint* last_face = nullptr,
         uint* touch_count = nullptr,
         float4* last_dirac = nullptr,
-        SplineState* last_state = nullptr,
+        VolumeState* last_state = nullptr,
         int* tri_collection = nullptr,
         int* d_touch_count = nullptr,
         int* d_touch_inds = nullptr
