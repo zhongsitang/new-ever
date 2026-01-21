@@ -12,12 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import time
-from pathlib import Path
-from typing import *
-
-import torch
-from torch.autograd import Function
-
-import sys
-sys.path.append(str(Path(__file__).parent))
+from .splinetracer import trace_rays, SplineTracer, eval_sh

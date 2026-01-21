@@ -22,7 +22,7 @@ from absl.testing import parameterized
 from tests.utils.math_util import l2_normalize_th
 
 # Slang-compiled module for SH evaluation
-import eval_sh
+import splinetracers as eval_sh
 
 torch.set_printoptions(precision=10)
 np.set_printoptions(precision=10)
@@ -133,7 +133,7 @@ class SHGradCheckTest(parameterized.TestCase):
 
     @parameterized.product(
         N=[1],
-        sh_degree=[0, 1],
+        sh_degree=[0, 1, 2, 3],
     )
     def test_deriv_sph(self, N, sh_degree):
         features = torch.rand((N, (sh_degree+1)**2, 3), device=device)

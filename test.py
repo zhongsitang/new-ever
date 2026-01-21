@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 
-from splinetracers import fast_ellipsoid_splinetracer
+from splinetracers import splinetracer
 
 device = torch.device('cuda')
 
@@ -42,7 +42,7 @@ def test_grad_check(N, density_multi):
     fixed_random = 0.5
 
     def l2_loss(means, scales, quats, densities, feats):
-        color = fast_ellipsoid_splinetracer.trace_rays(
+        color = splinetracer.trace_rays(
             means, scales, quats, densities, feats, rayo, rayd,
             fixed_random, 100)
         weights = torch.tensor([1.0, 1.0, 1.0, 1.0, 0.0], dtype=dtype, device=device)

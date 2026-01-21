@@ -15,15 +15,15 @@
 import safe_math;
 
 // Spherical harmonics coefficients
-static const half SH_C0 = 0.28209479177387814f;
-static const half SH_C1 = 0.4886025119029199f;
+static const half SH_C0 = half(0.28209479177387814);
+static const half SH_C1 = half(0.4886025119029199);
 static const half SH_C2[] = {
-  1.0925484305920792f, -1.0925484305920792f, 0.31539156525252005f, -1.0925484305920792f,
-  0.5462742152960396f
+  half(1.0925484305920792), half(-1.0925484305920792), half(0.31539156525252005), half(-1.0925484305920792),
+  half(0.5462742152960396)
 };
 static const half SH_C3[] = {
-  -0.5900435899266435f, 2.890611442640554f, -0.4570457994644658f, 0.3731763325901154f,
-  -0.4570457994644658f, 1.445305721320277f, -0.5900435899266435f
+  half(-0.5900435899266435), half(2.890611442640554), half(-0.4570457994644658), half(0.3731763325901154),
+  half(-0.4570457994644658), half(1.445305721320277), half(-0.5900435899266435)
 };
 
 struct HalfSHFeatures {
@@ -47,7 +47,7 @@ struct HalfFeatures : IDifferentiable {
 
 [Differentiable]
 half3 half_eval_sh_col0(half3 dir, HalfFeatures feat) {
-  return SH_C0 * feat.f0 + 0.5f;
+  return SH_C0 * feat.f0 + half(0.5);
 }
 
 [Differentiable]
@@ -67,7 +67,7 @@ half3 half_eval_sh_col2(half3 dir, HalfFeatures feat) {
   half xx = x * x, yy = y * y, zz = z * z;
   half xy = x * y, yz = y * z, xz = x * z;
   return SH_C2[0] * xy * feat.f4 + SH_C2[1] * yz * feat.f5 +
-         SH_C2[2] * (2.0f * zz - xx - yy) * feat.f6 +
+         SH_C2[2] * (half(2.0) * zz - xx - yy) * feat.f6 +
          SH_C2[3] * xz * feat.f7 + SH_C2[4] * (xx - yy) * feat.f8;
 }
 
@@ -78,13 +78,14 @@ half3 half_eval_sh_col3(half3 dir, HalfFeatures feat) {
   half z = dir.z;
   half xx = x * x, yy = y * y, zz = z * z;
   half xy = x * y, yz = y * z, xz = x * z;
-  return SH_C3[0] * y * (3.0f * xx - yy) * feat.f9 +
+  half h2 = half(2.0), h3 = half(3.0), h4 = half(4.0);
+  return SH_C3[0] * y * (h3 * xx - yy) * feat.f9 +
          SH_C3[1] * xy * z * feat.f10 +
-         SH_C3[2] * y * (4.0f * zz - xx - yy) * feat.f11 +
-         SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * feat.f12 +
-         SH_C3[4] * x * (4.0f * zz - xx - yy) * feat.f13 +
+         SH_C3[2] * y * (h4 * zz - xx - yy) * feat.f11 +
+         SH_C3[3] * z * (h2 * zz - h3 * xx - h3 * yy) * feat.f12 +
+         SH_C3[4] * x * (h4 * zz - xx - yy) * feat.f13 +
          SH_C3[5] * z * (xx - yy) * feat.f14 +
-         SH_C3[6] * x * (xx - 3.0f * yy) * feat.f15;
+         SH_C3[6] * x * (xx - h3 * yy) * feat.f15;
 }
 
 [Differentiable]

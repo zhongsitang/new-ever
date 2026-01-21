@@ -32,9 +32,9 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
 endif()
 
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/splinetracers")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/splinetracers")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 # -----------------------------------------------------------------------------
 # Dependencies and local CMake modules
@@ -46,15 +46,13 @@ find_package(CUDAToolkit REQUIRED)
 
 include(FindOptiX)
 include(FindTorch)
-include(SlangPTXEmbed)
+include(SlangHelper)
 
 # -----------------------------------------------------------------------------
 # Project paths
 # -----------------------------------------------------------------------------
-set(TRACER_DIR     "${CMAKE_CURRENT_SOURCE_DIR}/splinetracers/fast_ellipsoid_splinetracer")
-set(SLANG_DIR      "${TRACER_DIR}/slang")
-set(MAIN_SLANG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/splinetracers/slang")
-set(PTX_OUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ptx")
+set(TRACER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/splinetracers/src")
+set(SLANG_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/splinetracers/slang")
 
 # -----------------------------------------------------------------------------
 # Main pybind11 extension module
@@ -86,8 +84,7 @@ slang_ptx_embed(
   TARGET       ellipsoid_splinetracer
   NAME         shaders_ptx
   SLANG_FILE   ${SLANG_DIR}/shaders.slang
-  OUT_DIR      ${PTX_OUT_DIR}
-  INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}
+  INCLUDE_DIRS ${SLANG_DIR}
   NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS} ${OptiX_ROOT}/include
 )
 
@@ -95,10 +92,26 @@ slang_ptx_embed(
   TARGET       ellipsoid_splinetracer
   NAME         fast_shaders_ptx
   SLANG_FILE   ${SLANG_DIR}/fast_shaders.slang
-  OUT_DIR      ${PTX_OUT_DIR}
-  INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}
+  INCLUDE_DIRS ${SLANG_DIR}
   NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS} ${OptiX_ROOT}/include
 )
+
+# -----------------------------------------------------------------------------
+# Slang PyTorch modules
+# -----------------------------------------------------------------------------
+slang_add_py_module(backwards_kernel
+  SLANG_FILES  ${SLANG_DIR}/backwards_kernel.slang
+  INCLUDE_DIRS ${SLANG_DIR}
+  NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS}
+)
+target_link_libraries(backwards_kernel PRIVATE Torch::Torch)
+
+slang_add_py_module(sh_kernel
+  SLANG_FILES  ${SLANG_DIR}/sh_kernel.slang
+  INCLUDE_DIRS ${SLANG_DIR}
+  NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS}
+)
+target_link_libraries(sh_kernel PRIVATE Torch::Torch)
 
 # -----------------------------------------------------------------------------
 # Linking and compile options
@@ -106,12 +119,10 @@ slang_ptx_embed(
 target_link_libraries(ellipsoid_splinetracer PRIVATE
   OptiX::OptiX
   Torch::Torch
-  CUDA::cudart
-  CUDA::cuda_driver
 )
 
 target_compile_options(ellipsoid_splinetracer PRIVATE
-  $<$<COMPILE_LANGUAGE:CUDA>:--diag-suppress=20012,177>
+  $<$<COMPILE_LANGUAGE:CUDA>:--diag-suppress=20012,177,550>
 )
 
 if(MSVC)
@@ -137,5 +148,4 @@ message(STATUS "  Project:         ${PROJECT_NAME} ${PROJECT_VERSION}")
 message(STATUS "  Build type:      ${CMAKE_BUILD_TYPE}")
 message(STATUS "  CUDA archs:      ${CMAKE_CUDA_ARCHITECTURES}")
 message(STATUS "  OptiX:           ${OptiX_VERSION} (${OptiX_ROOT})")
-message(STATUS "  PTX OUT_DIR:     ${PTX_OUT_DIR}")
 message(STATUS "========================================")

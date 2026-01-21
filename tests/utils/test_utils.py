@@ -12,23 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from splinetracers import fast_ellipsoid_splinetracer
+import splinetracers
 from tests import quad
 
 METHODS = [
-    fast_ellipsoid_splinetracer,
+    splinetracers,
 ]
 
 SYM_METHODS = [
-    fast_ellipsoid_splinetracer,
+    splinetracers,
 ]
 
 ALL_QUAD_PAIRS = [
-    (fast_ellipsoid_splinetracer, quad.query_ellipsoid),
+    (splinetracers, quad.query_ellipsoid),
 ]
 
 QUAD_PAIRS = [
-    (fast_ellipsoid_splinetracer, quad.query_ellipsoid),
+    (splinetracers, quad.query_ellipsoid),
 ]
 
 ALPHA_QUAD_PAIRS = [

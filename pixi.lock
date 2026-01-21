@@ -274,7 +274,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/ed/de/0e6edf44d6a04dabd0318a519125ed0415ce437ad5a1ec9b9be03d9048cf/ninja-1.13.0-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/32/2b/121e912bd60eebd623f873fd090de0e84f322972ab25a7f9044c056804ed/pathspec-1.0.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/5e/4d/68beddcc12d27472b36a67e680195b8ad91678452b0c2e8ec4e9f6d8f486/slangtorch-1.2.8-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/c2/6f/20364d16a9b3ed46b0ddcb3e8e640de59068feabcc11e300b70e68a7e962/slangtorch-1.3.18-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/bb/4a/2e5583e544bc437d5e8e54b47db87430df9031b29b48d17f26d129fa60c0/trove_classifiers-2026.1.14.14-py3-none-any.whl
       win-64:
       - conda: https://conda.anaconda.org/conda-forge/win-64/_openmp_mutex-4.5-2_gnu.conda
@@ -472,7 +472,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/29/45/c0adfbfb0b5895aa18cec400c535b4f7ff3e52536e0403602fc1a23f7de9/ninja-1.13.0-py3-none-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/32/2b/121e912bd60eebd623f873fd090de0e84f322972ab25a7f9044c056804ed/pathspec-1.0.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/5e/4d/68beddcc12d27472b36a67e680195b8ad91678452b0c2e8ec4e9f6d8f486/slangtorch-1.2.8-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/c2/6f/20364d16a9b3ed46b0ddcb3e8e640de59068feabcc11e300b70e68a7e962/slangtorch-1.3.18-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/bb/4a/2e5583e544bc437d5e8e54b47db87430df9031b29b48d17f26d129fa60c0/trove_classifiers-2026.1.14.14-py3-none-any.whl
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-7_kmp_llvm.conda
@@ -5401,10 +5401,10 @@ packages:
   license_family: Apache
   size: 8354371
   timestamp: 1760579224894
-- pypi: https://files.pythonhosted.org/packages/5e/4d/68beddcc12d27472b36a67e680195b8ad91678452b0c2e8ec4e9f6d8f486/slangtorch-1.2.8-py3-none-any.whl
+- pypi: https://files.pythonhosted.org/packages/c2/6f/20364d16a9b3ed46b0ddcb3e8e640de59068feabcc11e300b70e68a7e962/slangtorch-1.3.18-py3-none-any.whl
   name: slangtorch
-  version: 1.2.8
-  sha256: 863173caeb7b6f6a242e4ca05c2d5b5312ba94d0f77c25ba38388da909f6a2e7
+  version: 1.3.18
+  sha256: c8ee28d9b99ee39e3517a4df2b1494c290e7bd0d3e0a5e402d3380f327c6d653
   requires_dist:
   - filelock
   - hatchling>=1.11.0

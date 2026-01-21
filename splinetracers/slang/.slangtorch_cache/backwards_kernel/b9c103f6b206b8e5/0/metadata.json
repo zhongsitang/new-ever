@@ -1,0 +1,86 @@
+{
+    "cpp": {
+        "options": [],
+        "deps": [
+            [
+                "E:\\projects\\multi-view-hair\\code\\new-ever\\splinetracers\\slang\\backwards_kernel.slang",
+                1768965406.049883
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\code\\new-ever\\splinetracers\\slang\\spline-machine.slang",
+                1768925416.0218592
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\code\\new-ever\\splinetracers\\slang\\safe-math.slang",
+                1768542393.3578727
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\code\\new-ever\\splinetracers\\slang\\optix.slang",
+                1768955537.84516
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\code\\new-ever\\splinetracers\\slang\\tri-intersect.slang",
+                1768542393.3508627
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\code\\new-ever\\splinetracers\\slang\\sh.slang",
+                1768542393.3588724
+            ],
+            [
+                "C:\\pixi\\envs\\new-ever-4889070691039315590\\envs\\default\\Lib\\site-packages\\slangtorch\\bin\\slangc.exe",
+                1768578700.3410883
+            ],
+            [
+                "C:\\pixi\\envs\\new-ever-4889070691039315590\\envs\\default\\Lib\\site-packages\\slangtorch\\bin\\slang-compiler.dll",
+                1768578700.3143702
+            ]
+        ],
+        "version": "1.3.18",
+        "includePaths": [
+            "E:\\projects\\multi-view-hair\\code\\new-ever\\splinetracers\\slang"
+        ]
+    },
+    "cuda": {
+        "options": [],
+        "deps": [
+            [
+                "E:\\projects\\multi-view-hair\\code\\new-ever\\splinetracers\\slang\\backwards_kernel.slang",
+                1768965406.049883
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\code\\new-ever\\splinetracers\\slang\\spline-machine.slang",
+                1768925416.0218592
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\code\\new-ever\\splinetracers\\slang\\safe-math.slang",
+                1768542393.3578727
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\code\\new-ever\\splinetracers\\slang\\optix.slang",
+                1768955537.84516
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\code\\new-ever\\splinetracers\\slang\\tri-intersect.slang",
+                1768542393.3508627
+            ],
+            [
+                "E:\\projects\\multi-view-hair\\code\\new-ever\\splinetracers\\slang\\sh.slang",
+                1768542393.3588724
+            ],
+            [
+                "C:\\pixi\\envs\\new-ever-4889070691039315590\\envs\\default\\Lib\\site-packages\\slangtorch\\bin\\slangc.exe",
+                1768578700.3410883
+            ],
+            [
+                "C:\\pixi\\envs\\new-ever-4889070691039315590\\envs\\default\\Lib\\site-packages\\slangtorch\\bin\\slang-compiler.dll",
+                1768578700.3143702
+            ]
+        ],
+        "version": "1.3.18",
+        "includePaths": [
+            "E:\\projects\\multi-view-hair\\code\\new-ever\\splinetracers\\slang"
+        ]
+    },
+    "moduleName": "_slangtorch_backwards_kernel_b9c103f6b206b8e5",
+    "moduleBinary": "E:\\projects\\multi-view-hair\\code\\new-ever\\splinetracers\\slang\\.slangtorch_cache\\backwards_kernel\\b9c103f6b206b8e5\\0\\_slangtorch_backwards_kernel_b9c103f6b206b8e5.pyd"
+}
