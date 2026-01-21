@@ -29,35 +29,6 @@
 
 namespace py = pybind11;
 using namespace pybind11::literals; // to bring in the `_a` literal
-#define CHECK_CUDA(x)                                                          \
-  TORCH_CHECK(x.device().is_cuda(), #x " must be a CUDA tensor")
-#define CHECK_DEVICE(x)                                                        \
-  TORCH_CHECK(x.device() == this->device, #x " must be on the same device")
-#define CHECK_CONTIGUOUS(x)                                                    \
-  TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
-#define CHECK_FLOAT(x)                                                         \
-  TORCH_CHECK(x.dtype() == torch::kFloat32, #x " must have float32 type")
-#define CHECK_INPUT(x)                                                         \
-  CHECK_CUDA(x);                                                               \
-  CHECK_CONTIGUOUS(x)
-#define CHECK_FLOAT_DIM3(x)                                                    \
-  CHECK_INPUT(x);                                                              \
-  CHECK_DEVICE(x);                                                             \
-  CHECK_FLOAT(x);                                                              \
-  TORCH_CHECK(x.size(-1) == 3, #x " must have last dimension with size 3")
-#define CHECK_FLOAT_DIM4(x)                                                    \
-  CHECK_INPUT(x);                                                              \
-  CHECK_DEVICE(x);                                                             \
-  CHECK_FLOAT(x);                                                              \
-  TORCH_CHECK(x.size(-1) == 4, #x " must have last dimension with size 4")
-#define CHECK_FLOAT_DIM4_CPU(x)                                                \
-  CHECK_CONTIGUOUS(x);                                                         \
-  CHECK_FLOAT(x);                                                              \
-  TORCH_CHECK(x.size(-1) == 4, #x " must have last dimension with size 4")
-#define CHECK_FLOAT_DIM3_CPU(x)                                                \
-  CHECK_CONTIGUOUS(x);                                                         \
-  CHECK_FLOAT(x);                                                              \
-  TORCH_CHECK(x.size(-1) == 3, #x " must have last dimension with size 3")
 
 static void context_log_cb(unsigned int level, const char *tag,
                            const char *message, void * /*cbdata */) {
