@@ -13,8 +13,8 @@
 // limitations under the License.
 
 import safe_math;
-import tensor_util;
-import sh;
+import tensor_utils;
+import spherical_harmonics;
 
 [AutoPyBindCUDA]
 [CUDAKernel]

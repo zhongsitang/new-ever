@@ -17,9 +17,9 @@
 #define LOG_CUTOFF 5.54
 #define BUFFER_SIZE 16
 import volume_integrator;
-import tri_intersect;
+import ellipsoid_intersect;
 import safe_math;
-import sh;
+import spherical_harmonics;
 
 struct Camera {
     float fx, fy;

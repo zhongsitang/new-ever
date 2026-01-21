@@ -13,9 +13,9 @@
 // limitations under the License.
 
 #include "cuda_kernels.h"
-#include "exception.h"
+#include "optix_error.h"
 #include "glm/glm.hpp"
-#include "structs.h"
+#include "volume_types.h"
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <iostream>

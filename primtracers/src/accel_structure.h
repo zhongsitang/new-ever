@@ -26,9 +26,9 @@
 #include <string>
 #include <vector>
 
-#include "CUDABuffer.h"
-#include "exception.h"
-#include "structs.h"
+#include "cuda_buffer.h"
+#include "optix_error.h"
+#include "volume_types.h"
 
 namespace gas_internal {
 inline CUdeviceptr D_GAS_OUTPUT_BUFFER = 0;

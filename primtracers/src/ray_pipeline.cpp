@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "Forward.h"
-#include "exception.h"
-#include "CUDABuffer.h"
+#include "ray_pipeline.h"
+#include "optix_error.h"
+#include "cuda_buffer.h"
 #include "cuda_kernels.h"
 
 #include <optix_stubs.h>

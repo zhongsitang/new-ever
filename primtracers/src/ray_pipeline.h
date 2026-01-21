@@ -24,7 +24,7 @@
 #include <optix.h>
 #include <cstdint>
 #include <stdexcept>
-#include "structs.h"
+#include "volume_types.h"
 
 using uint = uint32_t;
 

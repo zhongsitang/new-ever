@@ -14,9 +14,9 @@
 
 #define tri_per_g 2
 import volume_integrator;
-import tri_intersect;
+import ellipsoid_intersect;
 import safe_math;
-import sh;
+import spherical_harmonics;
 
 float3 get_float3(TensorView<float> view, uint ind) {
     return {

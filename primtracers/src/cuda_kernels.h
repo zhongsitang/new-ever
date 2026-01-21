@@ -13,8 +13,8 @@
 // limitations under the License.
 
 #pragma once
-#include "Forward.h"
-#include "structs.h"
+#include "ray_pipeline.h"
+#include "volume_types.h"
 
 // AABB creation
 void create_aabbs(Primitives &prims);

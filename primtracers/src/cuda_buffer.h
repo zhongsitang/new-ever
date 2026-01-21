@@ -16,7 +16,7 @@
 
 #include <assert.h>
 #include <vector>
-#include "exception.h"
+#include "optix_error.h"
 
 struct CUDABuffer {
   inline CUdeviceptr d_pointer() const { return (CUdeviceptr)d_ptr; }

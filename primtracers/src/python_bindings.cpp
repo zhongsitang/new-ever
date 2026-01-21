@@ -22,10 +22,10 @@
 #include <optix_function_table_definition.h>
 #include <optix_stubs.h>
 
-#include "Forward.h"
-#include "GAS.h"
+#include "ray_pipeline.h"
+#include "accel_structure.h"
 #include "cuda_kernels.h"
-#include "exception.h"
+#include "optix_error.h"
 
 namespace py = pybind11;
 using namespace pybind11::literals; // to bring in the `_a` literal

@@ -58,12 +58,12 @@ set(SLANG_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/primtracers/slang")
 # Main pybind11 extension module
 # -----------------------------------------------------------------------------
 pybind11_add_module(ellipsoid_tracer MODULE
-  ${TRACER_DIR}/Forward.cpp
-  ${TRACER_DIR}/Forward.h
-  ${TRACER_DIR}/GAS.h
-  ${TRACER_DIR}/py_binding.cpp
-  ${TRACER_DIR}/structs.h
-  ${TRACER_DIR}/CUDABuffer.h
+  ${TRACER_DIR}/ray_pipeline.cpp
+  ${TRACER_DIR}/ray_pipeline.h
+  ${TRACER_DIR}/accel_structure.h
+  ${TRACER_DIR}/python_bindings.cpp
+  ${TRACER_DIR}/volume_types.h
+  ${TRACER_DIR}/cuda_buffer.h
   ${TRACER_DIR}/cuda_kernels.cu
   ${TRACER_DIR}/cuda_kernels.h
 )
@@ -79,7 +79,7 @@ set_source_files_properties(
 slang_ptx_embed(
   TARGET       ellipsoid_tracer
   NAME         shaders_ptx
-  SLANG_FILE   ${SLANG_DIR}/shaders.slang
+  SLANG_FILE   ${SLANG_DIR}/optix_shaders.slang
   INCLUDE_DIRS ${SLANG_DIR}
   NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS} ${OptiX_ROOT}/include
 )
@@ -88,14 +88,14 @@ slang_ptx_embed(
 # Slang PyTorch modules
 # -----------------------------------------------------------------------------
 slang_add_py_module(backwards_kernel
-  SLANG_FILES  ${SLANG_DIR}/backwards_kernel.slang
+  SLANG_FILES  ${SLANG_DIR}/backward_pass.slang
   INCLUDE_DIRS ${SLANG_DIR}
   NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS}
 )
 target_link_libraries(backwards_kernel PRIVATE Torch::Torch)
 
 slang_add_py_module(sh_kernel
-  SLANG_FILES  ${SLANG_DIR}/sh_kernel.slang
+  SLANG_FILES  ${SLANG_DIR}/sh_evaluation.slang
   INCLUDE_DIRS ${SLANG_DIR}
   NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS}
 )
