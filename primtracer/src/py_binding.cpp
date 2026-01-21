@@ -139,7 +139,7 @@ public:
 // =============================================================================
 class AccelStructWrapper {
 public:
-    GAS gas;
+    AccelStructure accel_;
 
     AccelStructWrapper(const TracerContext& ctx,
                        const torch::Device& device,
@@ -147,7 +147,7 @@ public:
                        bool enable_anyhit,
                        bool fast_build,
                        bool enable_rebuild)
-        : gas(ctx.context, device.index(), prims.data, enable_anyhit, fast_build) {}
+        : accel_(ctx.context, device.index(), prims.data) {}
 };
 
 // =============================================================================
@@ -210,22 +210,22 @@ public:
 // =============================================================================
 class RayTracerWrapper {
 public:
-    Forward tracer;
-    torch::Device device;
-    size_t num_prims;
-    uint sh_degree;
+    RayTracer tracer_;
+    torch::Device device_;
+    size_t num_prims_;
+    uint sh_degree_;
 
     RayTracerWrapper(const TracerContext& ctx,
                      const torch::Device& device,
                      const PrimitivesWrapper& prims,
                      bool enable_backward)
-        : device(device),
-          tracer(ctx.context, device.index(), prims.data, enable_backward),
-          num_prims(prims.data.num_prims),
-          sh_degree(sqrt(prims.data.feature_size) - 1) {}
+        : device_(device),
+          tracer_(ctx.context, device.index(), prims.data, enable_backward),
+          num_prims_(prims.data.num_prims),
+          sh_degree_(sqrt(prims.data.feature_size) - 1) {}
 
     void update_primitives(const PrimitivesWrapper& prims) {
-        tracer.reset_features(prims.data);
+        tracer_.reset_features(prims.data);
     }
 
     py::dict trace_rays(const AccelStructWrapper& accel,
@@ -236,38 +236,38 @@ public:
                         size_t max_samples,
                         float max_prim_size) {
         torch::AutoGradMode enable_grad(false);
-        CHECK_FLOAT_DIM3_ON_DEVICE(ray_origins, device);
-        CHECK_FLOAT_DIM3_ON_DEVICE(ray_directions, device);
+        CHECK_FLOAT_DIM3_ON_DEVICE(ray_origins, device_);
+        CHECK_FLOAT_DIM3_ON_DEVICE(ray_directions, device_);
 
         const size_t num_rays = ray_origins.numel() / 3;
 
         torch::Tensor color = torch::zeros(
             {static_cast<long>(num_rays), 4},
-            torch::device(device).dtype(torch::kFloat32));
+            torch::device(device_).dtype(torch::kFloat32));
 
         torch::Tensor prim_sequence = torch::zeros(
             {static_cast<long>(num_rays * max_samples)},
-            torch::device(device).dtype(torch::kInt32));
+            torch::device(device_).dtype(torch::kInt32));
 
         torch::Tensor initial_sample = torch::zeros(
             {static_cast<long>(num_rays), 4},
-            torch::device(device).dtype(torch::kFloat32));
+            torch::device(device_).dtype(torch::kFloat32));
 
         torch::Tensor initial_hit_count = torch::zeros(
-            {1}, torch::device(device).dtype(torch::kInt32));
+            {1}, torch::device(device_).dtype(torch::kInt32));
 
         torch::Tensor initial_hit_prims = torch::zeros(
-            {static_cast<long>(num_prims)},
-            torch::device(device).dtype(torch::kInt32));
+            {static_cast<long>(num_prims_)},
+            torch::device(device_).dtype(torch::kInt32));
 
-        IntegrationBuffer buffer(num_rays, num_prims, device);
+        IntegrationBuffer buffer(num_rays, num_prims_, device_);
 
-        tracer.trace_rays(
-            accel.gas.gas_handle, num_rays,
+        tracer_.trace_rays(
+            accel.accel_.handle(), num_rays,
             reinterpret_cast<float3*>(ray_origins.data_ptr()),
             reinterpret_cast<float3*>(ray_directions.data_ptr()),
             reinterpret_cast<void*>(color.data_ptr()),
-            sh_degree, t_near, t_far,
+            sh_degree_, t_near, t_far,
             reinterpret_cast<float4*>(initial_sample.data_ptr()),
             nullptr,
             max_samples, max_prim_size,
