@@ -235,10 +235,10 @@ public:
     torch::Tensor initial_contrib = torch::zeros(
         {(long)num_rays, 4},
         torch::device(device).dtype(torch::kFloat32));
-    torch::Tensor initial_touch_count = torch::zeros(
+    torch::Tensor initial_hit_count = torch::zeros(
         {1},
         torch::device(device).dtype(torch::kInt32));
-    torch::Tensor initial_touch_inds = torch::zeros(
+    torch::Tensor initial_hit_inds = torch::zeros(
         {(long)num_prims},
         torch::device(device).dtype(torch::kInt32));
 
@@ -257,14 +257,14 @@ public:
                        saved_for_backward.delta_contribs_data_ptr(),
                        saved_for_backward.states_data_ptr(),
                        reinterpret_cast<int *>(hit_collection.data_ptr()),
-                       reinterpret_cast<int *>(initial_touch_count.data_ptr()),
-                       reinterpret_cast<int *>(initial_touch_inds.data_ptr()));
+                       reinterpret_cast<int *>(initial_hit_count.data_ptr()),
+                       reinterpret_cast<int *>(initial_hit_inds.data_ptr()));
     return py::dict("color"_a = color,
                     "saved"_a = saved_for_backward,
                     "hit_collection"_a = hit_collection,
                     "initial_contrib"_a = initial_contrib,
-                    "initial_touch_inds"_a = initial_touch_inds,
-                    "initial_touch_count"_a = initial_touch_count);
+                    "initial_hit_inds"_a = initial_hit_inds,
+                    "initial_hit_count"_a = initial_hit_count);
   }
 };
 

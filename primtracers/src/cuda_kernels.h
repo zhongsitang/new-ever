@@ -20,6 +20,6 @@
 void build_primitive_aabbs(Primitives &prims);
 
 // Initial ray sample accumulation (for rays starting inside primitives)
-void init_ray_start_samples(Params *params, OptixAabb *aabbs, int *d_touch_count=NULL, int *d_touch_inds=NULL);
+void init_ray_start_samples(Params *params, OptixAabb *aabbs, int *d_hit_count=NULL, int *d_hit_inds=NULL);
 void init_ray_start_samples_single(Params *params);
 void init_ray_start_samples_zero(Params *params);

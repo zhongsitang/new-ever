@@ -196,8 +196,8 @@ void RayPipeline::trace_rays(
     float4* last_delta_contrib,
     VolumeState* last_state,
     int* hit_collection,
-    int* d_touch_count,
-    int* d_touch_inds)
+    int* d_hit_count,
+    int* d_hit_inds)
 {
     CUDA_CHECK(cudaSetDevice(device_));
 
@@ -224,7 +224,7 @@ void RayPipeline::trace_rays(
     CUDA_CHECK(cudaMemset(initial_contrib, 0, num_rays * sizeof(float4)));
     params_.initial_contrib = {initial_contrib, num_rays};
 
-    init_ray_start_samples(&params_, model_->aabbs, d_touch_count, d_touch_inds);
+    init_ray_start_samples(&params_, model_->aabbs, d_hit_count, d_hit_inds);
 
     params_.handle = handle;
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,

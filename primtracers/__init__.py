@@ -74,7 +74,7 @@ class PrimTracer(Function):
         distortion_loss = distortion_pt1 - distortion_pt2
         color_and_loss = torch.cat([out["color"], distortion_loss.reshape(-1, 1)], dim=1)
 
-        initial_prim_indices = out['initial_touch_inds'][:out['initial_touch_count'][0]]
+        initial_prim_indices = out['initial_hit_inds'][:out['initial_hit_count'][0]]
 
         ctx.save_for_backward(
             mean, scale, quat, density, color, rayo, rayd, hit_collection, wcts, out['initial_contrib'], initial_prim_indices

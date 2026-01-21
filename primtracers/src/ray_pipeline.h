@@ -97,8 +97,8 @@ public:
         float4* last_delta_contrib = nullptr,
         VolumeState* last_state = nullptr,
         int* hit_collection = nullptr,
-        int* d_touch_count = nullptr,
-        int* d_touch_inds = nullptr
+        int* d_hit_count = nullptr,
+        int* d_hit_inds = nullptr
     );
 
     void reset_features(const Primitives& model);
