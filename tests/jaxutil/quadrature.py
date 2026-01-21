@@ -63,7 +63,13 @@ def compute_alpha_weights_helper(density_delta):
     return weights
 
 def render_quadrature(tdist, query_fn, return_extras=False):
-    """Numerical quadrature rendering of a set of colored Gaussians."""
+    """Numerical quadrature rendering of a set of colored Gaussians.
+
+    Returns:
+        color_rgba: (N, 4) array with RGBA values
+        depth: (N,) array with depth values
+        extras: dict with additional outputs including distortion_loss
+    """
     t_avg = 0.5 * (tdist[..., 1:] + tdist[..., :-1])
     t_delta = jnp.diff(tdist)
     total_density, avg_colors = query_fn(t_avg)
@@ -76,17 +82,23 @@ def render_quadrature(tdist, query_fn, return_extras=False):
     expected_termination = jnp.sum(
         weights * t_avg, axis=-1
     )  # Assuming the bg color is 0.
-    rendered_color = jnp.concatenate([
-        rendered_color.reshape(-1, 3), expected_termination.reshape(-1, 1), dist_loss.reshape(-1, 1)
-    ], axis=1)
 
+    # Output format: color_rgba (N, 4), depth (N,)
+    color_rgba = jnp.concatenate([
+        rendered_color.reshape(-1, 3), alpha
+    ], axis=1)
+    depth = expected_termination.reshape(-1)
+
+    extras = {
+        "distortion_loss": dist_loss.reshape(-1),
+    }
     if return_extras:
-        return rendered_color, {
+        extras.update({
             "tdist": tdist,
             "avg_colors": avg_colors,
             "weights": weights,
             "total_density": jnp.sum(total_density*t_delta, axis=-1),
-        }
-    else:
-        return rendered_color
+        })
+
+    return color_rgba, depth, extras
 

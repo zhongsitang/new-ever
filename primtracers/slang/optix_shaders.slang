@@ -77,6 +77,7 @@ struct HitAttr {
 
 // Output buffers
 RWStructuredBuffer<float4>      image;              // Rendered RGBA output
+RWStructuredBuffer<float>       depth_out;          // Rendered depth output
 RWStructuredBuffer<uint>        iters;              // Iteration count per ray
 RWStructuredBuffer<uint>        last_prim;          // Last primitive hit (for debugging)
 RWStructuredBuffer<uint>        primitive_hit_count; // Hit count per primitive
@@ -100,7 +101,7 @@ RWStructuredBuffer<float>       features;   // SH coefficients for color
 size_t sh_degree;                           // Spherical harmonics degree
 size_t max_iters;                           // Maximum iterations per ray
 float tmin;                                 // Minimum ray t
-float tmax;                                 // Maximum ray t
+StructuredBuffer<float>         tmax;       // Maximum ray t (per-ray)
 RWStructuredBuffer<float4>      initial_contrib;  // Initial accumulated contribution
 float max_prim_size;                        // Maximum primitive size (for acceleration)
 RaytracingAccelerationStructure traversable; // BVH acceleration structure
@@ -265,6 +266,7 @@ void render_volume()
     // Initialize ray
     float3 direction = l2_normalize(ray_directions[idx.x]);
     float3 origin = ray_origins[idx.x] + tmin * ray_directions[idx.x];
+    float ray_tmax = tmax[idx.x];  // Per-ray tmax
 
     // Initialize volume rendering state
     IntegratorState state = make_initial_state();
@@ -293,7 +295,7 @@ void render_volume()
         ray.Origin = origin;
         ray.Direction = direction;
         ray.TMin = start_t;
-        ray.TMax = tmax;
+        ray.TMax = ray_tmax;
 
         TraceRay(traversable, RAY_FLAG_NONE, 0xff, 0, 0, 0, ray, buf);
 
@@ -311,7 +313,7 @@ void render_volume()
 
             // Create sample and update volume state
             sample = create_sample(hit_id, sample.t);
-            state = update(state, sample, tmin, tmax, max_prim_size);
+            state = update(state, sample, tmin, ray_tmax, max_prim_size);
 
             // Record hit for backward pass
             primitive_hit_count[hit_id / HITS_PER_PRIMITIVE]++;
@@ -323,9 +325,10 @@ void render_volume()
         if (end) break;
     }
 
-    // Extract and output final color
+    // Extract and output final color (RGBA) and depth
     let output = extract_color(state, tmin);
-    image[idx.x] = {output.C.x, output.C.y, output.C.z, output.depth};
+    image[idx.x] = {output.C.x, output.C.y, output.C.z, output.alpha};
+    depth_out[idx.x] = output.depth;
 
     // Save state for backward pass
     let dual_state = to_dual(state, sample);

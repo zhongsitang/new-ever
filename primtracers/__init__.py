@@ -41,7 +41,7 @@ class PrimTracer(Function):
         rayo: torch.Tensor,
         rayd: torch.Tensor,
         tmin: float,
-        tmax: float,
+        tmax: torch.Tensor,  # Now a tensor (per-ray)
         max_prim_size: float,
         max_iters: int,
         return_extras: bool = False,
@@ -54,6 +54,7 @@ class PrimTracer(Function):
         density = density.contiguous()
         quat = quat.contiguous()
         color = color.contiguous()
+        tmax = tmax.contiguous()
         ctx.prims.add_primitives(mean, scale, quat, density, color)
 
         ctx.gas = tracer.GAS(otx, ctx.device, ctx.prims, True, False, True)
@@ -66,32 +67,35 @@ class PrimTracer(Function):
         ctx.tmax = tmax
         hit_collection = out["hit_collection"]
 
+        # Extract distortion loss from integrator state
         states = ctx.saved.states.reshape(rayo.shape[0], -1)
         distortion_pt1 = states[:, 0]
         distortion_pt2 = states[:, 1]
         distortion_loss = distortion_pt1 - distortion_pt2
-        color_and_loss = torch.cat([out["color"], distortion_loss.reshape(-1, 1)], dim=1)
+
+        # Output format: color RGBA (M, 4), depth (M,)
+        color_rgba = out["color"]  # (N, 4): R, G, B, A
+        depth = out["depth"]       # (N,): depth
 
         initial_prim_indices = out['initial_hit_inds'][:out['initial_hit_count'][0]]
 
         ctx.save_for_backward(
-            mean, scale, quat, density, color, rayo, rayd, hit_collection, out['initial_contrib'], initial_prim_indices
+            mean, scale, quat, density, color, rayo, rayd, tmax, hit_collection, out['initial_contrib'], initial_prim_indices
         )
 
-        if return_extras:
-            return color_and_loss, dict(
-                hit_collection=hit_collection,
-                iters=ctx.saved.iters,
-                opacity=out["color"][:, 3],
-                primitive_hit_count=ctx.saved.primitive_hit_count,
-                distortion_loss=distortion_loss,
-                saved=ctx.saved,
-            )
-        else:
-            return color_and_loss
+        extras = dict(
+            hit_collection=hit_collection,
+            iters=ctx.saved.iters,
+            primitive_hit_count=ctx.saved.primitive_hit_count,
+            saved=ctx.saved,
+        ) if return_extras else {}
+
+        # distortion_loss is included in extras
+        extras['distortion_loss'] = distortion_loss
+        return color_rgba, depth, extras
 
     @staticmethod
-    def backward(ctx, grad_output: torch.Tensor, return_extras=False):
+    def backward(ctx, grad_color: torch.Tensor, grad_depth: torch.Tensor, grad_extras=None):
         (
             mean,
             scale,
@@ -100,6 +104,7 @@ class PrimTracer(Function):
             features,
             rayo,
             rayd,
+            tmax,
             hit_collection,
             initial_contrib,
             initial_prim_indices,
@@ -117,6 +122,15 @@ class PrimTracer(Function):
         dL_drayd = torch.zeros((num_rays, 3), dtype=torch.float32, device=device)
         primitive_hit_count = torch.zeros((num_prims), dtype=torch.int32, device=device)
         dL_dinitial_contrib = torch.zeros((num_rays, 4), dtype=torch.float32, device=device)
+
+        # Handle distortion_loss gradient from extras
+        dL_ddistortion = torch.zeros((num_rays, 1), dtype=torch.float32, device=device)
+        if grad_extras is not None and 'distortion_loss' in grad_extras and grad_extras['distortion_loss'] is not None:
+            dL_ddistortion = grad_extras['distortion_loss'].reshape(-1, 1)
+
+        # Combine grad_color (R, G, B, A), grad_depth, and distortion_loss gradient
+        # Format for backward kernel: [R, G, B, A, depth, distortion_loss]
+        grad_combined = torch.cat([grad_color, grad_depth.reshape(-1, 1), dL_ddistortion], dim=1)
 
         block_size = 16
         if ctx.saved.iters.sum() > 0:
@@ -148,9 +162,9 @@ class PrimTracer(Function):
                 initial_contrib,
                 dL_dinitial_contrib,
                 primitive_hit_count,
-                grad_output.contiguous(),
+                grad_combined.contiguous(),
                 ctx.tmin,
-                ctx.tmax,
+                tmax,
                 ctx.max_prim_size,
                 ctx.max_iters,
             )
@@ -202,7 +216,7 @@ def trace_rays(
     rayo: torch.Tensor,
     rayd: torch.Tensor,
     tmin: float = 0.0,
-    tmax: float = 1000,
+    tmax: torch.Tensor | float = 1000,
     max_prim_size: float = 3,
     max_iters: int = 500,
     return_extras: bool = False,
@@ -228,8 +242,9 @@ def trace_rays(
         Ray directions, shape (M, 3)
     tmin : float
         Minimum t value for ray marching
-    tmax : float
-        Maximum t value for ray marching
+    tmax : torch.Tensor or float
+        Maximum t value for ray marching. Can be a scalar (broadcast to all rays)
+        or a tensor of shape (M,) for per-ray tmax values.
     max_prim_size : float
         Maximum primitive size for acceleration
     max_iters : int
@@ -239,9 +254,25 @@ def trace_rays(
 
     Returns
     -------
-    torch.Tensor or tuple
-        Rendered colors (and extras if requested)
+    tuple
+        (color, depth, extras) where:
+        - color: torch.Tensor of shape (M, 4) containing RGBA
+        - depth: torch.Tensor of shape (M,) containing depth values
+        - extras: dict containing 'distortion_loss' and optionally other fields if return_extras=True
     """
+    num_rays = rayo.shape[0]
+
+    # Handle tmax: convert scalar to tensor and broadcast if needed
+    if isinstance(tmax, (int, float)):
+        tmax = torch.full((num_rays,), tmax, dtype=torch.float32, device=rayo.device)
+    elif isinstance(tmax, torch.Tensor):
+        if tmax.numel() == 1:
+            # Scalar tensor, broadcast to all rays
+            tmax = tmax.expand(num_rays).contiguous()
+        elif tmax.shape[0] != num_rays:
+            raise ValueError(f"tmax must have shape ({num_rays},) or be a scalar, got {tmax.shape}")
+        tmax = tmax.to(dtype=torch.float32, device=rayo.device)
+
     return PrimTracer.apply(
         mean,
         scale,

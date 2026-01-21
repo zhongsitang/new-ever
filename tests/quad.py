@@ -106,9 +106,9 @@ def trace_rays(
     }
     rayo = rayo.detach().cpu().numpy().astype(np.float64)
     rayd = rayd.detach().cpu().numpy().astype(np.float64)
-    out, extras = quadrature.render_quadrature(
+    color_rgba, depth, extras = quadrature.render_quadrature(
         tdist,
         lambda t: sum_vquery_ellipsoid(t, rayo, rayd, params),
         return_extras=return_extras,
     )
-    return out, extras
+    return color_rgba, depth, extras
