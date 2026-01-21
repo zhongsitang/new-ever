@@ -254,11 +254,11 @@ void backwards_kernel(
     var d_state = diffPair(dual_state, {});
 
     // Setup output gradient
-    let dL_dC = get_float4(dL_doutputs, ray_idx);
+    let dL_dcolor = get_float4(dL_doutputs, ray_idx);
     let dL_d_distortion = dL_doutputs[ray_idx, 4];
     RenderOutput.Differential dL_doutput;
-    dL_doutput.C = {dL_dC.x, dL_dC.y, dL_dC.z};
-    dL_doutput.depth = dL_dC.w;
+    dL_doutput.color = {dL_dcolor.x, dL_dcolor.y, dL_dcolor.z};
+    dL_doutput.depth = dL_dcolor.w;
     dL_doutput.distortion_loss = dL_d_distortion;
 
     // Early exit for boundary cases
