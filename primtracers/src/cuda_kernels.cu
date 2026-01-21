@@ -91,6 +91,18 @@ __device__ __forceinline__ float3 mat3_mul_vec3(
         dot(row2, v));
 }
 
+// Transpose matrix-vector multiply: result = R^T * v (R is row-major)
+// This matches Slang's rotate_vector which uses conjugate quaternion
+__device__ __forceinline__ float3 mat3_transpose_mul_vec3(
+    const float3& row0, const float3& row1, const float3& row2,
+    const float3& v)
+{
+    return make_float3(
+        v.x * row0.x + v.y * row1.x + v.z * row2.x,
+        v.x * row0.y + v.y * row1.y + v.z * row2.y,
+        v.x * row0.z + v.y * row1.z + v.z * row2.z);
+}
+
 // =============================================================================
 // Primitive Bounding Box Construction
 // =============================================================================
@@ -173,7 +185,8 @@ __device__ float3 transform_to_ellipsoid_space(
     quat_to_rotation_matrix(quat, R0, R1, R2);
 
     float3 local_pos = rayo - center;
-    float3 rotated = mat3_mul_vec3(R0, R1, R2, local_pos);
+    // Use transpose multiply to match Slang's rotate_vector (conjugate quaternion)
+    float3 rotated = mat3_transpose_mul_vec3(R0, R1, R2, local_pos);
     return rotated / size;
 }
 
