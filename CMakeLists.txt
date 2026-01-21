@@ -58,13 +58,12 @@ set(SLANG_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/primtracer/slang")
 # Main pybind11 extension module
 # -----------------------------------------------------------------------------
 pybind11_add_module(primtracer_core MODULE
-  ${TRACER_DIR}/Forward.cpp
-  ${TRACER_DIR}/Forward.h
-  ${TRACER_DIR}/GAS.cpp
-  ${TRACER_DIR}/GAS.h
+  ${TRACER_DIR}/ray_tracer.cpp
+  ${TRACER_DIR}/ray_tracer.h
+  ${TRACER_DIR}/accel_structure.h
   ${TRACER_DIR}/py_binding.cpp
   ${TRACER_DIR}/structs.h
-  ${TRACER_DIR}/CUDABuffer.h
+  ${TRACER_DIR}/cuda_buffer.h
   ${TRACER_DIR}/create_aabbs.cu
   ${TRACER_DIR}/create_aabbs.h
   ${TRACER_DIR}/initialize_density.cu

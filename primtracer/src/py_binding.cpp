@@ -24,8 +24,8 @@
 
 // Include after torch/extension.h to enable PT_CHECK_* macros
 #include "exception.h"
-#include "Forward.h"
-#include "GAS.h"
+#include "ray_tracer.h"
+#include "accel_structure.h"
 #include "create_aabbs.h"
 
 namespace py = pybind11;

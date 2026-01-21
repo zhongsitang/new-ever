@@ -12,29 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "Forward.h"
+#include "ray_tracer.h"
 #include "exception.h"
-#include "CUDABuffer.h"
+#include "cuda_buffer.h"
 #include "initialize_density.h"
 
 #include <optix_stubs.h>
 #include <optix_stack_size.h>
 #include <cstring>
 
-// -----------------------------------------------------------------------------
-// Forward implementation
-// -----------------------------------------------------------------------------
+// =============================================================================
+// RayTracer Implementation
+// =============================================================================
 
-Forward::Forward(OptixDeviceContext context, int8_t device, const Primitives& model, bool enable_backward)
-    : enable_backward(enable_backward)
-    , context_(context)
+RayTracer::RayTracer(OptixDeviceContext context, int8_t device, const Primitives& primitives)
+    : context_(context)
     , device_(device)
-    , model_(&model)
+    , primitives_(&primitives)
+    , num_prims_(primitives.num_prims)
 {
     CUDA_CHECK(cudaSetDevice(device));
-
-    // Select PTX based on mode
-    const char* ptx = enable_backward ? shaders_ptx : fast_shaders_ptx;
 
     // Setup pipeline compile options
     pipeline_options_.usesMotionBlur = false;
@@ -45,72 +42,78 @@ Forward::Forward(OptixDeviceContext context, int8_t device, const Primitives& mo
     pipeline_options_.pipelineLaunchParamsVariableName = "SLANG_globalParams";
     pipeline_options_.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_CUSTOM;
 
-    create_module(ptx);
+    create_module();
     create_program_groups();
     create_pipeline();
     create_sbt();
 
-    // Initialize params with model data
-    params_.means = {reinterpret_cast<float3*>(model.means), model.num_prims};
-    params_.scales = {reinterpret_cast<float3*>(model.scales), model.num_prims};
-    params_.quats = {reinterpret_cast<float4*>(model.quats), model.num_prims};
-    params_.densities = {model.densities, model.num_prims};
-    params_.features = {model.features, model.num_prims * model.feature_size};
+    // Initialize params with primitive data
+    params_.means = {reinterpret_cast<float3*>(primitives.means), primitives.num_prims};
+    params_.scales = {reinterpret_cast<float3*>(primitives.scales), primitives.num_prims};
+    params_.quats = {reinterpret_cast<float4*>(primitives.quats), primitives.num_prims};
+    params_.densities = {primitives.densities, primitives.num_prims};
+    params_.features = {primitives.features, primitives.num_prims * primitives.feature_size};
 
-    num_prims = model.num_prims;
-    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_param_), sizeof(Params)));
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_params_), sizeof(LaunchParams)));
 }
 
-void Forward::create_module(const char* ptx) {
+void RayTracer::create_module() {
     OptixModuleCompileOptions module_options = {};
     module_options.optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_3;
     module_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
 
+    log_size_ = LOG_SIZE;
     OPTIX_CHECK_LOG(optixModuleCreate(
         context_,
         &module_options,
         &pipeline_options_,
-        ptx,
-        strlen(ptx),
+        shaders_ptx,
+        strlen(shaders_ptx),
         log_, &log_size_,
         &module_
     ));
 }
 
-void Forward::create_program_groups() {
+void RayTracer::create_program_groups() {
     OptixProgramGroupOptions pg_options = {};
 
-    // Raygen
+    // Ray generation shader
     OptixProgramGroupDesc raygen_desc = {};
     raygen_desc.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
     raygen_desc.raygen.module = module_;
-    raygen_desc.raygen.entryFunctionName = "__raygen__rg_float";
+    raygen_desc.raygen.entryFunctionName = "__raygen__raygen";
+
+    log_size_ = LOG_SIZE;
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
         context_, &raygen_desc, 1, &pg_options, log_, &log_size_, &raygen_pg_
     ));
 
-    // Miss
+    // Miss shader
     OptixProgramGroupDesc miss_desc = {};
     miss_desc.kind = OPTIX_PROGRAM_GROUP_KIND_MISS;
     miss_desc.miss.module = module_;
-    miss_desc.miss.entryFunctionName = "__miss__ms";
+    miss_desc.miss.entryFunctionName = "__miss__miss";
+
+    log_size_ = LOG_SIZE;
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
         context_, &miss_desc, 1, &pg_options, log_, &log_size_, &miss_pg_
     ));
 
-    // Hitgroup
+    // Hit group (any-hit + intersection shaders)
     OptixProgramGroupDesc hitgroup_desc = {};
     hitgroup_desc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
     hitgroup_desc.hitgroup.moduleAH = module_;
-    hitgroup_desc.hitgroup.entryFunctionNameAH = "__anyhit__ah";
+    hitgroup_desc.hitgroup.entryFunctionNameAH = "__anyhit__any_hit";
     hitgroup_desc.hitgroup.moduleIS = module_;
-    hitgroup_desc.hitgroup.entryFunctionNameIS = "__intersection__ellipsoid";
+    hitgroup_desc.hitgroup.entryFunctionNameIS = "__intersection__intersection_ellipsoid";
+
+    log_size_ = LOG_SIZE;
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
         context_, &hitgroup_desc, 1, &pg_options, log_, &log_size_, &hitgroup_pg_
     ));
 }
 
-void Forward::create_pipeline() {
+void RayTracer::create_pipeline() {
     constexpr uint32_t max_trace_depth = 1;
 
     OptixProgramGroup program_groups[] = {raygen_pg_, miss_pg_, hitgroup_pg_};
@@ -118,6 +121,7 @@ void Forward::create_pipeline() {
     OptixPipelineLinkOptions link_options = {};
     link_options.maxTraceDepth = max_trace_depth;
 
+    log_size_ = LOG_SIZE;
     OPTIX_CHECK_LOG(optixPipelineCreate(
         context_,
         &pipeline_options_,
@@ -137,7 +141,7 @@ void Forward::create_pipeline() {
     uint32_t dc_from_traversal, dc_from_state, continuation;
     OPTIX_CHECK(optixUtilComputeStackSizes(
         &stack_sizes, max_trace_depth,
-        0, 0, // CC/DC depth
+        0, 0,  // CC/DC depth
         &dc_from_traversal, &dc_from_state, &continuation
     ));
 
@@ -146,8 +150,8 @@ void Forward::create_pipeline() {
     ));
 }
 
-void Forward::create_sbt() {
-    // Raygen record
+void RayTracer::create_sbt() {
+    // Ray generation record
     CUdeviceptr raygen_record;
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&raygen_record), sizeof(RayGenSbtRecord)));
     RayGenSbtRecord rg_sbt;
@@ -159,12 +163,12 @@ void Forward::create_sbt() {
     CUdeviceptr miss_record;
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&miss_record), sizeof(MissSbtRecord)));
     MissSbtRecord ms_sbt;
-    ms_sbt.data = {0.3f, 0.1f, 0.2f}; // Background color
+    ms_sbt.data = {0.3f, 0.1f, 0.2f};  // Background color
     OPTIX_CHECK(optixSbtRecordPackHeader(miss_pg_, &ms_sbt));
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(miss_record), &ms_sbt,
                           sizeof(MissSbtRecord), cudaMemcpyHostToDevice));
 
-    // Hitgroup record
+    // Hit group record
     CUdeviceptr hitgroup_record;
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&hitgroup_record), sizeof(HitGroupSbtRecord)));
     HitGroupSbtRecord hg_sbt;
@@ -181,63 +185,69 @@ void Forward::create_sbt() {
     sbt_.hitgroupRecordCount = 1;
 }
 
-void Forward::trace_rays(
-    OptixTraversableHandle handle,
+void RayTracer::trace_rays(
+    OptixTraversableHandle accel_handle,
     size_t num_rays,
     float3* ray_origins,
     float3* ray_directions,
     void* image_out,
     uint sh_degree,
-    float tmin, float tmax,
-    float4* initial_drgb,
+    float t_near,
+    float t_far,
+    float4* initial_sample,
     Cam* camera,
-    size_t max_iters,
+    size_t max_iterations,
     float max_prim_size,
-    uint* iters,
-    uint* last_face,
+    uint* iterations,
+    uint* last_hit_face,
     uint* touch_count,
-    float4* last_dirac,
-    SplineState* last_state,
-    int* tri_collection,
-    int* d_touch_count,
-    int* d_touch_inds)
+    float4* last_sample,
+    IntegrationState* last_state,
+    int* hit_sequence,
+    int* initial_touch_count,
+    int* initial_touch_indices)
 {
     CUDA_CHECK(cudaSetDevice(device_));
 
-    // Setup params
+    // Setup output params
     params_.image = {reinterpret_cast<float4*>(image_out), num_rays};
     params_.last_state = {last_state, num_rays};
-    params_.last_dirac = {last_dirac, num_rays};
-    params_.tri_collection = {tri_collection, num_rays * max_iters};
-    params_.iters = {iters, num_rays};
-    params_.last_face = {last_face, num_rays};
-    params_.touch_count = {touch_count, num_prims};
+    params_.last_sample = {last_sample, num_rays};
+    params_.hit_sequence = {hit_sequence, num_rays * max_iterations};
+    params_.iterations = {iterations, num_rays};
+    params_.last_hit_face = {last_hit_face, num_rays};
+    params_.touch_count = {touch_count, num_prims_};
+
+    // Setup rendering params
     params_.sh_degree = sh_degree;
     params_.max_prim_size = max_prim_size;
-    params_.max_iters = max_iters;
+    params_.max_iterations = max_iterations;
     params_.ray_origins = {ray_origins, num_rays};
     params_.ray_directions = {ray_directions, num_rays};
-    params_.tmin = tmin;
-    params_.tmax = tmax;
+    params_.t_near = t_near;
+    params_.t_far = t_far;
 
     if (camera) {
         params_.camera = *camera;
     }
 
-    CUDA_CHECK(cudaMemset(initial_drgb, 0, num_rays * sizeof(float4)));
-    params_.initial_drgb = {initial_drgb, num_rays};
+    // Initialize initial sample buffer
+    CUDA_CHECK(cudaMemset(initial_sample, 0, num_rays * sizeof(float4)));
+    params_.initial_sample = {initial_sample, num_rays};
 
-    initialize_density(&params_, model_->aabbs, d_touch_count, d_touch_inds);
+    // Initialize density for rays starting inside primitives
+    initialize_density(&params_, primitives_->aabbs, initial_touch_count, initial_touch_indices);
 
-    params_.handle = handle;
-    CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,
-                          sizeof(Params), cudaMemcpyHostToDevice));
+    // Upload params and launch
+    params_.accel_handle = accel_handle;
+    CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_params_), &params_,
+                          sizeof(LaunchParams), cudaMemcpyHostToDevice));
 
     if (camera) {
-        OPTIX_CHECK(optixLaunch(pipeline_, stream_, d_param_, sizeof(Params), &sbt_,
+        OPTIX_CHECK(optixLaunch(pipeline_, stream_, d_params_, sizeof(LaunchParams), &sbt_,
                                 camera->width, camera->height, 1));
     } else {
-        OPTIX_CHECK(optixLaunch(pipeline_, stream_, d_param_, sizeof(Params), &sbt_,
+        OPTIX_CHECK(optixLaunch(pipeline_, stream_, d_params_, sizeof(LaunchParams), &sbt_,
                                 num_rays, 1, 1));
     }
 
@@ -245,13 +255,13 @@ void Forward::trace_rays(
     CUDA_CHECK(cudaStreamSynchronize(stream_));
 }
 
-void Forward::reset_features(const Primitives& model) {
-    params_.features = {model.features, model.num_prims * model.feature_size};
+void RayTracer::update_features(const Primitives& primitives) {
+    params_.features = {primitives.features, primitives.num_prims * primitives.feature_size};
 }
 
-Forward::~Forward() noexcept(false) {
-    if (d_param_)
-        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(std::exchange(d_param_, 0))));
+RayTracer::~RayTracer() noexcept(false) {
+    if (d_params_)
+        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(std::exchange(d_params_, 0))));
     if (sbt_.raygenRecord)
         CUDA_CHECK(cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.raygenRecord, 0))));
     if (sbt_.missRecordBase)

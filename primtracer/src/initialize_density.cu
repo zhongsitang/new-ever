@@ -14,7 +14,7 @@
 
 #define TRI_PER_G 4
 #define PT_PER_G 4
-#include "Forward.h"
+#include "ray_tracer.h"
 #include "exception.h"
 #include "glm/glm.hpp"
 #include "initialize_density.h"
@@ -114,7 +114,7 @@ kern_initialize_density(
     const float tmin,
     const glm::vec3 *rayos,
     const glm::vec3 *rayds,
-    float *initial_drgb,
+    float *initial_sample,
     int *touch_indices,
     int *touch_count)
 {
@@ -141,21 +141,21 @@ kern_initialize_density(
           features[prim_ind * 3 + 1] * SH_C0 + 0.5,
           features[prim_ind * 3 + 2] * SH_C0 + 0.5,
       };
-      atomicAdd(initial_drgb + 4 * j + 0, density);
-      atomicAdd(initial_drgb + 4 * j + 1, density * color.x);
-      atomicAdd(initial_drgb + 4 * j + 2, density * color.y);
-      atomicAdd(initial_drgb + 4 * j + 3, density * color.z);
+      atomicAdd(initial_sample + 4 * j + 0, density);
+      atomicAdd(initial_sample + 4 * j + 1, density * color.x);
+      atomicAdd(initial_sample + 4 * j + 2, density * color.y);
+      atomicAdd(initial_sample + 4 * j + 3, density * color.z);
     }
   }
 }
 
-void initialize_density(Params *params, OptixAabb *aabbs,
+void initialize_density(LaunchParams *params, OptixAabb *aabbs,
     int *d_touch_count, int *d_touch_inds) {
   const size_t block_size = 1024;
   const size_t ray_block_size = 64;
   const size_t second_block_size = 16;
   int num_prims = params->means.size;
-  int num_rays = params->initial_drgb.size;
+  int num_rays = params->initial_sample.size;
 
   dim3 grid_dim (
     (num_prims + block_size - 1) / block_size,
@@ -172,7 +172,7 @@ void initialize_density(Params *params, OptixAabb *aabbs,
 
   kern_prefilter<<<grid_dim.x, block_dim.x>>>(
       aabbs,
-      num_prims, params->tmin,
+      num_prims, params->t_near,
       (glm::vec3 *)(params->ray_origins.data),
       d_touch_inds, d_touch_count);
 
@@ -191,10 +191,10 @@ void initialize_density(Params *params, OptixAabb *aabbs,
         (glm::vec3 *)(params->means.data), (glm::vec3 *)(params->scales.data),
         (glm::vec4 *)(params->quats.data), (float *)(params->densities.data),
         (float *)(params->features.data),
-        num_prims, num_rays, params->tmin,
+        num_prims, num_rays, params->t_near,
         (glm::vec3 *)(params->ray_origins.data),
         (glm::vec3 *)(params->ray_directions.data),
-        (float *)(params->initial_drgb.data),
+        (float *)(params->initial_sample.data),
         d_touch_inds, d_touch_count);
 
     CUDA_SYNC_CHECK();
@@ -210,7 +210,7 @@ __global__ void
 kern_initialize_density_so(const glm::vec3 *means, const glm::vec3 *scales,
                            const glm::vec4 *quats, const float *densities,
                            const float *features, const size_t num_prims,
-                           const glm::vec3 *rayo, float *initial_drgb) {
+                           const glm::vec3 *rayo, float *initial_sample) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < 0 || i >= num_prims)
     return;
@@ -251,14 +251,14 @@ kern_initialize_density_so(const glm::vec3 *means, const glm::vec3 *scales,
         features[i * 3 + 1] * SH_C0 + 0.5,
         features[i * 3 + 2] * SH_C0 + 0.5,
     };
-    atomicAdd(initial_drgb + 0, density);
-    atomicAdd(initial_drgb + 1, density * color.x);
-    atomicAdd(initial_drgb + 2, density * color.y);
-    atomicAdd(initial_drgb + 3, density * color.z);
+    atomicAdd(initial_sample + 0, density);
+    atomicAdd(initial_sample + 1, density * color.x);
+    atomicAdd(initial_sample + 2, density * color.y);
+    atomicAdd(initial_sample + 3, density * color.z);
   }
 }
 
-void initialize_density_so(Params *params) {
+void initialize_density_so(LaunchParams *params) {
   const size_t block_size = 1024;
   int num_prims = params->means.size;
 
@@ -268,10 +268,10 @@ void initialize_density_so(Params *params) {
       (glm::vec4 *)(params->quats.data), (float *)(params->densities.data),
       (float *)(params->features.data), num_prims,
       (glm::vec3 *)(params->ray_origins.data),
-      (float *)(params->initial_drgb.data));
+      (float *)(params->initial_sample.data));
 
   CUDA_SYNC_CHECK();
 }
 
-void initialize_density_zero(Params *params) {
+void initialize_density_zero(LaunchParams *params) {
 }
