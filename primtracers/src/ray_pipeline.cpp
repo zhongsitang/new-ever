@@ -186,16 +186,16 @@ void RayPipeline::trace_rays(
     void* image_out,
     uint sh_degree,
     float tmin, float tmax,
-    float4* initial_drgb,
+    float4* initial_contrib,
     Cam* camera,
     size_t max_iters,
     float max_prim_size,
     uint* iters,
-    uint* last_face,
-    uint* touch_count,
-    float4* last_dirac,
+    uint* last_prim,
+    uint* primitive_hit_count,
+    float4* last_delta_contrib,
     VolumeState* last_state,
-    int* tri_collection,
+    int* hit_collection,
     int* d_touch_count,
     int* d_touch_inds)
 {
@@ -204,11 +204,11 @@ void RayPipeline::trace_rays(
     // Setup params
     params_.image = {reinterpret_cast<float4*>(image_out), num_rays};
     params_.last_state = {last_state, num_rays};
-    params_.last_dirac = {last_dirac, num_rays};
-    params_.tri_collection = {tri_collection, num_rays * max_iters};
+    params_.last_delta_contrib = {last_delta_contrib, num_rays};
+    params_.hit_collection = {hit_collection, num_rays * max_iters};
     params_.iters = {iters, num_rays};
-    params_.last_face = {last_face, num_rays};
-    params_.touch_count = {touch_count, num_prims};
+    params_.last_prim = {last_prim, num_rays};
+    params_.primitive_hit_count = {primitive_hit_count, num_prims};
     params_.sh_degree = sh_degree;
     params_.max_prim_size = max_prim_size;
     params_.max_iters = max_iters;
@@ -221,8 +221,8 @@ void RayPipeline::trace_rays(
         params_.camera = *camera;
     }
 
-    CUDA_CHECK(cudaMemset(initial_drgb, 0, num_rays * sizeof(float4)));
-    params_.initial_drgb = {initial_drgb, num_rays};
+    CUDA_CHECK(cudaMemset(initial_contrib, 0, num_rays * sizeof(float4)));
+    params_.initial_contrib = {initial_contrib, num_rays};
 
     init_ray_start_samples(&params_, model_->aabbs, d_touch_count, d_touch_inds);
 

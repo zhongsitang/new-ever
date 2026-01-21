@@ -66,7 +66,7 @@ class PrimTracer(Function):
         ctx.max_prim_size = max_prim_size
         ctx.tmin = tmin
         ctx.tmax = tmax
-        tri_collection = out["tri_collection"]
+        hit_collection = out["hit_collection"]
 
         states = ctx.saved.states.reshape(rayo.shape[0], -1)
         distortion_pt1 = states[:, 0]
@@ -74,18 +74,18 @@ class PrimTracer(Function):
         distortion_loss = distortion_pt1 - distortion_pt2
         color_and_loss = torch.cat([out["color"], distortion_loss.reshape(-1, 1)], dim=1)
 
-        initial_inds = out['initial_touch_inds'][:out['initial_touch_count'][0]]
+        initial_prim_indices = out['initial_touch_inds'][:out['initial_touch_count'][0]]
 
         ctx.save_for_backward(
-            mean, scale, quat, density, color, rayo, rayd, tri_collection, wcts, out['initial_drgb'], initial_inds
+            mean, scale, quat, density, color, rayo, rayd, hit_collection, wcts, out['initial_contrib'], initial_prim_indices
         )
 
         if return_extras:
             return color_and_loss, dict(
-                tri_collection=tri_collection,
+                hit_collection=hit_collection,
                 iters=ctx.saved.iters,
                 opacity=out["color"][:, 3],
-                touch_count=ctx.saved.touch_count,
+                primitive_hit_count=ctx.saved.primitive_hit_count,
                 distortion_loss=distortion_loss,
                 saved=ctx.saved,
             )
@@ -102,10 +102,10 @@ class PrimTracer(Function):
             features,
             rayo,
             rayd,
-            tri_collection,
+            hit_collection,
             wcts,
-            initial_drgb,
-            initial_inds,
+            initial_contrib,
+            initial_prim_indices,
         ) = ctx.saved_tensors
         device = ctx.device
 
@@ -119,8 +119,8 @@ class PrimTracer(Function):
         dL_drayo = torch.zeros((num_rays, 3), dtype=torch.float32, device=device)
         dL_drayd = torch.zeros((num_rays, 3), dtype=torch.float32, device=device)
         dL_dmeans2D = torch.zeros((num_prims, 2), dtype=torch.float32, device=device)
-        touch_count = torch.zeros((num_prims), dtype=torch.int32, device=device)
-        dL_dinital_drgb = torch.zeros((num_rays, 4), dtype=torch.float32, device=device)
+        primitive_hit_count = torch.zeros((num_prims), dtype=torch.int32, device=device)
+        dL_dinitial_contrib = torch.zeros((num_rays, 4), dtype=torch.float32, device=device)
 
         block_size = 16
         if ctx.saved.iters.sum() > 0:
@@ -144,15 +144,15 @@ class PrimTracer(Function):
                 (block_size, 1, 1),
                 (num_rays // block_size + 1, 1, 1),
                 ctx.saved.states,
-                ctx.saved.diracs,
+                ctx.saved.delta_contribs,
                 ctx.saved.iters,
-                tri_collection,
+                hit_collection,
                 rayo,
                 rayd,
                 dual_model,
-                initial_drgb,
-                dL_dinital_drgb,
-                touch_count,
+                initial_contrib,
+                dL_dinitial_contrib,
+                primitive_hit_count,
                 grad_output.contiguous(),
                 wcts if wcts is not None else torch.ones((1, 4, 4), device=device, dtype=torch.float32),
                 ctx.tmin,
@@ -161,23 +161,23 @@ class PrimTracer(Function):
                 ctx.max_iters,
             )
 
-            if initial_inds.shape[0] > 0:
+            if initial_prim_indices.shape[0] > 0:
                 ray_block_size = 64
                 second_block_size = 16
-                backwards_kernel.backwards_initial_drgb_kernel(
+                backwards_kernel.backwards_initial_contrib_kernel(
                     (ray_block_size, second_block_size, 1),
                     (
                         rayo.shape[0] // ray_block_size + 1,
-                        initial_inds.shape[0] // second_block_size + 1,
+                        initial_prim_indices.shape[0] // second_block_size + 1,
                         1,
                     ),
                     rayo,
                     rayd,
                     dual_model,
-                    initial_drgb,
-                    initial_inds,
-                    dL_dinital_drgb,
-                    touch_count,
+                    initial_contrib,
+                    initial_prim_indices,
+                    dL_dinitial_contrib,
+                    primitive_hit_count,
                     ctx.tmin,
                 )
 

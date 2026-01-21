@@ -12,25 +12,55 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// =============================================================================
+// Volume Integrator for Ellipsoid Primitive Ray Tracing
+// =============================================================================
+//
+// This module implements volume rendering integration for ellipsoid primitives.
+// Each ellipsoid contributes to the integral when a ray passes through it:
+// - At entry point: adds +density to the accumulated density field
+// - At exit point: adds -density to the accumulated density field
+//
+// The accumulated density between entry/exit points determines the opacity
+// contribution of each ellipsoid segment along the ray.
+// =============================================================================
+
 #define EPS 1e-18
 import safe_math;
 #define PRE_MULTI 1000
 #define LADDER_P -0.1
 
+// =============================================================================
+// Core Data Structures
+// =============================================================================
+
+/// State for volume rendering integration along a ray.
+///
+/// This tracks both the integration state (accumulated density-weighted values)
+/// and the volume rendering state (transmittance and accumulated color).
 struct VolumeState : IDifferentiable
 {
+  // Distortion loss components (for regularization)
   float2 distortion_parts;
   float2 cum_sum;
-  float3 padding;
-  // Integration state (ray parameter and delta extinction/color)
-  float t;
-  float4 drgb;  // delta (density, r, g, b) - accumulated contribution derivative
 
-  // Volume Rendering State (transmittance and accumulated color)
-  float logT;
-  float3 C;
+  // Depth accumulator (stored in padding for memory layout compatibility)
+  float3 padding;
+
+  // Current ray parameter t
+  float t;
+
+  // Accumulated density-weighted contributions: (density, r*density, g*density, b*density)
+  // This accumulates the "delta" contributions from ellipsoid boundaries.
+  // Between boundaries, this represents the current density field value.
+  float4 accumulated_contrib;
+
+  // Volume rendering state
+  float logT;   // Log of accumulated optical depth (negative log transmittance)
+  float3 C;     // Accumulated color
 };
 
+/// Create initial volume state for a new ray.
 VolumeState make_initial_state() {
   return {
     float2(0.f),
@@ -38,17 +68,26 @@ VolumeState make_initial_state() {
     float3(0.f),
     0.f,
     float4(0.0f),
-
     0.0,
     float3(0.0f),
   };
 }
 
+/// Sample point along a ray, representing an ellipsoid boundary crossing.
+///
+/// When a ray crosses an ellipsoid boundary:
+/// - Entry (hit_type=1): delta_contrib.x = +density
+/// - Exit (hit_type=0): delta_contrib.x = -density
+/// The RGB components are density-weighted: delta_contrib.yzw = sign * density * color
 struct SamplePoint : IDifferentiable
 {
-  float t;
-  float4 dirac;
+  float t;              // Ray parameter at this sample
+  float4 delta_contrib; // (signed_density, r*signed_density, g*signed_density, b*signed_density)
 }
+
+// =============================================================================
+// Utility Functions
+// =============================================================================
 
 bool AlmostEqualRelative(float A, float B,
                          float maxRelDiff = 1.2e-7f)
@@ -56,18 +95,25 @@ bool AlmostEqualRelative(float A, float B,
     return abs(A - B) <= max(abs(A), abs(B)) * maxRelDiff;
 }
 
+/// Convert state to dual representation (for backward pass).
 VolumeState to_dual(in VolumeState state, in SamplePoint sample)
 {
   VolumeState dual_state = state;
   return dual_state;
 }
 
+/// Convert state from dual representation.
 VolumeState from_dual(in VolumeState state, in SamplePoint sample)
 {
   VolumeState dual_state = state;
   return dual_state;
 }
 
+// =============================================================================
+// Volume Integration
+// =============================================================================
+
+/// Inverse update for backward pass - computes previous state from current state.
 VolumeState inverse_update_dual(
     in VolumeState new_state,
     in SamplePoint new_sample,
@@ -79,13 +125,13 @@ VolumeState inverse_update_dual(
   const float dt = max(new_state.t - t, 0.f);
 
   VolumeState state = {};
-  state.drgb = new_state.drgb - new_sample.dirac;
+  state.accumulated_contrib = new_state.accumulated_contrib - new_sample.delta_contrib;
 
   state.t = t;
 
-  float4 drgb = state.drgb;
+  float4 contrib = state.accumulated_contrib;
 
-  let avg = drgb;
+  let avg = contrib;
   float area = max(avg.x * dt, 0.f);
   let rgb_norm = safe_div(float3(avg.y, avg.z, avg.w), avg.x);
 
@@ -100,16 +146,15 @@ VolumeState inverse_update_dual(
   if (avg.x < AREA_THRESHOLD) {
       segment_depth_val = alpha * t + (1-alpha) * state.t;
   } else {
-      segment_depth_val = safe_div(1.f, avg.x) * (-safe_expm1(-area)) 
-                        - (t + t_min) * safe_exp(-area) 
+      segment_depth_val = safe_div(1.f, avg.x) * (-safe_expm1(-area))
+                        - (t + t_min) * safe_exp(-area)
                         + (state.t + t_min);
   }
 
   const float segment_depth = max(segment_depth_val, 0.f);
   new_state.padding[0] = state.padding[0] - safe_exp(-state.logT) * segment_depth;
 
-  // Distortion Loss
-  // make sure this is the right t. I believe this is correct.
+  // Distortion Loss computation
   let m = tukey_power_ladder((new_state.t+state.t)/2 * PRE_MULTI, LADDER_P);
   state.cum_sum.x = new_state.cum_sum.x - weight;
   state.cum_sum.y = new_state.cum_sum.y - weight * m;
@@ -119,7 +164,12 @@ VolumeState inverse_update_dual(
   return state;
 }
 
-
+/// Update volume state with a new sample point (ellipsoid boundary crossing).
+///
+/// This is the core volume rendering integration step:
+/// 1. Accumulate the delta contribution from the boundary
+/// 2. Compute the opacity contribution from the segment
+/// 3. Update accumulated color weighted by transmittance
 [Differentiable]
 VolumeState update(
     in VolumeState state,
@@ -132,12 +182,12 @@ VolumeState update(
   const float dt = max(t - state.t, 0.f);
 
   VolumeState new_state;
-  new_state.drgb = state.drgb + sample.dirac;
+  new_state.accumulated_contrib = state.accumulated_contrib + sample.delta_contrib;
   new_state.t = t;
 
-  float4 drgb = state.drgb;
+  float4 contrib = state.accumulated_contrib;
 
-  let avg = drgb;
+  let avg = contrib;
   let area = max(avg.x * dt, 0.f);
 
   let rgb_norm = safe_div(float3(avg.y, avg.z, avg.w), avg.x);
@@ -152,17 +202,15 @@ VolumeState update(
   if (avg.x < AREA_THRESHOLD) {
       segment_depth_val = alpha * t + (1-alpha) * state.t;
   } else {
-      segment_depth_val = safe_div(1.f, avg.x) * (-safe_expm1(-area)) 
-                        - (t + t_min) * safe_exp(-area) 
+      segment_depth_val = safe_div(1.f, avg.x) * (-safe_expm1(-area))
+                        - (t + t_min) * safe_exp(-area)
                         + (state.t + t_min);
   }
 
   const float segment_depth = max(segment_depth_val, 0.f);
   new_state.padding[0] = state.padding[0] + safe_exp(-state.logT) * segment_depth;
 
-
-  // Distortion Loss
-  // make sure this is the right t. I believe this is correct.
+  // Distortion Loss computation
   let m = tukey_power_ladder((new_state.t+state.t)/2 * PRE_MULTI, LADDER_P);
   new_state.distortion_parts.x = state.distortion_parts.x + 2 * weight * m * state.cum_sum.x;
   new_state.distortion_parts.y = state.distortion_parts.y + 2 * weight * state.cum_sum.y;
@@ -172,15 +220,20 @@ VolumeState update(
   return new_state;
 }
 
+// =============================================================================
+// Output Extraction
+// =============================================================================
+
+/// Final rendered output for a ray.
 struct RenderOutput: IDifferentiable {
-  float3 C;
-  float depth;
-  float distortion_loss;
+  float3 C;              // Accumulated color
+  float depth;           // Expected depth
+  float distortion_loss; // Distortion regularization loss
 };
 
+/// Extract final color and depth from volume state.
 [Differentiable]
 RenderOutput extract_color(in VolumeState state, in float tmin) {
-  // let opacity = 1-exp(-state.logT);
   return {
     state.C,
     state.padding[0],

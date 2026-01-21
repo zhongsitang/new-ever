@@ -265,17 +265,32 @@ float density_multi(
     return feather_factor;
 }
 
+/// Compute intersection sample point for an ellipsoid.
+///
+/// Parameters:
+/// - rayo, rayd: Ray origin and direction
+/// - scales, mean, quat: Ellipsoid parameters
+/// - color: Evaluated color at this point
+/// - density: Ellipsoid density
+/// - hit_type: 1 for entry point, 0 for exit point
+/// - skip_close: Whether to skip close intersections
+///
+/// Returns a SamplePoint with:
+/// - t: Ray parameter at intersection
+/// - delta_contrib: (signed_density, signed_density * color)
+///   where signed_density = +density for entry, -density for exit
 [Differentiable]
 SamplePoint intersect(
-    float3 rayo, float3 rayd, float3 scales, float3 mean, float4 quat, float3 color, float density, uint face_id, no_diff bool skip_close
+    float3 rayo, float3 rayd, float3 scales, float3 mean, float4 quat, float3 color, float density, uint hit_type, no_diff bool skip_close
 ) {
     float2 minmaxt = ray_intersect_ellipsoid(rayo - mean, rayd, scales, quat);
-    float t = (face_id == 1) ? minmaxt.x : minmaxt.y;
+    float t = (hit_type == 1) ? minmaxt.x : minmaxt.y;
 
-    float dirac_multi = ((face_id == 1) ? density : -density);
+    // Entry point adds +density, exit point adds -density
+    float signed_density = ((hit_type == 1) ? density : -density);
 
     SamplePoint out = {
-        t, dirac_multi, dirac_multi*color.x, dirac_multi*color.y, dirac_multi*color.z 
+        t, signed_density, signed_density*color.x, signed_density*color.y, signed_density*color.z
     };
     return out;
 }
@@ -286,17 +301,18 @@ float3 rotate_vector2(float3 v, float4 q)
   return mul(v, quat2mat(q));
 }
 
+/// Safe version of intersect with numerical stability for autodiff.
 [Differentiable]
 SamplePoint safe_intersect(
-    float3 rayo, float3 rayd, float3 scales, float3 mean, float4 quat, float3 color, float density, uint face_id, no_diff bool skip_close
+    float3 rayo, float3 rayd, float3 scales, float3 mean, float4 quat, float3 color, float density, uint hit_type, no_diff bool skip_close
 ) {
     float2 minmaxt = safe_ray_intersect_ellipsoid(rayo - mean, rayd, scales, quat);
 
-    float t = (face_id == 1) ? minmaxt.x : minmaxt.y;
-    float dirac_multi = ((face_id == 1) ? density : -density);
+    float t = (hit_type == 1) ? minmaxt.x : minmaxt.y;
+    float signed_density = ((hit_type == 1) ? density : -density);
 
     SamplePoint out = {
-        t, dirac_multi, dirac_multi*color.x, dirac_multi*color.y, dirac_multi*color.z 
+        t, signed_density, signed_density*color.x, signed_density*color.y, signed_density*color.z
     };
     return out;
 }
