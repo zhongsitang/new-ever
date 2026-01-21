@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "Forward.h"
+#include "SlangCompiler.h"
 #include "exception.h"
 #include "CUDABuffer.h"
 #include "initialize_density.h"
@@ -22,33 +23,35 @@
 #include <cstring>
 
 // -----------------------------------------------------------------------------
+// Global function: Compile Slang to PTX
+// -----------------------------------------------------------------------------
+
+std::string compileSlangToPTX(
+    const std::string& slangFilePath,
+    const std::vector<std::string>& searchPaths)
+{
+    SlangCompiler compiler;
+
+    // Add all provided search paths
+    for (const auto& path : searchPaths) {
+        compiler.addSearchPath(path);
+    }
+
+    return compiler.compileToPTX(slangFilePath);
+}
+
+// -----------------------------------------------------------------------------
 // Forward implementation
 // -----------------------------------------------------------------------------
 
-Forward::Forward(OptixDeviceContext context, int8_t device, const Primitives& model, bool enable_backward)
-    : enable_backward(enable_backward)
-    , context_(context)
+Forward::Forward(OptixDeviceContext context, int8_t device, const Primitives& model,
+                 const std::string& ptx)
+    : context_(context)
     , device_(device)
     , model_(&model)
+    , ptx_(ptx)
 {
-    CUDA_CHECK(cudaSetDevice(device));
-
-    // Select PTX based on mode
-    const char* ptx = enable_backward ? shaders_ptx : fast_shaders_ptx;
-
-    // Setup pipeline compile options
-    pipeline_options_.usesMotionBlur = false;
-    pipeline_options_.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
-    pipeline_options_.numPayloadValues = 32;
-    pipeline_options_.numAttributeValues = 1;
-    pipeline_options_.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
-    pipeline_options_.pipelineLaunchParamsVariableName = "SLANG_globalParams";
-    pipeline_options_.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_CUSTOM;
-
-    create_module(ptx);
-    create_program_groups();
-    create_pipeline();
-    create_sbt();
+    initialize(ptx_);
 
     // Initialize params with model data
     params_.means = {reinterpret_cast<float3*>(model.means), model.num_prims};
@@ -59,6 +62,47 @@ Forward::Forward(OptixDeviceContext context, int8_t device, const Primitives& mo
 
     num_prims = model.num_prims;
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_param_), sizeof(Params)));
+}
+
+Forward::Forward(OptixDeviceContext context, int8_t device, const Primitives& model,
+                 const std::string& slangFilePath,
+                 const std::vector<std::string>& searchPaths)
+    : context_(context)
+    , device_(device)
+    , model_(&model)
+{
+    // Compile Slang to PTX at runtime
+    ptx_ = compileSlangToPTX(slangFilePath, searchPaths);
+
+    initialize(ptx_);
+
+    // Initialize params with model data
+    params_.means = {reinterpret_cast<float3*>(model.means), model.num_prims};
+    params_.scales = {reinterpret_cast<float3*>(model.scales), model.num_prims};
+    params_.quats = {reinterpret_cast<float4*>(model.quats), model.num_prims};
+    params_.densities = {model.densities, model.num_prims};
+    params_.features = {model.features, model.num_prims * model.feature_size};
+
+    num_prims = model.num_prims;
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_param_), sizeof(Params)));
+}
+
+void Forward::initialize(const std::string& ptx) {
+    CUDA_CHECK(cudaSetDevice(device_));
+
+    // Setup pipeline compile options
+    pipeline_options_.usesMotionBlur = false;
+    pipeline_options_.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
+    pipeline_options_.numPayloadValues = 32;
+    pipeline_options_.numAttributeValues = 1;
+    pipeline_options_.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
+    pipeline_options_.pipelineLaunchParamsVariableName = "SLANG_globalParams";
+    pipeline_options_.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_CUSTOM;
+
+    create_module(ptx.c_str());
+    create_program_groups();
+    create_pipeline();
+    create_sbt();
 }
 
 void Forward::create_module(const char* ptx) {

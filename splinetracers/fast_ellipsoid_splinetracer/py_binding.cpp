@@ -197,10 +197,23 @@ public:
   torch::Device device;
   size_t num_prims;
   uint sh_degree;
+
+  // Constructor with Slang file path and search paths
   fesPyForward(const fesOptixContext &context, const torch::Device &device,
-            const fesPyPrimitives &model, const bool enable_backward)
+            const fesPyPrimitives &model,
+            const std::string &slang_file_path,
+            const std::vector<std::string> &search_paths)
       : device(device),
-        forward(context.context, device.index(), model.model, enable_backward),
+        forward(context.context, device.index(), model.model, slang_file_path, search_paths),
+        num_prims(model.model.num_prims),
+        sh_degree(sqrt(model.model.feature_size) - 1) {}
+
+  // Constructor with pre-compiled PTX
+  fesPyForward(const fesOptixContext &context, const torch::Device &device,
+            const fesPyPrimitives &model,
+            const std::string &ptx)
+      : device(device),
+        forward(context.context, device.index(), model.model, ptx),
         num_prims(model.model.num_prims),
         sh_degree(sqrt(model.model.feature_size) - 1) {}
   void update_model(const fesPyPrimitives &model) {
@@ -274,8 +287,23 @@ PYBIND11_MODULE(ellipsoid_splinetracer, m) {
       py::init<const fesOptixContext &, const torch::Device &,
                const fesPyPrimitives &, const bool, const bool, const bool>());
   py::class_<fesPyForward>(m, "Forward")
+      // Constructor with Slang file path and search paths (runtime compilation)
       .def(py::init<const fesOptixContext &, const torch::Device &,
-                    const fesPyPrimitives &, const bool>())
+                    const fesPyPrimitives &, const std::string &,
+                    const std::vector<std::string> &>(),
+           py::arg("context"), py::arg("device"), py::arg("model"),
+           py::arg("slang_file"), py::arg("search_paths"))
+      // Constructor with pre-compiled PTX
+      .def(py::init<const fesOptixContext &, const torch::Device &,
+                    const fesPyPrimitives &, const std::string &>(),
+           py::arg("context"), py::arg("device"), py::arg("model"),
+           py::arg("ptx"))
       .def("trace_rays", &fesPyForward::trace_rays)
       .def("update_model", &fesPyForward::update_model);
+
+  // Expose compile function to Python
+  m.def("compile_slang_to_ptx", &compileSlangToPTX,
+        "Compile a Slang shader file to PTX at runtime",
+        py::arg("slang_file_path"),
+        py::arg("search_paths") = std::vector<std::string>{});
 }

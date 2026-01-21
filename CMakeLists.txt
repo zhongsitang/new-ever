@@ -7,8 +7,10 @@
 #   cmake --preset release
 #   cmake --build --preset release
 #
-# Shader pipeline:
-#   .slang -> .ptx (embedded as const char*)
+# Shader compilation:
+#   Slang shaders are compiled at runtime using the Slang C++ API.
+#   No build-time PTX generation needed - shaders are compiled to PTX
+#   when the Forward class is constructed.
 # =============================================================================
 
 cmake_minimum_required(VERSION 3.28 FATAL_ERROR)
@@ -46,7 +48,7 @@ find_package(CUDAToolkit REQUIRED)
 
 include(FindOptiX)
 include(FindTorch)
-include(SlangPTXEmbed)
+include(FindSlang)
 
 # -----------------------------------------------------------------------------
 # Project paths
@@ -62,6 +64,8 @@ set(PTX_OUT_DIR    "${CMAKE_CURRENT_BINARY_DIR}/ptx")
 pybind11_add_module(ellipsoid_splinetracer MODULE
   ${TRACER_DIR}/Forward.cpp
   ${TRACER_DIR}/Forward.h
+  ${TRACER_DIR}/SlangCompiler.cpp
+  ${TRACER_DIR}/SlangCompiler.h
   ${TRACER_DIR}/GAS.cpp
   ${TRACER_DIR}/GAS.h
   ${TRACER_DIR}/py_binding.cpp
@@ -80,25 +84,13 @@ set_source_files_properties(
 )
 
 # -----------------------------------------------------------------------------
-# Shader embedding (Slang -> PTX -> C++ string)
+# Slang runtime compilation (no build-time PTX embedding needed)
 # -----------------------------------------------------------------------------
-slang_ptx_embed(
-  TARGET       ellipsoid_splinetracer
-  NAME         shaders_ptx
-  SLANG_FILE   ${SLANG_DIR}/shaders.slang
-  OUT_DIR      ${PTX_OUT_DIR}
-  INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}
-  NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS} ${OptiX_ROOT}/include
-)
-
-slang_ptx_embed(
-  TARGET       ellipsoid_splinetracer
-  NAME         fast_shaders_ptx
-  SLANG_FILE   ${SLANG_DIR}/fast_shaders.slang
-  OUT_DIR      ${PTX_OUT_DIR}
-  INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}
-  NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS} ${OptiX_ROOT}/include
-)
+# Slang shaders are now compiled at runtime using the Slang C++ API.
+# The .slang files are loaded and compiled to PTX when Forward is constructed.
+# Search paths for import resolution:
+#   - ${SLANG_DIR}      : Local shader modules (tri-intersect, spline-machine, etc.)
+#   - ${MAIN_SLANG_DIR} : Shared modules (safe-math, sh, optix, tensor-util)
 
 # -----------------------------------------------------------------------------
 # Linking and compile options
@@ -106,6 +98,7 @@ slang_ptx_embed(
 target_link_libraries(ellipsoid_splinetracer PRIVATE
   OptiX::OptiX
   Torch::Torch
+  Slang::Slang
   CUDA::cudart
   CUDA::cuda_driver
 )
@@ -137,5 +130,6 @@ message(STATUS "  Project:         ${PROJECT_NAME} ${PROJECT_VERSION}")
 message(STATUS "  Build type:      ${CMAKE_BUILD_TYPE}")
 message(STATUS "  CUDA archs:      ${CMAKE_CUDA_ARCHITECTURES}")
 message(STATUS "  OptiX:           ${OptiX_VERSION} (${OptiX_ROOT})")
-message(STATUS "  PTX OUT_DIR:     ${PTX_OUT_DIR}")
+message(STATUS "  Slang:           ${Slang_LIBRARY}")
+message(STATUS "  Slang mode:      Runtime compilation (C++ API)")
 message(STATUS "========================================")

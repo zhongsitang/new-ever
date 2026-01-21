@@ -24,13 +24,14 @@
 #include <optix.h>
 #include <cstdint>
 #include <stdexcept>
+#include <string>
+#include <vector>
 #include "structs.h"
 
 using uint = uint32_t;
 
-// Embedded PTX code (generated headers)
-#include "shaders_ptx.h"
-#include "fast_shaders_ptx.h"
+// Forward declaration for SlangCompiler
+class SlangCompiler;
 
 // SBT record types
 struct RayGenData {};
@@ -70,10 +71,38 @@ struct Params {
     OptixTraversableHandle handle;
 };
 
+/**
+ * Compile Slang shader to PTX at runtime using the Slang C++ API
+ *
+ * @param slangFilePath Path to the .slang shader file
+ * @param searchPaths   Additional paths to search for imported modules
+ * @return Compiled PTX code as a string
+ */
+std::string compileSlangToPTX(
+    const std::string& slangFilePath,
+    const std::vector<std::string>& searchPaths = {}
+);
+
 class Forward {
 public:
     Forward() = default;
-    Forward(OptixDeviceContext context, int8_t device, const Primitives& model, bool enable_backward);
+
+    /**
+     * Constructor with pre-compiled PTX
+     * @param ptx Pre-compiled PTX code (can be from compileSlangToPTX)
+     */
+    Forward(OptixDeviceContext context, int8_t device, const Primitives& model,
+            const std::string& ptx);
+
+    /**
+     * Constructor that compiles Slang at runtime
+     * @param slangFilePath Path to the .slang shader file
+     * @param searchPaths   Additional paths for import resolution
+     */
+    Forward(OptixDeviceContext context, int8_t device, const Primitives& model,
+            const std::string& slangFilePath,
+            const std::vector<std::string>& searchPaths);
+
     ~Forward() noexcept(false);
 
     // Non-copyable
@@ -108,6 +137,7 @@ public:
     size_t num_prims = 0;
 
 private:
+    void initialize(const std::string& ptx);
     void create_module(const char* ptx);
     void create_program_groups();
     void create_pipeline();
@@ -116,6 +146,9 @@ private:
     OptixDeviceContext context_ = nullptr;
     int8_t device_ = -1;
     const Primitives* model_ = nullptr;
+
+    // Store PTX to keep it alive during Forward's lifetime
+    std::string ptx_;
 
     OptixModule module_ = nullptr;
     OptixPipeline pipeline_ = nullptr;
