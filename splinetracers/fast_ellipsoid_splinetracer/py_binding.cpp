@@ -26,7 +26,7 @@
 #include "GAS.h"
 #include "create_aabbs.h"
 #include "exception.h"
-//#include "ply_file_loader.h"
+#include "SplineTracerAutograd.h"
 
 namespace py = pybind11;
 using namespace pybind11::literals; // to bring in the `_a` literal
@@ -259,7 +259,10 @@ public:
 
 PYBIND11_MODULE(ellipsoid_splinetracer, m) {
   py::class_<fesOptixContext>(m, "OptixContext")
-      .def(py::init<const torch::Device &>());
+      .def(py::init<const torch::Device &>())
+      .def("context_ptr", [](const fesOptixContext& ctx) {
+        return reinterpret_cast<int64_t>(ctx.context);
+      });
   py::class_<fesSavedForBackward>(m, "SavedForBackward")
       .def_property_readonly("states", &fesSavedForBackward::get_states)
       .def_property_readonly("diracs", &fesSavedForBackward::get_diracs)
@@ -270,12 +273,24 @@ PYBIND11_MODULE(ellipsoid_splinetracer, m) {
       .def(py::init<const torch::Device &>())
       .def("add_primitives", &fesPyPrimitives::add_primitives)
       .def("set_features", &fesPyPrimitives::set_features);
-  py::class_<fesPyGas>(m, "GAS").def(
-      py::init<const fesOptixContext &, const torch::Device &,
-               const fesPyPrimitives &, const bool, const bool, const bool>());
+  py::class_<fesPyGas>(m, "GAS")
+      .def(py::init<const fesOptixContext &, const torch::Device &,
+               const fesPyPrimitives &, const bool, const bool, const bool>())
+      .def("handle", [](const fesPyGas& gas) {
+        return static_cast<int64_t>(gas.gas.gas_handle);
+      });
   py::class_<fesPyForward>(m, "Forward")
       .def(py::init<const fesOptixContext &, const torch::Device &,
                     const fesPyPrimitives &, const bool>())
       .def("trace_rays", &fesPyForward::trace_rays)
       .def("update_model", &fesPyForward::update_model);
+
+  // Simplified autograd-enabled trace_rays function
+  m.def("trace_rays", &trace_rays_autograd,
+        "mean"_a, "scale"_a, "quat"_a, "density"_a, "features"_a,
+        "rayo"_a, "rayd"_a, "wcts"_a,
+        "tmin"_a = 0.0f, "tmax"_a = 1000.0f, "max_prim_size"_a = 3.0f,
+        "max_iters"_a = 500,
+        "optix_context_ptr"_a, "gas_handle"_a,
+        "Trace rays through the scene with autograd support");
 }

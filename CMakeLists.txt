@@ -39,14 +39,16 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 # -----------------------------------------------------------------------------
 # Dependencies and local CMake modules
 # -----------------------------------------------------------------------------
-list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake")
 
 find_package(pybind11 REQUIRED)
 find_package(CUDAToolkit REQUIRED)
+find_package(Slang REQUIRED)
 
 include(FindOptiX)
 include(FindTorch)
 include(SlangPTXEmbed)
+include(SlangCUDACompile)
 
 # -----------------------------------------------------------------------------
 # Project paths
@@ -71,12 +73,28 @@ pybind11_add_module(ellipsoid_splinetracer MODULE
   ${TRACER_DIR}/create_aabbs.h
   ${TRACER_DIR}/initialize_density.cu
   ${TRACER_DIR}/initialize_density.h
+  ${TRACER_DIR}/SplineTracerAutograd.h
+  ${TRACER_DIR}/SplineTracerAutograd.cu
 )
 
 set_source_files_properties(
   ${TRACER_DIR}/create_aabbs.cu
   ${TRACER_DIR}/initialize_density.cu
+  ${TRACER_DIR}/SplineTracerAutograd.cu
   PROPERTIES LANGUAGE CUDA
+)
+
+# -----------------------------------------------------------------------------
+# Backwards kernel compilation (Slang -> CUDA)
+# -----------------------------------------------------------------------------
+set(SLANG_CUDA_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/slang_cuda")
+slang_cuda_compile(
+  TARGET       ellipsoid_splinetracer
+  NAME         backwards_kernel
+  SLANG_FILE   ${SLANG_DIR}/backwards_kernel_cuda.slang
+  OUT_DIR      ${SLANG_CUDA_OUT_DIR}
+  INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}
+  ENTRY_POINTS backwards_kernel backwards_initial_drgb_kernel
 )
 
 # -----------------------------------------------------------------------------
@@ -137,5 +155,7 @@ message(STATUS "  Project:         ${PROJECT_NAME} ${PROJECT_VERSION}")
 message(STATUS "  Build type:      ${CMAKE_BUILD_TYPE}")
 message(STATUS "  CUDA archs:      ${CMAKE_CUDA_ARCHITECTURES}")
 message(STATUS "  OptiX:           ${OptiX_VERSION} (${OptiX_ROOT})")
+message(STATUS "  Slang:           ${Slang_SLANGC}")
 message(STATUS "  PTX OUT_DIR:     ${PTX_OUT_DIR}")
+message(STATUS "  SLANG CUDA DIR:  ${SLANG_CUDA_OUT_DIR}")
 message(STATUS "========================================")

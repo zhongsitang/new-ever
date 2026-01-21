@@ -12,209 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import time
-from pathlib import Path
-from typing import *
+"""
+Simplified spline tracer interface without slangtorch dependency.
+Autograd is fully implemented in C++.
+"""
 
-import slangtorch
+from typing import Optional
 import torch
-from torch.autograd import Function
-from icecream import ic
-
+from pathlib import Path
 import sys
+
 sys.path.append(str(Path(__file__).parent))
-
 from build.lib import ellipsoid_splinetracer as sp
-kernels = slangtorch.loadModule(
-    str(Path(__file__).parent / "fast_ellipsoid_splinetracer/slang/backwards_kernel.slang"),
-    includePaths=[str(Path(__file__).parent / 'slang')]
-)
 
-otx = sp.OptixContext(torch.device("cuda:0"))
+# Global OptiX context (lazily initialized)
+_optix_context = None
 
 
-# Inherit from Function
-class SplineTracer(Function):
-    # Note that forward, setup_context, and backward are @staticmethods
-    @staticmethod
-    def forward(
-        ctx: Any,
-        mean: torch.Tensor,
-        scale: torch.Tensor,
-        quat: torch.Tensor,
-        density: torch.Tensor,
-        color: torch.Tensor,
-        rayo: torch.Tensor,
-        rayd: torch.Tensor,
-        tmin: float,
-        tmax: float,
-        max_prim_size: float,
-        mean2D: torch.Tensor,
-        wcts: torch.Tensor,
-        max_iters: int,
-        return_extras: bool = False,
-    ):
-        ctx.device = rayo.device
-        st = time.time()
-        ctx.prims = sp.Primitives(ctx.device)
-        assert mean.device == ctx.device
-        mean = mean.contiguous()
-        scale = scale.contiguous()
-        density = density.contiguous()
-        quat = quat.contiguous()
-        color = color.contiguous()
-        ctx.prims.add_primitives(mean, scale, quat, density, color)
-
-        ctx.gas = sp.GAS(otx, ctx.device, ctx.prims, True, False, True)
-
-        ctx.forward = sp.Forward(otx, ctx.device, ctx.prims, True)
-        st = time.time()
-        ctx.max_iters = max_iters
-        out = ctx.forward.trace_rays(ctx.gas, rayo, rayd, tmin, tmax, ctx.max_iters, max_prim_size)
-        ctx.saved = out["saved"]
-        ctx.max_prim_size = max_prim_size
-        ctx.tmin = tmin
-        ctx.tmax = tmax
-        tri_collection = out["tri_collection"]
-
-        states = ctx.saved.states.reshape(rayo.shape[0], -1)
-        distortion_pt1 = states[:, 0]
-        distortion_pt2 = states[:, 1]
-        distortion_loss = (distortion_pt1 - distortion_pt2)
-        color_and_loss = torch.cat([out["color"], distortion_loss.reshape(-1, 1)], dim=1)
-
-        initial_inds = out['initial_touch_inds'][:out['initial_touch_count'][0]]
-
-        ctx.save_for_backward(
-            mean, scale, quat, density, color, rayo, rayd, tri_collection, wcts, out['initial_drgb'], initial_inds
-        )
-
-        if return_extras:
-            return color_and_loss, dict(
-                tri_collection=tri_collection,
-                iters=ctx.saved.iters,
-                opacity=out["color"][:, 3],
-                touch_count=ctx.saved.touch_count,
-                distortion_loss=distortion_loss,
-                saved=ctx.saved,
-            )
-        else:
-            return color_and_loss
-
-    @staticmethod
-    def backward(ctx, grad_output: torch.Tensor, return_extras=False):
-        (
-            mean,
-            scale,
-            quat,
-            density,
-            features,
-            rayo,
-            rayd,
-            tri_collection,
-            wcts,
-            initial_drgb,
-            initial_inds,
-        ) = ctx.saved_tensors
-        device = ctx.device
-
-        start_ids = torch.cumsum(ctx.saved.iters, dim=0).int()
-        num_prims = mean.shape[0]
-        num_rays = rayo.shape[0]
-        dL_dmeans = torch.zeros((num_prims, 3), dtype=torch.float32, device=device)
-        dL_dscales = torch.zeros((num_prims, 3), dtype=torch.float32, device=device)
-        dL_dquats = torch.zeros((num_prims, 4), dtype=torch.float32, device=device)
-        dL_ddensities = torch.zeros((num_prims), dtype=torch.float32, device=device)
-        dL_dfeatures = torch.zeros_like(features)
-        dL_drayo = torch.zeros((num_rays, 3), dtype=torch.float32, device=device)
-        dL_drayd = torch.zeros((num_rays, 3), dtype=torch.float32, device=device)
-
-        dL_dmeans2D = torch.zeros((num_prims, 2), dtype=torch.float32, device=device)
-
-        touch_count = torch.zeros((num_prims), dtype=torch.int32, device=device)
-
-        dL_dinital_drgb = torch.zeros((num_rays, 4), dtype=torch.float32, device=device)
-
-        block_size = 16
-        st = time.time()
-        if ctx.saved.iters.sum() > 0:
-
-            dual_model = (
-                mean,
-                scale,
-                quat,
-                density,
-                features,
-
-                dL_dmeans,
-                dL_dscales,
-                dL_dquats,
-                dL_ddensities,
-                dL_dfeatures,
-                dL_drayo,
-                dL_drayd,
-                dL_dmeans2D,
-            )
-
-            kernels.backwards_kernel(
-                last_state=ctx.saved.states,
-                last_dirac=ctx.saved.diracs,
-                iters=ctx.saved.iters,
-                tri_collection=tri_collection,
-                ray_origins=rayo,
-                ray_directions=rayd,
-                model=dual_model,
-                initial_drgb=initial_drgb,
-                dL_dinital_drgb=dL_dinital_drgb,
-                touch_count=touch_count,
-                dL_doutputs=grad_output.contiguous(),
-                wcts=wcts if wcts is not None else torch.ones((1, 4, 4), device=device, dtype=torch.float32),
-                tmin=ctx.tmin,
-                tmax=ctx.tmax,
-                max_prim_size=ctx.max_prim_size,
-                max_iters=ctx.max_iters,
-            ).launchRaw(
-                blockSize=(block_size, 1, 1),
-                gridSize=(num_rays // block_size + 1, 1, 1),
-            )
-            if initial_inds.shape[0] > 0:
-                ray_block_size = 64
-                second_block_size = 16
-                kernels.backwards_initial_drgb_kernel(
-                    ray_origins=rayo,
-                    ray_directions=rayd,
-                    model=dual_model,
-                    initial_drgb=initial_drgb,
-                    initial_inds=initial_inds,
-                    dL_dinital_drgb=dL_dinital_drgb,
-                    touch_count=touch_count,
-                    tmin=ctx.tmin,
-                ).launchRaw(
-                    blockSize=(ray_block_size, second_block_size, 1),
-                    gridSize=(
-                        rayo.shape[0] // ray_block_size + 1,
-                        initial_inds.shape[0] // second_block_size + 1,
-                        1),
-                )
-        v = 1e+3
-        mean_v = 1e+3
-        dL_dmeans2D = None if wcts is None else dL_dmeans2D
-        return (
-            dL_dmeans.clip(min=-mean_v, max=mean_v),
-            dL_dscales.clip(min=-v, max=v),
-            dL_dquats.clip(min=-v, max=v),
-            dL_ddensities.clip(min=-50, max=50).reshape(density.shape),
-            dL_dfeatures.clip(min=-v, max=v),
-            dL_drayo.clip(min=-v, max=v),
-            dL_drayd.clip(min=-v, max=v),
-            None,
-            None,
-            None,
-            dL_dmeans2D,
-            None,
-            None,
-            None,
-        )
+def _get_optix_context(device: torch.device):
+    """Get or create the global OptiX context."""
+    global _optix_context
+    if _optix_context is None:
+        _optix_context = sp.OptixContext(device)
+    return _optix_context
 
 
 def trace_rays(
@@ -226,27 +46,62 @@ def trace_rays(
     rayo: torch.Tensor,
     rayd: torch.Tensor,
     tmin: float = 0.0,
-    tmax: float = 1000,
-    max_prim_size: float = 3,
-    dL_dmeans2D=None,
-    wcts=None,
+    tmax: float = 1000.0,
+    max_prim_size: float = 3.0,
+    wcts: Optional[torch.Tensor] = None,
     max_iters: int = 500,
-    return_extras: bool = False,
-):
-    out = SplineTracer.apply(
-        mean,
-        scale,
-        quat,
-        density,
-        features,
-        rayo,
-        rayd,
-        tmin,
-        tmax,
-        max_prim_size,
-        dL_dmeans2D,
-        wcts,
-        max_iters,
-        return_extras,
+) -> torch.Tensor:
+    """
+    Trace rays through ellipsoid primitives with full autograd support.
+
+    Args:
+        mean: Primitive centers (N, 3)
+        scale: Primitive scales (N, 3)
+        quat: Primitive quaternions (N, 4)
+        density: Primitive densities (N,)
+        features: Primitive features/colors (N, D, 3) where D is SH degree squared
+        rayo: Ray origins (R, 3)
+        rayd: Ray directions (R, 3)
+        tmin: Minimum ray parameter
+        tmax: Maximum ray parameter
+        max_prim_size: Maximum primitive size for acceleration
+        wcts: Optional world-to-clip transforms (R, 4, 4) or (1, 4, 4)
+        max_iters: Maximum iterations per ray
+
+    Returns:
+        Tensor of shape (R, 5) containing [R, G, B, opacity, distortion_loss]
+    """
+    device = rayo.device
+
+    # Ensure contiguous tensors
+    mean = mean.contiguous()
+    scale = scale.contiguous()
+    quat = quat.contiguous()
+    density = density.contiguous()
+    features = features.contiguous()
+    rayo = rayo.contiguous()
+    rayd = rayd.contiguous()
+
+    # Handle optional wcts
+    if wcts is None:
+        wcts = torch.empty(0, dtype=torch.float32, device=device)
+    else:
+        wcts = wcts.contiguous()
+
+    # Get or create OptiX context
+    otx = _get_optix_context(device)
+
+    # Create primitives and GAS
+    prims = sp.Primitives(device)
+    prims.add_primitives(mean, scale, quat, density, features)
+    gas = sp.GAS(otx, device, prims, True, False, True)
+
+    # Call the autograd-enabled trace_rays
+    result = sp.trace_rays(
+        mean, scale, quat, density, features,
+        rayo, rayd, wcts,
+        tmin, tmax, max_prim_size, max_iters,
+        otx.context_ptr(), gas.handle()
     )
-    return out
+
+    return result[0]  # Return the color tensor
