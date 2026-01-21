@@ -43,8 +43,6 @@ class PrimTracer(Function):
         tmin: float,
         tmax: float,
         max_prim_size: float,
-        mean2D: torch.Tensor,
-        wcts: torch.Tensor,
         max_iters: int,
         return_extras: bool = False,
     ):
@@ -77,7 +75,7 @@ class PrimTracer(Function):
         initial_prim_indices = out['initial_hit_inds'][:out['initial_hit_count'][0]]
 
         ctx.save_for_backward(
-            mean, scale, quat, density, color, rayo, rayd, hit_collection, wcts, out['initial_contrib'], initial_prim_indices
+            mean, scale, quat, density, color, rayo, rayd, hit_collection, out['initial_contrib'], initial_prim_indices
         )
 
         if return_extras:
@@ -103,7 +101,6 @@ class PrimTracer(Function):
             rayo,
             rayd,
             hit_collection,
-            wcts,
             initial_contrib,
             initial_prim_indices,
         ) = ctx.saved_tensors
@@ -118,7 +115,6 @@ class PrimTracer(Function):
         dL_dfeatures = torch.zeros_like(features)
         dL_drayo = torch.zeros((num_rays, 3), dtype=torch.float32, device=device)
         dL_drayd = torch.zeros((num_rays, 3), dtype=torch.float32, device=device)
-        dL_dmeans2D = torch.zeros((num_prims, 2), dtype=torch.float32, device=device)
         primitive_hit_count = torch.zeros((num_prims), dtype=torch.int32, device=device)
         dL_dinitial_contrib = torch.zeros((num_rays, 4), dtype=torch.float32, device=device)
 
@@ -137,7 +133,6 @@ class PrimTracer(Function):
                 dL_dfeatures,
                 dL_drayo,
                 dL_drayd,
-                dL_dmeans2D,
             )
 
             backwards_kernel.backwards_kernel(
@@ -154,7 +149,6 @@ class PrimTracer(Function):
                 dL_dinitial_contrib,
                 primitive_hit_count,
                 grad_output.contiguous(),
-                wcts if wcts is not None else torch.ones((1, 4, 4), device=device, dtype=torch.float32),
                 ctx.tmin,
                 ctx.tmax,
                 ctx.max_prim_size,
@@ -183,7 +177,6 @@ class PrimTracer(Function):
 
         v = 1e3
         mean_v = 1e3
-        dL_dmeans2D = None if wcts is None else dL_dmeans2D
         return (
             dL_dmeans.clip(min=-mean_v, max=mean_v),
             dL_dscales.clip(min=-v, max=v),
@@ -192,13 +185,11 @@ class PrimTracer(Function):
             dL_dfeatures.clip(min=-v, max=v),
             dL_drayo.clip(min=-v, max=v),
             dL_drayd.clip(min=-v, max=v),
-            None,
-            None,
-            None,
-            dL_dmeans2D,
-            None,
-            None,
-            None,
+            None,  # tmin
+            None,  # tmax
+            None,  # max_prim_size
+            None,  # max_iters
+            None,  # return_extras
         )
 
 
@@ -213,8 +204,6 @@ def trace_rays(
     tmin: float = 0.0,
     tmax: float = 1000,
     max_prim_size: float = 3,
-    dL_dmeans2D=None,
-    wcts=None,
     max_iters: int = 500,
     return_extras: bool = False,
 ):
@@ -243,10 +232,6 @@ def trace_rays(
         Maximum t value for ray marching
     max_prim_size : float
         Maximum primitive size for acceleration
-    dL_dmeans2D : torch.Tensor, optional
-        Gradient output for 2D means
-    wcts : torch.Tensor, optional
-        World-to-clip transform matrices
     max_iters : int
         Maximum iterations per ray
     return_extras : bool
@@ -268,8 +253,6 @@ def trace_rays(
         tmin,
         tmax,
         max_prim_size,
-        dL_dmeans2D,
-        wcts,
         max_iters,
         return_extras,
     )
