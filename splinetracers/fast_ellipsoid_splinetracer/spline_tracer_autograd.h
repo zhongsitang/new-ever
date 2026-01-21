@@ -18,7 +18,6 @@
 #include <optix.h>
 #include "Forward.h"
 #include "GAS.h"
-#include "backward_kernel.h"
 
 // Simplified input structure for trace_rays
 struct TraceRaysInput {

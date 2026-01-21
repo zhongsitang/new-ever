@@ -17,6 +17,9 @@
 #include "exception.h"
 #include <cmath>
 
+// Include Slang-generated CUDA code (contains kernel implementations and struct definitions)
+#include "backwards_kernel_cuda.h"
+
 // Global AABB storage (from py_binding.cpp)
 extern OptixAabb* D_AABBS;
 extern size_t NUM_AABBS;
@@ -270,7 +273,7 @@ torch::autograd::variable_list SplineTracerFunction::backward(
         constexpr int block_size = 16;
         dim3 block(block_size, 1, 1);
         dim3 grid((num_rays + block_size - 1) / block_size, 1, 1);
-        launch_backwards_kernel(params, grid, block, nullptr);
+        backwards_kernel<<<grid, block>>>(params);
 
         // Launch initial drgb backward kernel if needed
         if (initial_inds.size(0) > 0) {
@@ -295,7 +298,7 @@ torch::autograd::variable_list SplineTracerFunction::backward(
                 (initial_inds.size(0) + second_block_size - 1) / second_block_size,
                 1
             );
-            launch_backwards_initial_drgb_kernel(init_params, init_grid, init_block, nullptr);
+            backwards_initial_drgb_kernel<<<init_grid, init_block>>>(init_params);
         }
 
         CUDA_SYNC_CHECK();

@@ -72,21 +72,17 @@ pybind11_add_module(ellipsoid_splinetracer MODULE
   ${TRACER_DIR}/create_aabbs.h
   ${TRACER_DIR}/initialize_density.cu
   ${TRACER_DIR}/initialize_density.h
-  ${TRACER_DIR}/backward_kernel.cu
-  ${TRACER_DIR}/backward_kernel.h
-  ${TRACER_DIR}/spline_tracer_autograd.cpp
+  ${TRACER_DIR}/spline_tracer_autograd.cu
   ${TRACER_DIR}/spline_tracer_autograd.h
-  ${TRACER_DIR}/sh_kernel.cu
-  ${TRACER_DIR}/sh_kernel.h
-  ${TRACER_DIR}/sh_autograd.cpp
+  ${TRACER_DIR}/sh_autograd.cu
   ${TRACER_DIR}/sh_autograd.h
 )
 
 set_source_files_properties(
   ${TRACER_DIR}/create_aabbs.cu
   ${TRACER_DIR}/initialize_density.cu
-  ${TRACER_DIR}/backward_kernel.cu
-  ${TRACER_DIR}/sh_kernel.cu
+  ${TRACER_DIR}/spline_tracer_autograd.cu
+  ${TRACER_DIR}/sh_autograd.cu
   PROPERTIES LANGUAGE CUDA
 )
 

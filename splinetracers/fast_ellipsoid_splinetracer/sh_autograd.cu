@@ -13,8 +13,10 @@
 // limitations under the License.
 
 #include "sh_autograd.h"
-#include "sh_kernel.h"
 #include <cmath>
+
+// Include Slang-generated CUDA code (contains kernel implementations and struct definitions)
+#include "sh_kernel_cuda.h"
 
 torch::autograd::variable_list EvalSHFunction::forward(
     torch::autograd::AutogradContext* ctx,
@@ -53,7 +55,7 @@ torch::autograd::variable_list EvalSHFunction::forward(
     constexpr int block_size = 256;
     dim3 block(block_size, 1, 1);
     dim3 grid((num_prims + block_size - 1) / block_size, 1, 1);
-    launch_sh_kernel(params, grid, block, nullptr);
+    sh_kernel<<<grid, block>>>(params);
 
     // Save for backward
     ctx->save_for_backward({means_c, features_c, ray_origin_c});
@@ -98,7 +100,7 @@ torch::autograd::variable_list EvalSHFunction::backward(
     constexpr int block_size = 256;
     dim3 block(block_size, 1, 1);
     dim3 grid((num_prims + block_size - 1) / block_size, 1, 1);
-    launch_bw_sh_kernel(params, grid, block, nullptr);
+    bw_sh_kernel<<<grid, block>>>(params);
 
     // Return gradients: means, features, ray_origin
     // Only features has gradient
