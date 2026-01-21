@@ -246,7 +246,7 @@ public:
     pipeline.trace_rays(gas.gas.gas_handle, num_rays,
                        reinterpret_cast<float3 *>(ray_origins.data_ptr()),
                        reinterpret_cast<float3 *>(ray_directions.data_ptr()),
-                       reinterpret_cast<void *>(color.data_ptr()),
+                       reinterpret_cast<float4 *>(color.data_ptr()),
                        sh_degree, tmin, tmax,
                        reinterpret_cast<float4 *>(initial_contrib.data_ptr()),
                        NULL,

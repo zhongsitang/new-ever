@@ -84,7 +84,7 @@ public:
         size_t num_rays,
         float3* ray_origins,
         float3* ray_directions,
-        void* image_out,
+        float4* image_out,
         uint sh_degree,
         float tmin, float tmax,
         float4* initial_contrib,

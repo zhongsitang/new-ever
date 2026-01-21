@@ -183,7 +183,7 @@ void RayPipeline::trace_rays(
     size_t num_rays,
     float3* ray_origins,
     float3* ray_directions,
-    void* image_out,
+    float4* image_out,
     uint sh_degree,
     float tmin, float tmax,
     float4* initial_contrib,
@@ -202,7 +202,7 @@ void RayPipeline::trace_rays(
     CUDA_CHECK(cudaSetDevice(device_));
 
     // Setup params
-    params_.image = {reinterpret_cast<float4*>(image_out), num_rays};
+    params_.image = {image_out, num_rays};
     params_.last_state = {last_state, num_rays};
     params_.last_delta_contrib = {last_delta_contrib, num_rays};
     params_.hit_collection = {hit_collection, num_rays * max_iters};
