@@ -219,7 +219,7 @@ public:
   }
   py::dict trace_rays(const fesPyGas &gas, const torch::Tensor &ray_origins,
                       const torch::Tensor &ray_directions, float tmin,
-                      float tmax, const size_t max_iters,
+                      float tmax, const size_t max_hits,
                       const float max_prim_size) {
     torch::AutoGradMode enable_grad(false);
     CHECK_FLOAT_DIM3(ray_origins);
@@ -229,7 +229,7 @@ public:
     color = torch::zeros({(long)num_rays, 4},
                          torch::device(device).dtype(torch::kFloat32));
     torch::Tensor hit_collection =
-        torch::zeros({(long)(num_rays * max_iters)},
+        torch::zeros({(long)(num_rays * max_hits)},
                      torch::device(device).dtype(torch::kInt32));
 
     torch::Tensor initial_contrib = torch::zeros(
@@ -250,7 +250,7 @@ public:
                        sh_degree, tmin, tmax,
                        reinterpret_cast<float4 *>(initial_contrib.data_ptr()),
                        NULL,
-                       max_iters, max_prim_size,
+                       max_hits, max_prim_size,
                        saved_for_backward.iters_data_ptr(),
                        saved_for_backward.last_prims_data_ptr(),
                        saved_for_backward.primitive_hit_count_data_ptr(),

@@ -43,7 +43,7 @@ class PrimTracer(Function):
         tmin: float,
         tmax: float,
         max_prim_size: float,
-        max_iters: int,
+        max_hits: int,
         return_extras: bool = False,
     ):
         ctx.device = rayo.device
@@ -58,8 +58,8 @@ class PrimTracer(Function):
 
         ctx.gas = tracer.GAS(otx, ctx.device, ctx.prims, True, False, True)
         ctx.pipeline = tracer.RayPipeline(otx, ctx.device, ctx.prims, True)
-        ctx.max_iters = max_iters
-        out = ctx.pipeline.trace_rays(ctx.gas, rayo, rayd, tmin, tmax, ctx.max_iters, max_prim_size)
+        ctx.max_hits = max_hits
+        out = ctx.pipeline.trace_rays(ctx.gas, rayo, rayd, tmin, tmax, ctx.max_hits, max_prim_size)
         ctx.saved = out["saved"]
         ctx.max_prim_size = max_prim_size
         ctx.tmin = tmin
@@ -152,7 +152,7 @@ class PrimTracer(Function):
                 ctx.tmin,
                 ctx.tmax,
                 ctx.max_prim_size,
-                ctx.max_iters,
+                ctx.max_hits,
             )
 
             if initial_prim_indices.shape[0] > 0:
@@ -188,7 +188,7 @@ class PrimTracer(Function):
             None,  # tmin
             None,  # tmax
             None,  # max_prim_size
-            None,  # max_iters
+            None,  # max_hits
             None,  # return_extras
         )
 
@@ -204,7 +204,7 @@ def trace_rays(
     tmin: float = 0.0,
     tmax: float = 1000,
     max_prim_size: float = 3,
-    max_iters: int = 500,
+    max_hits: int = 500,
     return_extras: bool = False,
 ):
     """
@@ -232,8 +232,8 @@ def trace_rays(
         Maximum t value for ray marching
     max_prim_size : float
         Maximum primitive size for acceleration
-    max_iters : int
-        Maximum iterations per ray
+    max_hits : int
+        Maximum hits per ray
     return_extras : bool
         Whether to return extra information
 
@@ -253,7 +253,7 @@ def trace_rays(
         tmin,
         tmax,
         max_prim_size,
-        max_iters,
+        max_hits,
         return_extras,
     )
 

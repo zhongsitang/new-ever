@@ -61,7 +61,7 @@ struct Params {
     StructuredBuffer<float> features;                  // SH coefficients for color
 
     size_t sh_degree;                                  // Spherical harmonics degree
-    size_t max_iters;                                  // Maximum iterations per ray
+    size_t max_hits;                                   // Maximum hits per ray
     float tmin;                                        // Minimum ray t
     float tmax;                                        // Maximum ray t
     StructuredBuffer<float4> initial_contrib;          // Initial accumulated contribution
@@ -89,7 +89,7 @@ public:
         float tmin, float tmax,
         float4* initial_contrib,
         Cam* camera = nullptr,
-        size_t max_iters = 10000,
+        size_t max_hits = 10000,
         float max_prim_size = 3.0f,
         uint* iters = nullptr,
         uint* last_prim = nullptr,
