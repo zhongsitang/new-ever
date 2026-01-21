@@ -194,7 +194,7 @@ void RayPipeline::trace_rays(
     uint* last_prim,
     uint* primitive_hit_count,
     float4* last_delta_contrib,
-    VolumeState* last_state,
+    IntegratorState* last_state,
     int* hit_collection,
     int* d_hit_count,
     int* d_hit_inds)

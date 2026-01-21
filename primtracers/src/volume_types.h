@@ -37,8 +37,8 @@ struct HitData {
     float density;
 };
 
-/// Volume rendering state - must match slang VolumeState layout exactly
-struct VolumeState
+/// Volume rendering state - must match slang IntegratorState layout exactly
+struct IntegratorState
 {
   // Distortion loss components (for regularization)
   float2 distortion_parts;

@@ -48,7 +48,7 @@ struct Params {
     StructuredBuffer<uint> last_prim;                  // Last primitive hit
     StructuredBuffer<uint> primitive_hit_count;        // Hit count per primitive
     StructuredBuffer<float4> last_delta_contrib;       // Last sample delta contribution
-    StructuredBuffer<VolumeState> last_state;          // Final volume state per ray
+    StructuredBuffer<IntegratorState> last_state;          // Final volume state per ray
     StructuredBuffer<int> hit_collection;              // Collected hit IDs for backward pass
     StructuredBuffer<float3> ray_origins;
     StructuredBuffer<float3> ray_directions;
@@ -95,7 +95,7 @@ public:
         uint* last_prim = nullptr,
         uint* primitive_hit_count = nullptr,
         float4* last_delta_contrib = nullptr,
-        VolumeState* last_state = nullptr,
+        IntegratorState* last_state = nullptr,
         int* hit_collection = nullptr,
         int* d_hit_count = nullptr,
         int* d_hit_inds = nullptr

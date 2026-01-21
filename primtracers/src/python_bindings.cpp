@@ -161,11 +161,11 @@ public:
   torch::Device device;
 
   fesSavedForBackward(torch::Device device)
-      : num_prims(0), num_rays(0), num_float_per_state(sizeof(VolumeState) / sizeof(float)),
+      : num_prims(0), num_rays(0), num_float_per_state(sizeof(IntegratorState) / sizeof(float)),
         device(device) {}
 
   fesSavedForBackward(size_t num_rays, size_t num_prims, torch::Device device)
-      : num_prims(num_prims), num_float_per_state(sizeof(VolumeState) / sizeof(float)),
+      : num_prims(num_prims), num_float_per_state(sizeof(IntegratorState) / sizeof(float)),
         device(device) {
     allocate(num_rays);
   }
@@ -176,8 +176,8 @@ public:
   float4 *delta_contribs_data_ptr() {
     return reinterpret_cast<float4 *>(delta_contribs.data_ptr());
   }
-  VolumeState *states_data_ptr() {
-    return reinterpret_cast<VolumeState *>(states.data_ptr());
+  IntegratorState *states_data_ptr() {
+    return reinterpret_cast<IntegratorState *>(states.data_ptr());
   }
 
   // Property accessors

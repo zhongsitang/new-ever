@@ -38,7 +38,7 @@ import safe_math;
 ///
 /// This tracks both the integration state (accumulated density-weighted values)
 /// and the volume rendering state (transmittance and accumulated color).
-struct VolumeState : IDifferentiable
+struct IntegratorState : IDifferentiable
 {
   // Distortion loss components (for regularization)
   float2 distortion_parts;
@@ -61,7 +61,7 @@ struct VolumeState : IDifferentiable
 };
 
 /// Create initial volume state for a new ray.
-VolumeState make_initial_state() {
+IntegratorState make_initial_state() {
   return {
     float2(0.f),
     float2(0.f),
@@ -96,16 +96,16 @@ bool AlmostEqualRelative(float A, float B,
 }
 
 /// Convert state to dual representation (for backward pass).
-VolumeState to_dual(in VolumeState state, in SamplePoint sample)
+IntegratorState to_dual(in IntegratorState state, in SamplePoint sample)
 {
-  VolumeState dual_state = state;
+  IntegratorState dual_state = state;
   return dual_state;
 }
 
 /// Convert state from dual representation.
-VolumeState from_dual(in VolumeState state, in SamplePoint sample)
+IntegratorState from_dual(in IntegratorState state, in SamplePoint sample)
 {
-  VolumeState dual_state = state;
+  IntegratorState dual_state = state;
   return dual_state;
 }
 
@@ -114,8 +114,8 @@ VolumeState from_dual(in VolumeState state, in SamplePoint sample)
 // =============================================================================
 
 /// Inverse update for backward pass - computes previous state from current state.
-VolumeState inverse_update_dual(
-    in VolumeState new_state,
+IntegratorState inverse_update_dual(
+    in IntegratorState new_state,
     in SamplePoint new_sample,
     in SamplePoint sample,
     in float t_min,
@@ -124,7 +124,7 @@ VolumeState inverse_update_dual(
   const float t = sample.t;
   const float dt = max(new_state.t - t, 0.f);
 
-  VolumeState state = {};
+  IntegratorState state = {};
   state.accumulated_contrib = new_state.accumulated_contrib - new_sample.delta_contrib;
 
   state.t = t;
@@ -171,8 +171,8 @@ VolumeState inverse_update_dual(
 /// 2. Compute the opacity contribution from the segment
 /// 3. Update accumulated color weighted by transmittance
 [Differentiable]
-VolumeState update(
-    in VolumeState state,
+IntegratorState update(
+    in IntegratorState state,
     in SamplePoint sample,
     no_diff in float t_min,
     no_diff in float t_max,
@@ -181,7 +181,7 @@ VolumeState update(
   const float t = sample.t;
   const float dt = max(t - state.t, 0.f);
 
-  VolumeState new_state;
+  IntegratorState new_state;
   new_state.accumulated_contrib = state.accumulated_contrib + sample.delta_contrib;
   new_state.t = t;
 
@@ -233,7 +233,7 @@ struct RenderOutput: IDifferentiable {
 
 /// Extract final color and depth from volume state.
 [Differentiable]
-RenderOutput extract_color(in VolumeState state, in float tmin) {
+RenderOutput extract_color(in IntegratorState state, in float tmin) {
   return {
     state.C,
     state.padding[0],

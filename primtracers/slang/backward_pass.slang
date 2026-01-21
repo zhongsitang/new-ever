@@ -111,8 +111,8 @@ void atomic_add_float4(TensorView<float> view, uint ind, float4 val) {
     view.InterlockedAdd(uint2(ind, 3u), val.w, temp);
 }
 
-/// Load VolumeState from tensor.
-VolumeState get_state(TensorView<float> view, uint ind) {
+/// Load IntegratorState from tensor.
+IntegratorState get_state(TensorView<float> view, uint ind) {
     return {
         float2(view[ind, 0], view[ind, 1]),
         float2(view[ind, 2], view[ind, 3]),
@@ -153,14 +153,14 @@ struct DualModel {
 // =============================================================================
 
 /// Run backward pass for a single volume update step.
-DifferentialPair<VolumeState>
-run_update(in VolumeState old_dual_state,
+DifferentialPair<IntegratorState>
+run_update(in IntegratorState old_dual_state,
            in SamplePoint old_sample,
            in SamplePoint sample,
            in uint prim_index,
            in uint hit_type,
            in uint ray_ind,
-           in DifferentialPair<VolumeState> deriv_state,
+           in DifferentialPair<IntegratorState> deriv_state,
            in float3 origin,
            in float3 direction,
            in float tmin,
@@ -326,7 +326,7 @@ void backwards_kernel(
             old_sample.delta_contrib = {0.f, 0.f, 0.f, 0.f};
         }
 
-        VolumeState old_dual_state = inverse_update_dual(dual_state, sample, old_sample, tmin, tmax);
+        IntegratorState old_dual_state = inverse_update_dual(dual_state, sample, old_sample, tmin, tmax);
 
         let old_deriv_state = run_update(
                 old_dual_state,

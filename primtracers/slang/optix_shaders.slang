@@ -81,7 +81,7 @@ RWStructuredBuffer<uint>        iters;              // Iteration count per ray
 RWStructuredBuffer<uint>        last_prim;          // Last primitive hit (for debugging)
 RWStructuredBuffer<uint>        primitive_hit_count; // Hit count per primitive
 RWStructuredBuffer<float4>      last_delta_contrib; // Last sample delta contribution
-RWStructuredBuffer<VolumeState> last_state;         // Final volume state per ray
+RWStructuredBuffer<IntegratorState> last_state;         // Final volume state per ray
 RWStructuredBuffer<int>         hit_collection;     // Collected hit IDs for backward pass
 
 // Input buffers
@@ -267,7 +267,7 @@ void render_volume()
     float3 origin = ray_origins[idx.x] + tmin * ray_directions[idx.x];
 
     // Initialize volume rendering state
-    VolumeState state = make_initial_state();
+    IntegratorState state = make_initial_state();
     state.t = 0;
     state.accumulated_contrib = initial_contrib[idx.x];
 
