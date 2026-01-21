@@ -148,7 +148,7 @@ SamplePoint create_sample(uint hit_id, float t) {
 /// For each ellipsoid, computes both entry and exit t values.
 /// Reports the appropriate hit based on current ray t minimum.
 [shader("intersection")]
-void ellipsoid() {
+void intersect_ellipsoid() {
     uint prim_index = PrimitiveIndex();
 
     float3 rayd = WorldRayDirection();
@@ -177,7 +177,7 @@ void ellipsoid() {
 
 /// Closest hit shader (currently unused, hits are processed in any-hit).
 [shader("closesthit")]
-void ch(inout HitBuffer buf, in HitAttr attr)
+void closest_hit(inout HitBuffer buf, in HitAttr attr)
 {
 }
 
@@ -187,7 +187,7 @@ void ch(inout HitBuffer buf, in HitAttr attr)
 /// It inserts both the current hit and its paired hit (entry/exit)
 /// into a sorted buffer, maintaining front-to-back order.
 [shader("anyhit")]
-void ah(inout HitBuffer buf, in HitAttr attr)
+void collect_hits(inout HitBuffer buf, in HitAttr attr)
 {
     float t = RayTCurrent();
     float other_t = asfloat(attr.other_t);
@@ -245,7 +245,7 @@ void ah(inout HitBuffer buf, in HitAttr attr)
 
 /// Miss shader (called when ray hits nothing).
 [shader("miss")]
-void ms(inout HitBuffer buf)
+void miss(inout HitBuffer buf)
 {
 }
 
@@ -257,7 +257,7 @@ void ms(inout HitBuffer buf)
 /// 3. Process hits front-to-back, updating volume state
 /// 4. Output final color
 [shader("raygeneration")]
-void rg_float()
+void render_volume()
 {
     const uint3 idx = DispatchRaysIndex();
     const uint3 dim = DispatchRaysDimensions();

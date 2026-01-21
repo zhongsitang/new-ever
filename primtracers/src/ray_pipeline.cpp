@@ -81,7 +81,7 @@ void RayPipeline::create_program_groups() {
     OptixProgramGroupDesc raygen_desc = {};
     raygen_desc.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
     raygen_desc.raygen.module = module_;
-    raygen_desc.raygen.entryFunctionName = "__raygen__rg_float";
+    raygen_desc.raygen.entryFunctionName = "__raygen__render_volume";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
         context_, &raygen_desc, 1, &pg_options, log_, &log_size_, &raygen_pg_
     ));
@@ -90,7 +90,7 @@ void RayPipeline::create_program_groups() {
     OptixProgramGroupDesc miss_desc = {};
     miss_desc.kind = OPTIX_PROGRAM_GROUP_KIND_MISS;
     miss_desc.miss.module = module_;
-    miss_desc.miss.entryFunctionName = "__miss__ms";
+    miss_desc.miss.entryFunctionName = "__miss__miss";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
         context_, &miss_desc, 1, &pg_options, log_, &log_size_, &miss_pg_
     ));
@@ -99,9 +99,9 @@ void RayPipeline::create_program_groups() {
     OptixProgramGroupDesc hitgroup_desc = {};
     hitgroup_desc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
     hitgroup_desc.hitgroup.moduleAH = module_;
-    hitgroup_desc.hitgroup.entryFunctionNameAH = "__anyhit__ah";
+    hitgroup_desc.hitgroup.entryFunctionNameAH = "__anyhit__collect_hits";
     hitgroup_desc.hitgroup.moduleIS = module_;
-    hitgroup_desc.hitgroup.entryFunctionNameIS = "__intersection__ellipsoid";
+    hitgroup_desc.hitgroup.entryFunctionNameIS = "__intersection__intersect_ellipsoid";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
         context_, &hitgroup_desc, 1, &pg_options, log_, &log_size_, &hitgroup_pg_
     ));
