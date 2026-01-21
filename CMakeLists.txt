@@ -39,7 +39,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 # -----------------------------------------------------------------------------
 # Dependencies and local CMake modules
 # -----------------------------------------------------------------------------
-list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake")
 
 find_package(pybind11 REQUIRED)
 find_package(CUDAToolkit REQUIRED)
@@ -47,6 +47,7 @@ find_package(CUDAToolkit REQUIRED)
 include(FindOptiX)
 include(FindTorch)
 include(SlangPTXEmbed)
+include(SlangCUDAEmbed)
 
 # -----------------------------------------------------------------------------
 # Project paths
@@ -71,11 +72,16 @@ pybind11_add_module(ellipsoid_splinetracer MODULE
   ${TRACER_DIR}/create_aabbs.h
   ${TRACER_DIR}/initialize_density.cu
   ${TRACER_DIR}/initialize_density.h
+  ${TRACER_DIR}/backward_kernel.cu
+  ${TRACER_DIR}/backward_kernel.h
+  ${TRACER_DIR}/spline_tracer_autograd.cpp
+  ${TRACER_DIR}/spline_tracer_autograd.h
 )
 
 set_source_files_properties(
   ${TRACER_DIR}/create_aabbs.cu
   ${TRACER_DIR}/initialize_density.cu
+  ${TRACER_DIR}/backward_kernel.cu
   PROPERTIES LANGUAGE CUDA
 )
 
@@ -98,6 +104,16 @@ slang_ptx_embed(
   OUT_DIR      ${PTX_OUT_DIR}
   INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}
   NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS} ${OptiX_ROOT}/include
+)
+
+# Compile backward kernel from Slang to CUDA
+set(CUDA_OUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/cuda")
+slang_cuda_embed(
+  TARGET       ellipsoid_splinetracer
+  NAME         backwards_kernel
+  SLANG_FILE   ${SLANG_DIR}/backwards_kernel.slang
+  OUT_DIR      ${CUDA_OUT_DIR}
+  INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}
 )
 
 # -----------------------------------------------------------------------------

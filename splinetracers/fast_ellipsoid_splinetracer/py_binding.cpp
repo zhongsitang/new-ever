@@ -26,7 +26,7 @@
 #include "GAS.h"
 #include "create_aabbs.h"
 #include "exception.h"
-//#include "ply_file_loader.h"
+#include "spline_tracer_autograd.h"
 
 namespace py = pybind11;
 using namespace pybind11::literals; // to bring in the `_a` literal
@@ -257,6 +257,30 @@ public:
   }
 };
 
+// Simplified trace_rays function with autograd support
+torch::Tensor trace_rays(
+    const fesOptixContext& ctx,
+    const torch::Tensor& mean,
+    const torch::Tensor& scale,
+    const torch::Tensor& quat,
+    const torch::Tensor& density,
+    const torch::Tensor& color,
+    const torch::Tensor& rayo,
+    const torch::Tensor& rayd,
+    float tmin,
+    float tmax,
+    float max_prim_size,
+    const torch::Tensor& wcts,
+    int max_iters
+) {
+    return trace_rays_autograd(
+        ctx.context,
+        static_cast<int8_t>(ctx.device),
+        mean, scale, quat, density, color, rayo, rayd,
+        tmin, tmax, max_prim_size, wcts, max_iters
+    );
+}
+
 PYBIND11_MODULE(ellipsoid_splinetracer, m) {
   py::class_<fesOptixContext>(m, "OptixContext")
       .def(py::init<const torch::Device &>());
@@ -278,4 +302,11 @@ PYBIND11_MODULE(ellipsoid_splinetracer, m) {
                     const fesPyPrimitives &, const bool>())
       .def("trace_rays", &fesPyForward::trace_rays)
       .def("update_model", &fesPyForward::update_model);
+
+  // Simplified interface with full autograd support
+  m.def("trace_rays", &trace_rays,
+        "Trace rays with automatic differentiation support",
+        "ctx"_a, "mean"_a, "scale"_a, "quat"_a, "density"_a, "color"_a,
+        "rayo"_a, "rayd"_a, "tmin"_a = 0.0f, "tmax"_a = 1000.0f,
+        "max_prim_size"_a = 3.0f, "wcts"_a = torch::Tensor(), "max_iters"_a = 500);
 }
