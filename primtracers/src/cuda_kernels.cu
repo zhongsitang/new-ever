@@ -111,27 +111,28 @@ __global__ void compute_primitive_bounds_kernel(
     const float3 center = means[i];
     const float3 size = scales[i];
 
-    // Get rotation matrix
+    // Get rotation matrix rows
     float3 R0, R1, R2;
     quat_to_rotation_matrix(quat, R0, R1, R2);
 
-    // Scale * Rotation: each row of S*R is scale[row] * R[row]
-    float3 SR0 = make_float3(size.x * R0.x, size.x * R0.y, size.x * R0.z);
-    float3 SR1 = make_float3(size.y * R1.x, size.y * R1.y, size.y * R1.z);
-    float3 SR2 = make_float3(size.z * R2.x, size.z * R2.y, size.z * R2.z);
+    // Compute AABB extents for rotated ellipsoid
+    // For transformation M = R * S (scale then rotate):
+    // Extent in world axis i = ||M[i,:]|| where M[i,j] = R[i,j] * scale[j]
+    float3 M0 = make_float3(R0.x * size.x, R0.y * size.y, R0.z * size.z);
+    float3 M1 = make_float3(R1.x * size.x, R1.y * size.y, R1.z * size.z);
+    float3 M2 = make_float3(R2.x * size.x, R2.y * size.y, R2.z * size.z);
 
-    // Row norms give the extent in each axis direction
-    float row0_norm = length(SR0);
-    float row1_norm = length(SR1);
-    float row2_norm = length(SR2);
+    float x_extent = length(M0);
+    float y_extent = length(M1);
+    float z_extent = length(M2);
 
     OptixAabb aabb;
-    aabb.minX = center.x - row0_norm;
-    aabb.minY = center.y - row1_norm;
-    aabb.minZ = center.z - row2_norm;
-    aabb.maxX = center.x + row0_norm;
-    aabb.maxY = center.y + row1_norm;
-    aabb.maxZ = center.z + row2_norm;
+    aabb.minX = center.x - x_extent;
+    aabb.minY = center.y - y_extent;
+    aabb.minZ = center.z - z_extent;
+    aabb.maxX = center.x + x_extent;
+    aabb.maxY = center.y + y_extent;
+    aabb.maxZ = center.z + z_extent;
     aabbs[i] = aabb;
 }
 
