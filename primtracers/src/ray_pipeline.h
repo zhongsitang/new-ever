@@ -69,15 +69,15 @@ struct Params {
     OptixTraversableHandle handle;
 };
 
-class Forward {
+class RayPipeline {
 public:
-    Forward() = default;
-    Forward(OptixDeviceContext context, int8_t device, const Primitives& model, bool enable_backward);
-    ~Forward() noexcept(false);
+    RayPipeline() = default;
+    RayPipeline(OptixDeviceContext context, int8_t device, const Primitives& model, bool enable_backward);
+    ~RayPipeline() noexcept(false);
 
     // Non-copyable
-    Forward(const Forward&) = delete;
-    Forward& operator=(const Forward&) = delete;
+    RayPipeline(const RayPipeline&) = delete;
+    RayPipeline& operator=(const RayPipeline&) = delete;
 
     void trace_rays(
         OptixTraversableHandle handle,
