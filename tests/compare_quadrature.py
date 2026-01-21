@@ -59,16 +59,13 @@ class QuadratureTest(parameterized.TestCase):
         color1, depth1, extras1 = quad.trace_rays(
             mean, scale, quat, density, features, rayo, rayd,
             tmin, tmax, return_extras=True, kernel=kernel)
-        color1_rgb = color1[:, :3].reshape(-1)
 
         color2, depth2, extras2 = method.trace_rays(
             mean, scale, quat, density, features, rayo, rayd,
             tmin, tmax, return_extras=True)
-        color2_rgb = color2[:, :3].reshape(-1)
 
-        np.testing.assert_allclose(np.asarray(color1_rgb), color2_rgb.cpu().numpy(), atol=1e-4, rtol=1e-4)
-        # Verify alpha values match
-        np.testing.assert_allclose(np.asarray(color1[:, 3]), color2[:, 3].cpu().numpy(), atol=1e-4, rtol=1e-4)
+        # Verify RGBA values match
+        np.testing.assert_allclose(np.asarray(color1), color2.cpu().numpy(), atol=1e-4, rtol=1e-4)
 
     @parameterized.product(
         method_kernel=QUAD_PAIRS,
@@ -98,16 +95,13 @@ class QuadratureTest(parameterized.TestCase):
         color1, depth1, extras1 = quad.trace_rays(
             mean, scale, quat, density, features, rayo, rayd,
             tmin, tmax, return_extras=True, kernel=kernel)
-        color1_rgb = color1[:, :3].reshape(-1)
 
         color2, depth2, extras2 = method.trace_rays(
             mean, scale, quat, density, features, rayo, rayd,
             tmin, tmax, return_extras=True)
-        color2_rgb = color2[:, :3].reshape(-1)
 
-        np.testing.assert_allclose(np.asarray(color1_rgb), color2_rgb.cpu().numpy(), atol=1e-4, rtol=1e-4)
-        # Verify alpha values match
-        np.testing.assert_allclose(np.asarray(color1[:, 3]), color2[:, 3].cpu().numpy(), atol=1e-4, rtol=1e-4)
+        # Verify RGBA values match
+        np.testing.assert_allclose(np.asarray(color1), color2.cpu().numpy(), atol=1e-4, rtol=1e-4)
 
 
 if __name__ == "__main__":
