@@ -2064,7 +2064,6 @@ packages:
   - libstdcxx >=13
   license: MIT
   license_family: MIT
-  purls: []
   size: 296551
   timestamp: 1744366419548
 - conda: https://conda.anaconda.org/conda-forge/win-64/glm-1.0.1-hb611fcd_0.conda
@@ -2076,7 +2075,6 @@ packages:
   - vc14_runtime >=14.29.30139
   license: MIT
   license_family: MIT
-  purls: []
   size: 279082
   timestamp: 1744366684025
 - conda: https://conda.anaconda.org/conda-forge/linux-64/gmp-6.3.0-hac33072_2.conda
