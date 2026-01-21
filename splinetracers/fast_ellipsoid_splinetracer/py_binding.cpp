@@ -26,6 +26,7 @@
 #include "GAS.h"
 #include "create_aabbs.h"
 #include "exception.h"
+#include "backward_kernel.h"
 //#include "ply_file_loader.h"
 
 namespace py = pybind11;
@@ -258,6 +259,109 @@ public:
   }
 };
 
+// Wrapper function for backward kernel
+void py_backwards_kernel(
+    const torch::Tensor& last_state,
+    const torch::Tensor& iters,
+    const torch::Tensor& tri_collection,
+    const torch::Tensor& ray_origins,
+    const torch::Tensor& ray_directions,
+    const torch::Tensor& means,
+    const torch::Tensor& scales,
+    const torch::Tensor& quats,
+    const torch::Tensor& densities,
+    const torch::Tensor& features,
+    torch::Tensor& dL_dmeans,
+    torch::Tensor& dL_dscales,
+    torch::Tensor& dL_dquats,
+    torch::Tensor& dL_ddensities,
+    torch::Tensor& dL_dfeatures,
+    torch::Tensor& dL_drayos,
+    torch::Tensor& dL_drayds,
+    torch::Tensor& dL_dmeans2D,
+    torch::Tensor& dL_dinitial_drgb,
+    torch::Tensor& touch_count,
+    const torch::Tensor& dL_doutputs,
+    const torch::Tensor& wcts,
+    float tmin,
+    float tmax,
+    float max_prim_size,
+    size_t max_iters
+) {
+    uint32_t num_rays = ray_origins.size(0);
+    uint32_t num_prims = means.size(0);
+    uint32_t feature_size = features.size(1);
+    uint32_t num_wcts = wcts.size(0);
+
+    launch_backwards_kernel(
+        last_state.data_ptr<float>(),
+        iters.data_ptr<int>(),
+        tri_collection.data_ptr<int>(),
+        ray_origins.data_ptr<float>(),
+        ray_directions.data_ptr<float>(),
+        means.data_ptr<float>(),
+        scales.data_ptr<float>(),
+        quats.data_ptr<float>(),
+        densities.data_ptr<float>(),
+        features.data_ptr<float>(),
+        dL_dmeans.data_ptr<float>(),
+        dL_dscales.data_ptr<float>(),
+        dL_dquats.data_ptr<float>(),
+        dL_ddensities.data_ptr<float>(),
+        dL_dfeatures.data_ptr<float>(),
+        dL_drayos.data_ptr<float>(),
+        dL_drayds.data_ptr<float>(),
+        dL_dmeans2D.data_ptr<float>(),
+        dL_dinitial_drgb.data_ptr<float>(),
+        touch_count.data_ptr<int>(),
+        dL_doutputs.data_ptr<float>(),
+        wcts.data_ptr<float>(),
+        tmin, tmax, max_prim_size,
+        static_cast<uint32_t>(max_iters),
+        num_rays, num_prims, feature_size, num_wcts,
+        nullptr
+    );
+}
+
+// Wrapper function for initial drgb backward kernel
+void py_backwards_initial_drgb_kernel(
+    const torch::Tensor& ray_origins,
+    const torch::Tensor& ray_directions,
+    const torch::Tensor& means,
+    const torch::Tensor& scales,
+    const torch::Tensor& quats,
+    const torch::Tensor& densities,
+    const torch::Tensor& features,
+    torch::Tensor& dL_ddensities,
+    torch::Tensor& dL_dfeatures,
+    const torch::Tensor& initial_inds,
+    torch::Tensor& dL_dinitial_drgb,
+    torch::Tensor& touch_count,
+    float tmin
+) {
+    uint32_t num_rays = ray_directions.size(0);
+    uint32_t num_initial_inds = initial_inds.size(0);
+    uint32_t feature_size = features.size(1);
+
+    launch_backwards_initial_drgb_kernel(
+        ray_origins.data_ptr<float>(),
+        ray_directions.data_ptr<float>(),
+        means.data_ptr<float>(),
+        scales.data_ptr<float>(),
+        quats.data_ptr<float>(),
+        densities.data_ptr<float>(),
+        features.data_ptr<float>(),
+        dL_ddensities.data_ptr<float>(),
+        dL_dfeatures.data_ptr<float>(),
+        initial_inds.data_ptr<int>(),
+        dL_dinitial_drgb.data_ptr<float>(),
+        touch_count.data_ptr<int>(),
+        tmin,
+        num_rays, num_initial_inds, feature_size,
+        nullptr
+    );
+}
+
 PYBIND11_MODULE(ellipsoid_splinetracer, m) {
   py::class_<fesOptixContext>(m, "OptixContext")
       .def(py::init<const torch::Device &>());
@@ -279,4 +383,22 @@ PYBIND11_MODULE(ellipsoid_splinetracer, m) {
                     const fesPyPrimitives &, const bool>())
       .def("trace_rays", &fesPyForward::trace_rays)
       .def("update_model", &fesPyForward::update_model);
+
+  // Backward kernel functions
+  m.def("backwards_kernel", &py_backwards_kernel, "Run backward kernel",
+        "last_state"_a, "iters"_a, "tri_collection"_a,
+        "ray_origins"_a, "ray_directions"_a,
+        "means"_a, "scales"_a, "quats"_a, "densities"_a, "features"_a,
+        "dL_dmeans"_a, "dL_dscales"_a, "dL_dquats"_a, "dL_ddensities"_a, "dL_dfeatures"_a,
+        "dL_drayos"_a, "dL_drayds"_a, "dL_dmeans2D"_a,
+        "dL_dinitial_drgb"_a, "touch_count"_a,
+        "dL_doutputs"_a, "wcts"_a,
+        "tmin"_a, "tmax"_a, "max_prim_size"_a, "max_iters"_a);
+
+  m.def("backwards_initial_drgb_kernel", &py_backwards_initial_drgb_kernel,
+        "Run backward kernel for initial drgb",
+        "ray_origins"_a, "ray_directions"_a,
+        "means"_a, "scales"_a, "quats"_a, "densities"_a, "features"_a,
+        "dL_ddensities"_a, "dL_dfeatures"_a,
+        "initial_inds"_a, "dL_dinitial_drgb"_a, "touch_count"_a, "tmin"_a);
 }

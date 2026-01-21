@@ -16,7 +16,6 @@ import time
 from pathlib import Path
 from typing import *
 
-import slangtorch
 import torch
 from torch.autograd import Function
 from icecream import ic
@@ -25,10 +24,6 @@ import sys
 sys.path.append(str(Path(__file__).parent))
 
 from build.lib import ellipsoid_splinetracer as sp
-kernels = slangtorch.loadModule(
-    str(Path(__file__).parent / "fast_ellipsoid_splinetracer/slang/backwards_kernel.slang"),
-    includePaths=[str(Path(__file__).parent / 'slang')]
-)
 
 otx = sp.OptixContext(torch.device("cuda:0"))
 
@@ -137,37 +132,28 @@ class SplineTracer(Function):
 
         dL_dinital_drgb = torch.zeros((num_rays, 4), dtype=torch.float32, device=device)
 
-        block_size = 16
         st = time.time()
         if ctx.saved.iters.sum() > 0:
-
-            dual_model = (
-                mean,
-                scale,
-                quat,
-                density,
-                features,
-
-                dL_dmeans,
-                dL_dscales,
-                dL_dquats,
-                dL_ddensities,
-                dL_dfeatures,
-                dL_drayo,
-                dL_drayd,
-                dL_dmeans2D,
-            )
-
-            kernels.backwards_kernel(
+            sp.backwards_kernel(
                 last_state=ctx.saved.states,
-                last_dirac=ctx.saved.diracs,
                 iters=ctx.saved.iters,
                 tri_collection=tri_collection,
                 ray_origins=rayo,
                 ray_directions=rayd,
-                model=dual_model,
-                initial_drgb=initial_drgb,
-                dL_dinital_drgb=dL_dinital_drgb,
+                means=mean,
+                scales=scale,
+                quats=quat,
+                densities=density,
+                features=features,
+                dL_dmeans=dL_dmeans,
+                dL_dscales=dL_dscales,
+                dL_dquats=dL_dquats,
+                dL_ddensities=dL_ddensities,
+                dL_dfeatures=dL_dfeatures,
+                dL_drayos=dL_drayo,
+                dL_drayds=dL_drayd,
+                dL_dmeans2D=dL_dmeans2D,
+                dL_dinitial_drgb=dL_dinital_drgb,
                 touch_count=touch_count,
                 dL_doutputs=grad_output.contiguous(),
                 wcts=wcts if wcts is not None else torch.ones((1, 4, 4), device=device, dtype=torch.float32),
@@ -175,28 +161,22 @@ class SplineTracer(Function):
                 tmax=ctx.tmax,
                 max_prim_size=ctx.max_prim_size,
                 max_iters=ctx.max_iters,
-            ).launchRaw(
-                blockSize=(block_size, 1, 1),
-                gridSize=(num_rays // block_size + 1, 1, 1),
             )
             if initial_inds.shape[0] > 0:
-                ray_block_size = 64
-                second_block_size = 16
-                kernels.backwards_initial_drgb_kernel(
+                sp.backwards_initial_drgb_kernel(
                     ray_origins=rayo,
                     ray_directions=rayd,
-                    model=dual_model,
-                    initial_drgb=initial_drgb,
+                    means=mean,
+                    scales=scale,
+                    quats=quat,
+                    densities=density,
+                    features=features,
+                    dL_ddensities=dL_ddensities,
+                    dL_dfeatures=dL_dfeatures,
                     initial_inds=initial_inds,
-                    dL_dinital_drgb=dL_dinital_drgb,
+                    dL_dinitial_drgb=dL_dinital_drgb,
                     touch_count=touch_count,
                     tmin=ctx.tmin,
-                ).launchRaw(
-                    blockSize=(ray_block_size, second_block_size, 1),
-                    gridSize=(
-                        rayo.shape[0] // ray_block_size + 1,
-                        initial_inds.shape[0] // second_block_size + 1,
-                        1),
                 )
         v = 1e+3
         mean_v = 1e+3

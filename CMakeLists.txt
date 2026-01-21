@@ -56,6 +56,7 @@ find_package(CUDAToolkit REQUIRED)
 include(FindOptiX)            # provides: OptiX_ROOT, OptiX_VERSION, OptiX::OptiX
 include(FindTorch)            # provides: Torch::Torch
 include(SlangOptiXIREmbed)    # provides: slang_optixir_embed()
+include(SlangCudaEmbed)       # provides: slang_cuda_compile()
 
 # -----------------------------------------------------------------------------
 # Project paths
@@ -83,12 +84,15 @@ pybind11_add_module(ellipsoid_splinetracer MODULE
   ${TRACER_DIR}/create_aabbs.h
   ${TRACER_DIR}/initialize_density.cu
   ${TRACER_DIR}/initialize_density.h
+  ${TRACER_DIR}/backward_kernel.h
+  ${TRACER_DIR}/backward_kernel_launcher.cu
 )
 
 # Ensure .cu files are treated as CUDA sources (some IDEs/toolchains benefit).
 set_source_files_properties(
   ${TRACER_DIR}/create_aabbs.cu
   ${TRACER_DIR}/initialize_density.cu
+  ${TRACER_DIR}/backward_kernel_launcher.cu
   PROPERTIES LANGUAGE CUDA
 )
 
@@ -114,6 +118,16 @@ slang_optixir_embed(
   SLANG_FILE   ${SLANG_DIR}/fast_shaders.slang
   OPTIX_ROOT   ${OptiX_ROOT}
   OUT_DIR      ${OPTIX_IR_OUT_DIR}
+  INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}
+)
+
+# -----------------------------------------------------------------------------
+# Backward kernel (Slang -> CUDA, no OptiX)
+# -----------------------------------------------------------------------------
+slang_cuda_compile(
+  TARGET       ellipsoid_splinetracer
+  NAME         backwards_kernel_cuda
+  SLANG_FILE   ${SLANG_DIR}/backwards_kernel_cuda.slang
   INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}
 )
 
