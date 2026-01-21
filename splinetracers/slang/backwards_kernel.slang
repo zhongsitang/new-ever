@@ -14,7 +14,6 @@
 
 #define tri_per_g 2
 import spline_machine;
-import optix;
 import tri_intersect;
 import safe_math;
 import sh;

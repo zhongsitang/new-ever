@@ -17,7 +17,6 @@
 #define LOG_CUTOFF 5.54
 #define BUFFER_SIZE 16
 import spline_machine;
-import optix;
 import tri_intersect;
 import safe_math;
 import sh;
