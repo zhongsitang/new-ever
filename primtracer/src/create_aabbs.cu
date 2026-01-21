@@ -14,123 +14,77 @@
 
 #define TRI_PER_G 8
 #define PT_PER_G 6
+
 #include "create_aabbs.h"
-#include "glm/glm.hpp"
+#include "exception.h"
 #include "structs.h"
-#include <cuda.h>
-#include <cuda_runtime.h>
-#include <iostream>
-#include <sstream>
-#include <stdexcept>
-
-#define CUDA_CHECK(call)                                                       \
-  do {                                                                         \
-    cudaError_t error = call;                                                  \
-    if (error != cudaSuccess) {                                                \
-      std::stringstream ss;                                                    \
-      ss << "CUDA call (" << #call << " ) failed with error: '"                \
-         << cudaGetErrorString(error) << "' (" __FILE__ << ":" << __LINE__     \
-         << ")\n";                                                             \
-      throw Exception(ss.str().c_str());                                       \
-    }                                                                          \
-  } while (0)
-
-#define CUDA_SYNC_CHECK()                                                      \
-  do {                                                                         \
-    cudaDeviceSynchronize();                                                   \
-    cudaError_t error = cudaGetLastError();                                    \
-    if (error != cudaSuccess) {                                                \
-      std::stringstream ss;                                                    \
-      ss << "CUDA error on synchronize with error '"                           \
-         << cudaGetErrorString(error) << "' (" __FILE__ << ":" << __LINE__     \
-         << ")\n";                                                             \
-      throw Exception(ss.str().c_str());                                       \
-    }                                                                          \
-  } while (0)
-
-// A non-throwing variant for use in destructors.
-// An iostream must be provided for output (e.g. std::cerr).
-#define CUDA_CHECK_NOTHROW(call)                                               \
-  do {                                                                         \
-    cudaError_t error = (call);                                                \
-    if (error != cudaSuccess) {                                                \
-      std::cerr << "CUDA call (" << #call << " ) failed with error: '"         \
-                << cudaGetErrorString(error) << "' (" __FILE__ << ":"          \
-                << __LINE__ << ")\n";                                          \
-      std::terminate();                                                        \
-    }                                                                          \
-  } while (0)
-
-class Exception : public std::runtime_error {
-public:
-  Exception(const char *msg) : std::runtime_error(msg) {}
-};
+#include "glm/glm.hpp"
 
 __global__ void
 kern_create_aabbs(const glm::vec3 *means, const glm::vec3 *scales,
                       const glm::vec4 *quats, const float *densities,
                       const size_t num_prims, OptixAabb *aabbs) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < 0 || i >= num_prims)
-    return;
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < 0 || i >= num_prims)
+        return;
 
-  const glm::vec4 quat = glm::normalize(quats[i]);
-  const glm::vec3 center = means[i];
-  const glm::vec3 size = scales[i];
+    const glm::vec4 quat = glm::normalize(quats[i]);
+    const glm::vec3 center = means[i];
+    const glm::vec3 size = scales[i];
 
-  const float r = quat.x;
-  const float x = quat.y;
-  const float y = quat.z;
-  const float z = quat.w;
+    const float r = quat.x;
+    const float x = quat.y;
+    const float y = quat.z;
+    const float z = quat.w;
 
-  const glm::mat3 Rt = {
-      1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - r * z),
-      2.0 * (x * z + r * y),
+    const glm::mat3 Rt = {
+        1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - r * z),
+        2.0 * (x * z + r * y),
 
-      2.0 * (x * y + r * z),       1.0 - 2.0 * (x * x + z * z),
-      2.0 * (y * z - r * x),
+        2.0 * (x * y + r * z),       1.0 - 2.0 * (x * x + z * z),
+        2.0 * (y * z - r * x),
 
-      2.0 * (x * z - r * y),       2.0 * (y * z + r * x),
-      1.0 - 2.0 * (x * x + y * y)};
-  const glm::mat3 R = glm::transpose(Rt);
-  float s = 1.0;
-  glm::mat3 S = glm::mat3(1.0);
-  S[0][0] = s*size.x;
-  S[1][1] = s*size.y;
-  S[2][2] = s*size.z;
+        2.0 * (x * z - r * y),       2.0 * (y * z + r * x),
+        1.0 - 2.0 * (x * x + y * y)};
+    const glm::mat3 R = glm::transpose(Rt);
+    float s = 1.0;
+    glm::mat3 S = glm::mat3(1.0);
+    S[0][0] = s*size.x;
+    S[1][1] = s*size.y;
+    S[2][2] = s*size.z;
 
-  glm::mat4 M = glm::mat4(S * Rt);
-  M[0][3] = center.x;
-  M[1][3] = center.y;
-  M[2][3] = center.z;
+    glm::mat4 M = glm::mat4(S * Rt);
+    M[0][3] = center.x;
+    M[1][3] = center.y;
+    M[2][3] = center.z;
 
-  float row0_norm = sqrt(M[0][0]*M[0][0] + M[0][1]*M[0][1] + M[0][2]*M[0][2]);
-  float row1_norm = sqrt(M[1][0]*M[1][0] + M[1][1]*M[1][1] + M[1][2]*M[1][2]);
-  float row2_norm = sqrt(M[2][0]*M[2][0] + M[2][1]*M[2][1] + M[2][2]*M[2][2]);
+    float row0_norm = sqrt(M[0][0]*M[0][0] + M[0][1]*M[0][1] + M[0][2]*M[0][2]);
+    float row1_norm = sqrt(M[1][0]*M[1][0] + M[1][1]*M[1][1] + M[1][2]*M[1][2]);
+    float row2_norm = sqrt(M[2][0]*M[2][0] + M[2][1]*M[2][1] + M[2][2]*M[2][2]);
 
-  OptixAabb aabb;
-  aabb.minX = center.x - row0_norm;
-  aabb.minY = center.y - row1_norm;
-  aabb.minZ = center.z - row2_norm;
-  aabb.maxX = center.x + row0_norm;
-  aabb.maxY = center.y + row1_norm;
-  aabb.maxZ = center.z + row2_norm;
-  aabbs[i] = aabb;
+    OptixAabb aabb;
+    aabb.minX = center.x - row0_norm;
+    aabb.minY = center.y - row1_norm;
+    aabb.minZ = center.z - row2_norm;
+    aabb.maxX = center.x + row0_norm;
+    aabb.maxY = center.y + row1_norm;
+    aabb.maxZ = center.z + row2_norm;
+    aabbs[i] = aabb;
 }
 
 void create_aabbs(Primitives &prims) {
-  const size_t block_size = 1024;
-  if (prims.prev_alloc_size < prims.num_prims) {
-    if (prims.prev_alloc_size > 0) {
-      CUDA_CHECK(cudaFree(reinterpret_cast<void *>(prims.aabbs)));
+    const size_t block_size = 1024;
+    if (prims.prev_alloc_size < prims.num_prims) {
+        if (prims.prev_alloc_size > 0) {
+            CUDA_CHECK(cudaFree(reinterpret_cast<void *>(prims.aabbs)));
+        }
+        CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&prims.aabbs),
+                              prims.num_prims * sizeof(OptixAabb)));
     }
-    CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&prims.aabbs),
-                          prims.num_prims * sizeof(OptixAabb)));
-  }
-  kern_create_aabbs<<<(prims.num_prims + block_size - 1) / block_size,
-                          block_size>>>(
-      (glm::vec3 *)prims.means, (glm::vec3 *)prims.scales,
-      (glm::vec4 *)prims.quats, prims.densities, prims.num_prims,
-      prims.aabbs);
-  CUDA_SYNC_CHECK();
+    kern_create_aabbs<<<(prims.num_prims + block_size - 1) / block_size,
+                              block_size>>>(
+        (glm::vec3 *)prims.means, (glm::vec3 *)prims.scales,
+        (glm::vec4 *)prims.quats, prims.densities, prims.num_prims,
+        prims.aabbs);
+    CUDA_SYNC_CHECK();
 }

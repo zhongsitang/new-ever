@@ -22,38 +22,25 @@
 #include <optix_function_table_definition.h>
 #include <optix_stubs.h>
 
+// Include after torch/extension.h to enable PT_CHECK_* macros
+#include "exception.h"
 #include "Forward.h"
 #include "GAS.h"
 #include "create_aabbs.h"
-#include "exception.h"
 
 namespace py = pybind11;
 using namespace pybind11::literals;
 
 // =============================================================================
-// Input validation macros
+// Local convenience macros (device-aware versions)
 // =============================================================================
-#define CHECK_CUDA(x) \
-  TORCH_CHECK(x.device().is_cuda(), #x " must be a CUDA tensor")
-#define CHECK_DEVICE(x) \
-  TORCH_CHECK(x.device() == this->device, #x " must be on the same device")
-#define CHECK_CONTIGUOUS(x) \
-  TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
-#define CHECK_FLOAT(x) \
-  TORCH_CHECK(x.dtype() == torch::kFloat32, #x " must have float32 type")
-#define CHECK_INPUT(x) \
-  CHECK_CUDA(x);       \
-  CHECK_CONTIGUOUS(x)
-#define CHECK_FLOAT_DIM3(x)                                              \
-  CHECK_INPUT(x);                                                        \
-  CHECK_DEVICE(x);                                                       \
-  CHECK_FLOAT(x);                                                        \
-  TORCH_CHECK(x.size(-1) == 3, #x " must have last dimension with size 3")
-#define CHECK_FLOAT_DIM4(x)                                              \
-  CHECK_INPUT(x);                                                        \
-  CHECK_DEVICE(x);                                                       \
-  CHECK_FLOAT(x);                                                        \
-  TORCH_CHECK(x.size(-1) == 4, #x " must have last dimension with size 4")
+#define CHECK_FLOAT_DIM3_ON_DEVICE(x, dev)                                      \
+    PT_CHECK_FLOAT_DIM3(x);                                                     \
+    PT_CHECK_DEVICE(x, dev)
+
+#define CHECK_FLOAT_DIM4_ON_DEVICE(x, dev)                                      \
+    PT_CHECK_FLOAT_DIM4(x);                                                     \
+    PT_CHECK_DEVICE(x, dev)
 
 // =============================================================================
 // Global AABB cache for acceleration structure
@@ -108,10 +95,10 @@ public:
                         const torch::Tensor& sh_coeffs) {
         const int64_t num_prims = means.size(0);
 
-        CHECK_FLOAT_DIM3(means);
-        CHECK_FLOAT_DIM3(scales);
-        CHECK_FLOAT_DIM4(quats);
-        CHECK_FLOAT_DIM3(sh_coeffs);
+        CHECK_FLOAT_DIM3_ON_DEVICE(means, device);
+        CHECK_FLOAT_DIM3_ON_DEVICE(scales, device);
+        CHECK_FLOAT_DIM4_ON_DEVICE(quats, device);
+        CHECK_FLOAT_DIM3_ON_DEVICE(sh_coeffs, device);
         TORCH_CHECK(scales.size(0) == num_prims,
                     "scales must have the same number of primitives as means");
         TORCH_CHECK(quats.size(0) == num_prims,
@@ -140,7 +127,7 @@ public:
     }
 
     void set_sh_coeffs(const torch::Tensor& sh_coeffs) {
-        CHECK_FLOAT_DIM3(sh_coeffs);
+        CHECK_FLOAT_DIM3_ON_DEVICE(sh_coeffs, device);
         TORCH_CHECK(sh_coeffs.size(0) == static_cast<int64_t>(data.num_prims),
                     "sh_coeffs must have the same number of primitives");
         data.features = reinterpret_cast<float*>(sh_coeffs.data_ptr());
@@ -249,8 +236,8 @@ public:
                         size_t max_samples,
                         float max_prim_size) {
         torch::AutoGradMode enable_grad(false);
-        CHECK_FLOAT_DIM3(ray_origins);
-        CHECK_FLOAT_DIM3(ray_directions);
+        CHECK_FLOAT_DIM3_ON_DEVICE(ray_origins, device);
+        CHECK_FLOAT_DIM3_ON_DEVICE(ray_directions, device);
 
         const size_t num_rays = ray_origins.numel() / 3;
 

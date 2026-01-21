@@ -24,9 +24,9 @@
 #include <stdexcept>
 #include <string>
 
-// -----------------------------------------------------------------------------
+// =============================================================================
 // Internal helpers
-// -----------------------------------------------------------------------------
+// =============================================================================
 namespace detail {
 
 inline std::string optix_error_name(OptixResult res) {
@@ -52,9 +52,9 @@ inline std::string make_location(const char* file, int line) {
 
 } // namespace detail
 
-// -----------------------------------------------------------------------------
+// =============================================================================
 // Exception class
-// -----------------------------------------------------------------------------
+// =============================================================================
 class Exception : public std::runtime_error {
 public:
     explicit Exception(const std::string& msg) : std::runtime_error(msg) {}
@@ -64,9 +64,10 @@ public:
         : std::runtime_error(detail::optix_error_name(res) + ": " + msg) {}
 };
 
-// -----------------------------------------------------------------------------
-// OptiX macros
-// -----------------------------------------------------------------------------
+// =============================================================================
+// OptiX check macros
+// =============================================================================
+
 #define OPTIX_CHECK(call)                                                       \
     do {                                                                        \
         OptixResult res_ = (call);                                              \
@@ -104,9 +105,10 @@ public:
         }                                                                       \
     } while (0)
 
-// -----------------------------------------------------------------------------
-// CUDA macros
-// -----------------------------------------------------------------------------
+// =============================================================================
+// CUDA check macros
+// =============================================================================
+
 #define CUDA_CHECK(call)                                                        \
     do {                                                                        \
         cudaError_t err_ = (call);                                              \
@@ -149,3 +151,51 @@ public:
             std::terminate();                                                   \
         }                                                                       \
     } while (0)
+
+// =============================================================================
+// PyTorch tensor check macros
+// These macros require torch/extension.h to be included first
+// =============================================================================
+
+#ifdef TORCH_CHECK
+
+#define PT_CHECK_CUDA(x) \
+    TORCH_CHECK((x).device().is_cuda(), #x " must be a CUDA tensor")
+
+#define PT_CHECK_CONTIGUOUS(x) \
+    TORCH_CHECK((x).is_contiguous(), #x " must be contiguous")
+
+#define PT_CHECK_FLOAT(x) \
+    TORCH_CHECK((x).dtype() == torch::kFloat32, #x " must have float32 type")
+
+#define PT_CHECK_INT(x) \
+    TORCH_CHECK((x).dtype() == torch::kInt32, #x " must have int32 type")
+
+#define PT_CHECK_DIM(x, d) \
+    TORCH_CHECK((x).dim() == (d), #x " must be " #d "-dimensional")
+
+#define PT_CHECK_SIZE(x, dim, size) \
+    TORCH_CHECK((x).size(dim) == (size), #x " must have size " #size " at dimension " #dim)
+
+// Combined checks for common patterns
+#define PT_CHECK_INPUT(x) \
+    PT_CHECK_CUDA(x);     \
+    PT_CHECK_CONTIGUOUS(x)
+
+#define PT_CHECK_FLOAT_INPUT(x) \
+    PT_CHECK_INPUT(x);          \
+    PT_CHECK_FLOAT(x)
+
+#define PT_CHECK_FLOAT_DIM3(x)                                                  \
+    PT_CHECK_FLOAT_INPUT(x);                                                    \
+    TORCH_CHECK((x).size(-1) == 3, #x " must have last dimension with size 3")
+
+#define PT_CHECK_FLOAT_DIM4(x)                                                  \
+    PT_CHECK_FLOAT_INPUT(x);                                                    \
+    TORCH_CHECK((x).size(-1) == 4, #x " must have last dimension with size 4")
+
+// Device consistency check (pass device as second argument)
+#define PT_CHECK_DEVICE(x, dev) \
+    TORCH_CHECK((x).device() == (dev), #x " must be on the expected device")
+
+#endif // TORCH_CHECK
