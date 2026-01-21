@@ -22,10 +22,10 @@
 #include <optix_function_table_definition.h>
 #include <optix_stubs.h>
 
-#include "Forward.h"
-#include "GAS.h"
+#include "ray_pipeline.h"
+#include "accel_structure.h"
 #include "cuda_kernels.h"
-#include "exception.h"
+#include "optix_error.h"
 
 namespace py = pybind11;
 using namespace pybind11::literals; // to bring in the `_a` literal
@@ -125,7 +125,7 @@ public:
     model.num_prims = numPrimitives;
     model.prev_alloc_size = NUM_AABBS;
     model.aabbs = D_AABBS;
-    create_aabbs(model);
+    build_primitive_aabbs(model);
     D_AABBS = model.aabbs;
     NUM_AABBS = std::max(model.num_prims, NUM_AABBS);
   }
@@ -155,10 +155,10 @@ public:
   size_t num_float_per_state;
   torch::Device device;
   fesSavedForBackward(torch::Device device)
-      : num_prims(0), num_rays(0), num_float_per_state(sizeof(SplineState) / sizeof(float)),
+      : num_prims(0), num_rays(0), num_float_per_state(sizeof(VolumeState) / sizeof(float)),
         device(device) {}
   fesSavedForBackward(size_t num_rays, size_t num_prims, torch::Device device)
-      : num_prims(num_prims), num_float_per_state(sizeof(SplineState) / sizeof(float)),
+      : num_prims(num_prims), num_float_per_state(sizeof(VolumeState) / sizeof(float)),
         device(device) {
     allocate(num_rays);
   }
@@ -168,8 +168,8 @@ public:
   float4 *diracs_data_ptr() {
     return reinterpret_cast<float4 *>(diracs.data_ptr());
   }
-  SplineState *states_data_ptr() {
-    return reinterpret_cast<SplineState *>(states.data_ptr());
+  VolumeState *states_data_ptr() {
+    return reinterpret_cast<VolumeState *>(states.data_ptr());
   }
   torch::Tensor get_states() { return states; }
   torch::Tensor get_diracs() { return diracs; }
@@ -191,20 +191,20 @@ public:
   }
 };
 
-struct fesPyForward {
+struct fesPyRayPipeline {
 public:
-  Forward forward;
+  RayPipeline pipeline;
   torch::Device device;
   size_t num_prims;
   uint sh_degree;
-  fesPyForward(const fesOptixContext &context, const torch::Device &device,
+  fesPyRayPipeline(const fesOptixContext &context, const torch::Device &device,
             const fesPyPrimitives &model, const bool enable_backward)
       : device(device),
-        forward(context.context, device.index(), model.model, enable_backward),
+        pipeline(context.context, device.index(), model.model, enable_backward),
         num_prims(model.model.num_prims),
         sh_degree(sqrt(model.model.feature_size) - 1) {}
   void update_model(const fesPyPrimitives &model) {
-    forward.reset_features(model.model);
+    pipeline.reset_features(model.model);
   }
   py::dict trace_rays(const fesPyGas &gas, const torch::Tensor &ray_origins,
                       const torch::Tensor &ray_directions, float tmin,
@@ -232,7 +232,7 @@ public:
         torch::device(device).dtype(torch::kInt32));
 
     fesSavedForBackward saved_for_backward(num_rays, num_prims, device);
-    forward.trace_rays(gas.gas.gas_handle, num_rays,
+    pipeline.trace_rays(gas.gas.gas_handle, num_rays,
                        reinterpret_cast<float3 *>(ray_origins.data_ptr()),
                        reinterpret_cast<float3 *>(ray_directions.data_ptr()),
                        reinterpret_cast<void *>(color.data_ptr()),
@@ -257,7 +257,7 @@ public:
   }
 };
 
-PYBIND11_MODULE(ellipsoid_splinetracer, m) {
+PYBIND11_MODULE(ellipsoid_tracer, m) {
   py::class_<fesOptixContext>(m, "OptixContext")
       .def(py::init<const torch::Device &>());
   py::class_<fesSavedForBackward>(m, "SavedForBackward")
@@ -273,9 +273,9 @@ PYBIND11_MODULE(ellipsoid_splinetracer, m) {
   py::class_<fesPyGas>(m, "GAS").def(
       py::init<const fesOptixContext &, const torch::Device &,
                const fesPyPrimitives &, const bool, const bool, const bool>());
-  py::class_<fesPyForward>(m, "Forward")
+  py::class_<fesPyRayPipeline>(m, "Forward")
       .def(py::init<const fesOptixContext &, const torch::Device &,
                     const fesPyPrimitives &, const bool>())
-      .def("trace_rays", &fesPyForward::trace_rays)
-      .def("update_model", &fesPyForward::update_model);
+      .def("trace_rays", &fesPyRayPipeline::trace_rays)
+      .def("update_model", &fesPyRayPipeline::update_model);
 }

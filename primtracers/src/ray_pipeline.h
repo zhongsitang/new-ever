@@ -24,7 +24,7 @@
 #include <optix.h>
 #include <cstdint>
 #include <stdexcept>
-#include "structs.h"
+#include "volume_types.h"
 
 using uint = uint32_t;
 
@@ -48,7 +48,7 @@ struct Params {
     StructuredBuffer<uint> last_face;
     StructuredBuffer<uint> touch_count;
     StructuredBuffer<float4> last_dirac;
-    StructuredBuffer<SplineState> last_state;
+    StructuredBuffer<VolumeState> last_state;
     StructuredBuffer<int> tri_collection;
     StructuredBuffer<float3> ray_origins;
     StructuredBuffer<float3> ray_directions;
@@ -69,15 +69,15 @@ struct Params {
     OptixTraversableHandle handle;
 };
 
-class Forward {
+class RayPipeline {
 public:
-    Forward() = default;
-    Forward(OptixDeviceContext context, int8_t device, const Primitives& model, bool enable_backward);
-    ~Forward() noexcept(false);
+    RayPipeline() = default;
+    RayPipeline(OptixDeviceContext context, int8_t device, const Primitives& model, bool enable_backward);
+    ~RayPipeline() noexcept(false);
 
     // Non-copyable
-    Forward(const Forward&) = delete;
-    Forward& operator=(const Forward&) = delete;
+    RayPipeline(const RayPipeline&) = delete;
+    RayPipeline& operator=(const RayPipeline&) = delete;
 
     void trace_rays(
         OptixTraversableHandle handle,
@@ -95,7 +95,7 @@ public:
         uint* last_face = nullptr,
         uint* touch_count = nullptr,
         float4* last_dirac = nullptr,
-        SplineState* last_state = nullptr,
+        VolumeState* last_state = nullptr,
         int* tri_collection = nullptr,
         int* d_touch_count = nullptr,
         int* d_touch_inds = nullptr

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "Forward.h"
-#include "exception.h"
-#include "CUDABuffer.h"
+#include "ray_pipeline.h"
+#include "optix_error.h"
+#include "cuda_buffer.h"
 #include "cuda_kernels.h"
 
 #include <optix_stubs.h>
@@ -22,10 +22,10 @@
 #include <cstring>
 
 // -----------------------------------------------------------------------------
-// Forward implementation
+// RayPipeline implementation
 // -----------------------------------------------------------------------------
 
-Forward::Forward(OptixDeviceContext context, int8_t device, const Primitives& model, bool enable_backward)
+RayPipeline::RayPipeline(OptixDeviceContext context, int8_t device, const Primitives& model, bool enable_backward)
     : enable_backward(enable_backward)
     , context_(context)
     , device_(device)
@@ -58,7 +58,7 @@ Forward::Forward(OptixDeviceContext context, int8_t device, const Primitives& mo
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_param_), sizeof(Params)));
 }
 
-void Forward::create_module(const char* ptx) {
+void RayPipeline::create_module(const char* ptx) {
     OptixModuleCompileOptions module_options = {};
     module_options.optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_3;
     module_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
@@ -74,7 +74,7 @@ void Forward::create_module(const char* ptx) {
     ));
 }
 
-void Forward::create_program_groups() {
+void RayPipeline::create_program_groups() {
     OptixProgramGroupOptions pg_options = {};
 
     // Raygen
@@ -107,7 +107,7 @@ void Forward::create_program_groups() {
     ));
 }
 
-void Forward::create_pipeline() {
+void RayPipeline::create_pipeline() {
     constexpr uint32_t max_trace_depth = 1;
 
     OptixProgramGroup program_groups[] = {raygen_pg_, miss_pg_, hitgroup_pg_};
@@ -143,7 +143,7 @@ void Forward::create_pipeline() {
     ));
 }
 
-void Forward::create_sbt() {
+void RayPipeline::create_sbt() {
     // Raygen record
     CUdeviceptr raygen_record;
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&raygen_record), sizeof(RayGenSbtRecord)));
@@ -178,7 +178,7 @@ void Forward::create_sbt() {
     sbt_.hitgroupRecordCount = 1;
 }
 
-void Forward::trace_rays(
+void RayPipeline::trace_rays(
     OptixTraversableHandle handle,
     size_t num_rays,
     float3* ray_origins,
@@ -194,7 +194,7 @@ void Forward::trace_rays(
     uint* last_face,
     uint* touch_count,
     float4* last_dirac,
-    SplineState* last_state,
+    VolumeState* last_state,
     int* tri_collection,
     int* d_touch_count,
     int* d_touch_inds)
@@ -224,7 +224,7 @@ void Forward::trace_rays(
     CUDA_CHECK(cudaMemset(initial_drgb, 0, num_rays * sizeof(float4)));
     params_.initial_drgb = {initial_drgb, num_rays};
 
-    initialize_density(&params_, model_->aabbs, d_touch_count, d_touch_inds);
+    init_ray_start_samples(&params_, model_->aabbs, d_touch_count, d_touch_inds);
 
     params_.handle = handle;
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,
@@ -242,11 +242,11 @@ void Forward::trace_rays(
     CUDA_CHECK(cudaStreamSynchronize(stream_));
 }
 
-void Forward::reset_features(const Primitives& model) {
+void RayPipeline::reset_features(const Primitives& model) {
     params_.features = {model.features, model.num_prims * model.feature_size};
 }
 
-Forward::~Forward() noexcept(false) {
+RayPipeline::~RayPipeline() noexcept(false) {
     if (d_param_)
         CUDA_CHECK(cudaFree(reinterpret_cast<void*>(std::exchange(d_param_, 0))));
     if (sbt_.raygenRecord)

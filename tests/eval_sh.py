@@ -22,7 +22,7 @@ from absl.testing import parameterized
 from tests.utils.math_util import l2_normalize_th
 
 # Slang-compiled module for SH evaluation
-import splinetracers as eval_sh
+import primtracers as eval_sh
 
 torch.set_printoptions(precision=10)
 np.set_printoptions(precision=10)

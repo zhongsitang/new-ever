@@ -1,5 +1,5 @@
 # =============================================================================
-# Ever - Spline-based Volume Rendering Library
+# Ever - Primitive Volume Rendering Library (primtracers)
 # =============================================================================
 # Modern CMake (3.28+) configuration.
 #
@@ -13,9 +13,9 @@
 
 cmake_minimum_required(VERSION 3.28 FATAL_ERROR)
 
-project(splinetracers
+project(primtracers
   VERSION 1.0.0
-  DESCRIPTION "Spline-based ellipsoid volume rendering with OptiX"
+  DESCRIPTION "Primitive-based volume rendering with OptiX (ellipsoid, etc.)"
   LANGUAGES C CXX CUDA
 )
 
@@ -32,8 +32,8 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
 endif()
 
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/splinetracers")
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/splinetracers")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/primtracers")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/primtracers")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 # -----------------------------------------------------------------------------
@@ -51,19 +51,19 @@ include(SlangHelper)
 # -----------------------------------------------------------------------------
 # Project paths
 # -----------------------------------------------------------------------------
-set(TRACER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/splinetracers/src")
-set(SLANG_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/splinetracers/slang")
+set(TRACER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/primtracers/src")
+set(SLANG_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/primtracers/slang")
 
 # -----------------------------------------------------------------------------
 # Main pybind11 extension module
 # -----------------------------------------------------------------------------
-pybind11_add_module(ellipsoid_splinetracer MODULE
-  ${TRACER_DIR}/Forward.cpp
-  ${TRACER_DIR}/Forward.h
-  ${TRACER_DIR}/GAS.h
-  ${TRACER_DIR}/py_binding.cpp
-  ${TRACER_DIR}/structs.h
-  ${TRACER_DIR}/CUDABuffer.h
+pybind11_add_module(ellipsoid_tracer MODULE
+  ${TRACER_DIR}/ray_pipeline.cpp
+  ${TRACER_DIR}/ray_pipeline.h
+  ${TRACER_DIR}/accel_structure.h
+  ${TRACER_DIR}/python_bindings.cpp
+  ${TRACER_DIR}/volume_types.h
+  ${TRACER_DIR}/cuda_buffer.h
   ${TRACER_DIR}/cuda_kernels.cu
   ${TRACER_DIR}/cuda_kernels.h
 )
@@ -77,9 +77,9 @@ set_source_files_properties(
 # Shader embedding (Slang -> PTX -> C++ string)
 # -----------------------------------------------------------------------------
 slang_ptx_embed(
-  TARGET       ellipsoid_splinetracer
+  TARGET       ellipsoid_tracer
   NAME         shaders_ptx
-  SLANG_FILE   ${SLANG_DIR}/shaders.slang
+  SLANG_FILE   ${SLANG_DIR}/optix_shaders.slang
   INCLUDE_DIRS ${SLANG_DIR}
   NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS} ${OptiX_ROOT}/include
 )
@@ -88,14 +88,14 @@ slang_ptx_embed(
 # Slang PyTorch modules
 # -----------------------------------------------------------------------------
 slang_add_py_module(backwards_kernel
-  SLANG_FILES  ${SLANG_DIR}/backwards_kernel.slang
+  SLANG_FILES  ${SLANG_DIR}/backward_pass.slang
   INCLUDE_DIRS ${SLANG_DIR}
   NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS}
 )
 target_link_libraries(backwards_kernel PRIVATE Torch::Torch)
 
 slang_add_py_module(sh_kernel
-  SLANG_FILES  ${SLANG_DIR}/sh_kernel.slang
+  SLANG_FILES  ${SLANG_DIR}/sh_evaluation.slang
   INCLUDE_DIRS ${SLANG_DIR}
   NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS}
 )
@@ -104,22 +104,22 @@ target_link_libraries(sh_kernel PRIVATE Torch::Torch)
 # -----------------------------------------------------------------------------
 # Linking and compile options
 # -----------------------------------------------------------------------------
-target_link_libraries(ellipsoid_splinetracer PRIVATE
+target_link_libraries(ellipsoid_tracer PRIVATE
   OptiX::OptiX
   Torch::Torch
 )
 
-target_compile_options(ellipsoid_splinetracer PRIVATE
+target_compile_options(ellipsoid_tracer PRIVATE
   $<$<COMPILE_LANGUAGE:CUDA>:--diag-suppress=20012,177,550>
 )
 
 if(MSVC)
-  set_target_properties(ellipsoid_splinetracer PROPERTIES
+  set_target_properties(ellipsoid_tracer PROPERTIES
     MSVC_RUNTIME_LIBRARY "MultiThreadedDLL"
     CUDA_RUNTIME_LIBRARY Shared
   )
 else()
-  target_compile_options(ellipsoid_splinetracer PRIVATE
+  target_compile_options(ellipsoid_tracer PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--compiler-options=-fPIC>
     $<$<COMPILE_LANGUAGE:CXX>:-Wno-deprecated-declarations>
   )

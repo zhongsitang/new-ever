@@ -13,9 +13,9 @@
 // limitations under the License.
 
 #include "cuda_kernels.h"
-#include "exception.h"
+#include "optix_error.h"
 #include "glm/glm.hpp"
-#include "structs.h"
+#include "volume_types.h"
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <iostream>
@@ -23,10 +23,10 @@
 #include <stdexcept>
 
 // =============================================================================
-// AABB Creation
+// Primitive Bounding Box Construction
 // =============================================================================
 
-__global__ void kern_create_aabbs(
+__global__ void compute_primitive_bounds_kernel(
     const glm::vec3 *means,
     const glm::vec3 *scales,
     const glm::vec4 *quats,
@@ -78,7 +78,7 @@ __global__ void kern_create_aabbs(
     aabbs[i] = aabb;
 }
 
-void create_aabbs(Primitives &prims) {
+void build_primitive_aabbs(Primitives &prims) {
     const size_t block_size = 1024;
     if (prims.prev_alloc_size < prims.num_prims) {
         if (prims.prev_alloc_size > 0) {
@@ -87,7 +87,7 @@ void create_aabbs(Primitives &prims) {
         CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&prims.aabbs),
                               prims.num_prims * sizeof(OptixAabb)));
     }
-    kern_create_aabbs<<<(prims.num_prims + block_size - 1) / block_size, block_size>>>(
+    compute_primitive_bounds_kernel<<<(prims.num_prims + block_size - 1) / block_size, block_size>>>(
         (glm::vec3 *)prims.means,
         (glm::vec3 *)prims.scales,
         (glm::vec4 *)prims.quats,
@@ -98,14 +98,14 @@ void create_aabbs(Primitives &prims) {
 }
 
 // =============================================================================
-// Density Initialization
+// Initial Ray Sample Accumulation
 // =============================================================================
 
 #define SQR(x) (x)*(x)
 
 __device__ static const float SH_C0 = 0.28209479177387814f;
 
-__device__ glm::vec3 get_Trayo(
+__device__ glm::vec3 transform_to_ellipsoid_space(
     const glm::vec3 center,
     const glm::vec4 quat,
     const glm::vec3 size,
@@ -126,7 +126,7 @@ __device__ glm::vec3 get_Trayo(
     return Trayo;
 }
 
-__global__ void kern_prefilter(
+__global__ void find_enclosing_primitives_kernel(
     const OptixAabb *aabbs,
     const size_t num_prims,
     const float tmin,
@@ -164,7 +164,7 @@ __global__ void kern_prefilter(
     }
 }
 
-__global__ void kern_initialize_density(
+__global__ void accumulate_initial_samples_kernel(
     const glm::vec3 *means,
     const glm::vec3 *scales,
     const glm::vec4 *quats,
@@ -192,7 +192,7 @@ __global__ void kern_initialize_density(
     const glm::vec3 center = means[prim_ind];
     const glm::vec3 size = scales[prim_ind];
 
-    const glm::vec3 Trayo = get_Trayo(center, quat, size, rayo);
+    const glm::vec3 Trayo = transform_to_ellipsoid_space(center, quat, size, rayo);
     const float dist = Trayo.x*Trayo.x + Trayo.y*Trayo.y + Trayo.z*Trayo.z;
 
     if (dist <= 1) {
@@ -209,7 +209,7 @@ __global__ void kern_initialize_density(
     }
 }
 
-void initialize_density(Params *params, OptixAabb *aabbs, int *d_touch_count, int *d_touch_inds) {
+void init_ray_start_samples(Params *params, OptixAabb *aabbs, int *d_touch_count, int *d_touch_inds) {
     const size_t block_size = 1024;
     const size_t ray_block_size = 64;
     const size_t second_block_size = 16;
@@ -229,7 +229,7 @@ void initialize_density(Params *params, OptixAabb *aabbs, int *d_touch_count, in
     }
     cudaMemset(d_touch_count, 0, sizeof(int));
 
-    kern_prefilter<<<grid_dim.x, block_dim.x>>>(
+    find_enclosing_primitives_kernel<<<grid_dim.x, block_dim.x>>>(
         aabbs,
         num_prims,
         params->tmin,
@@ -248,7 +248,7 @@ void initialize_density(Params *params, OptixAabb *aabbs, int *d_touch_count, in
         );
         dim3 init_block_dim(ray_block_size, second_block_size, 1);
 
-        kern_initialize_density<<<init_grid_dim, init_block_dim>>>(
+        accumulate_initial_samples_kernel<<<init_grid_dim, init_block_dim>>>(
             (glm::vec3 *)(params->means.data),
             (glm::vec3 *)(params->scales.data),
             (glm::vec4 *)(params->quats.data),
@@ -272,7 +272,7 @@ void initialize_density(Params *params, OptixAabb *aabbs, int *d_touch_count, in
     }
 }
 
-__global__ void kern_initialize_density_so(
+__global__ void accumulate_initial_samples_single_kernel(
     const glm::vec3 *means,
     const glm::vec3 *scales,
     const glm::vec4 *quats,
@@ -318,11 +318,11 @@ __global__ void kern_initialize_density_so(
     }
 }
 
-void initialize_density_so(Params *params) {
+void init_ray_start_samples_single(Params *params) {
     const size_t block_size = 1024;
     int num_prims = params->means.size;
 
-    kern_initialize_density_so<<<(num_prims + block_size - 1) / block_size, block_size>>>(
+    accumulate_initial_samples_single_kernel<<<(num_prims + block_size - 1) / block_size, block_size>>>(
         (glm::vec3 *)(params->means.data),
         (glm::vec3 *)(params->scales.data),
         (glm::vec4 *)(params->quats.data),
@@ -335,5 +335,6 @@ void initialize_density_so(Params *params) {
     CUDA_SYNC_CHECK();
 }
 
-void initialize_density_zero(Params *params) {
+void init_ray_start_samples_zero(Params *params) {
+    // No-op: used when no initial samples needed
 }

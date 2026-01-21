@@ -13,13 +13,13 @@
 // limitations under the License.
 
 #pragma once
-#include "Forward.h"
-#include "structs.h"
+#include "ray_pipeline.h"
+#include "volume_types.h"
 
-// AABB creation
-void create_aabbs(Primitives &prims);
+// Primitive bounding box construction
+void build_primitive_aabbs(Primitives &prims);
 
-// Density initialization
-void initialize_density(Params *params, OptixAabb *aabbs, int *d_touch_count=NULL, int *d_touch_inds=NULL);
-void initialize_density_so(Params *params);
-void initialize_density_zero(Params *params);
+// Initial ray sample accumulation (for rays starting inside primitives)
+void init_ray_start_samples(Params *params, OptixAabb *aabbs, int *d_touch_count=NULL, int *d_touch_inds=NULL);
+void init_ray_start_samples_single(Params *params);
+void init_ray_start_samples_zero(Params *params);

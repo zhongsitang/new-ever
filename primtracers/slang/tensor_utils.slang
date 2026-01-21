@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import sh;
+import spherical_harmonics;
 
 float3 get_float3(TensorView<float> view, uint ind) {
     return {

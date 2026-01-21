@@ -18,7 +18,7 @@ from typing import Any
 import torch
 from torch.autograd import Function
 
-from . import ellipsoid_splinetracer as sp
+from . import ellipsoid_tracer as sp
 from . import backwards_kernel
 from . import sh_kernel
 
@@ -26,10 +26,10 @@ otx = sp.OptixContext(torch.device("cuda:0"))
 
 
 # =============================================================================
-# SplineTracer
+# PrimTracer - Volume Rendering for Primitives
 # =============================================================================
 
-class SplineTracer(Function):
+class PrimTracer(Function):
     @staticmethod
     def forward(
         ctx: Any,
@@ -219,7 +219,7 @@ def trace_rays(
     return_extras: bool = False,
 ):
     """
-    Trace rays through ellipsoid primitives using spline-based volume rendering.
+    Trace rays through ellipsoid primitives using volume rendering integration.
 
     Parameters
     ----------
@@ -257,7 +257,7 @@ def trace_rays(
     torch.Tensor or tuple
         Rendered colors (and extras if requested)
     """
-    return SplineTracer.apply(
+    return PrimTracer.apply(
         mean,
         scale,
         quat,
