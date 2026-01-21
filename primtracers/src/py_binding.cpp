@@ -257,7 +257,7 @@ public:
   }
 };
 
-PYBIND11_MODULE(ellipsoid_primtracer, m) {
+PYBIND11_MODULE(ellipsoid_tracer, m) {
   py::class_<fesOptixContext>(m, "OptixContext")
       .def(py::init<const torch::Device &>());
   py::class_<fesSavedForBackward>(m, "SavedForBackward")

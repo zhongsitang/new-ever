@@ -129,8 +129,8 @@ struct DualModel {
 
 DifferentialPair<VolumeState>
 run_update(in VolumeState old_dual_state, 
-           in SampleContribution old_sample,
-           in SampleContribution sample,
+           in SamplePoint old_sample,
+           in SamplePoint sample,
            in uint prim_ind,
            in uint face_id,
            in uint ray_ind,
@@ -219,7 +219,7 @@ run_update(in VolumeState old_dual_state,
     return old_deriv_state;
 }
 
-SampleContribution load_sample(in uint older_tri_ind, in DualModel model, in float3 origin, float3 direction, uint sh_degree, bool skip_close)
+SamplePoint load_sample(in uint older_tri_ind, in DualModel model, in float3 origin, float3 direction, uint sh_degree, bool skip_close)
 {
     let older_prim_ind = (uint)floor(older_tri_ind / tri_per_g);
     let older_face_id = mod(older_tri_ind, tri_per_g);
@@ -319,13 +319,13 @@ void backwards_kernel(
     float4x4 inv_wct = inverse(wct);
 
     uint tri_ind = tri_collection[ray_ind + max(num_iters-1, 0) * ray_origins.size(0)];
-    SampleContribution sample = load_sample(tri_ind, model, origin, direction, sh_degree, skip_close);
+    SamplePoint sample = load_sample(tri_ind, model, origin, direction, sh_degree, skip_close);
 
     // load old sample here because the next loop is about to load the older one instead
     for (int i=num_iters; i-->0; )
     {
         uint old_tri_ind;
-        SampleContribution old_sample;
+        SamplePoint old_sample;
         if (i-1 >= 0) {
             old_tri_ind = tri_collection[ray_ind + (i-1) * ray_origins.size(0)];
             old_sample = load_sample(old_tri_ind, model, origin, direction, sh_degree, skip_close);

@@ -67,8 +67,8 @@ float max_prim_size;
 RaytracingAccelerationStructure traversable;
 
 
-SampleContribution get_sample(uint tri, float t) {
-    SampleContribution sample;
+SamplePoint get_sample(uint tri, float t) {
+    SamplePoint sample;
     let prim_ind = tri / 2;
     let hitkind = tri % 2;
     let height = densities[prim_ind];
@@ -185,7 +185,7 @@ void rg_float()
 
     let start_id = idx.x * max_iters;
 
-    SampleContribution sample = {};
+    SamplePoint sample = {};
     uint last_tri = -1;
     float prev_t = state.t;
     uint next_tri = -1;

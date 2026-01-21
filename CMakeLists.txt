@@ -57,7 +57,7 @@ set(SLANG_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/primtracers/slang")
 # -----------------------------------------------------------------------------
 # Main pybind11 extension module
 # -----------------------------------------------------------------------------
-pybind11_add_module(ellipsoid_primtracer MODULE
+pybind11_add_module(ellipsoid_tracer MODULE
   ${TRACER_DIR}/Forward.cpp
   ${TRACER_DIR}/Forward.h
   ${TRACER_DIR}/GAS.h
@@ -77,7 +77,7 @@ set_source_files_properties(
 # Shader embedding (Slang -> PTX -> C++ string)
 # -----------------------------------------------------------------------------
 slang_ptx_embed(
-  TARGET       ellipsoid_primtracer
+  TARGET       ellipsoid_tracer
   NAME         shaders_ptx
   SLANG_FILE   ${SLANG_DIR}/shaders.slang
   INCLUDE_DIRS ${SLANG_DIR}
@@ -104,22 +104,22 @@ target_link_libraries(sh_kernel PRIVATE Torch::Torch)
 # -----------------------------------------------------------------------------
 # Linking and compile options
 # -----------------------------------------------------------------------------
-target_link_libraries(ellipsoid_primtracer PRIVATE
+target_link_libraries(ellipsoid_tracer PRIVATE
   OptiX::OptiX
   Torch::Torch
 )
 
-target_compile_options(ellipsoid_primtracer PRIVATE
+target_compile_options(ellipsoid_tracer PRIVATE
   $<$<COMPILE_LANGUAGE:CUDA>:--diag-suppress=20012,177,550>
 )
 
 if(MSVC)
-  set_target_properties(ellipsoid_primtracer PROPERTIES
+  set_target_properties(ellipsoid_tracer PROPERTIES
     MSVC_RUNTIME_LIBRARY "MultiThreadedDLL"
     CUDA_RUNTIME_LIBRARY Shared
   )
 else()
-  target_compile_options(ellipsoid_primtracer PRIVATE
+  target_compile_options(ellipsoid_tracer PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--compiler-options=-fPIC>
     $<$<COMPILE_LANGUAGE:CXX>:-Wno-deprecated-declarations>
   )

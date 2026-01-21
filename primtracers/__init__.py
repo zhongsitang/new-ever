@@ -18,7 +18,7 @@ from typing import Any
 import torch
 from torch.autograd import Function
 
-from . import ellipsoid_primtracer as sp
+from . import ellipsoid_tracer as sp
 from . import backwards_kernel
 from . import sh_kernel
 

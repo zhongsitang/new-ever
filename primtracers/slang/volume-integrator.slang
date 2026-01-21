@@ -44,7 +44,7 @@ VolumeState make_initial_state() {
   };
 }
 
-struct SampleContribution : IDifferentiable
+struct SamplePoint : IDifferentiable
 {
   float t;
   float4 dirac;
@@ -56,13 +56,13 @@ bool AlmostEqualRelative(float A, float B,
     return abs(A - B) <= max(abs(A), abs(B)) * maxRelDiff;
 }
 
-VolumeState to_dual(in VolumeState state, in SampleContribution sample)
+VolumeState to_dual(in VolumeState state, in SamplePoint sample)
 {
   VolumeState dual_state = state;
   return dual_state;
 }
 
-VolumeState from_dual(in VolumeState state, in SampleContribution sample)
+VolumeState from_dual(in VolumeState state, in SamplePoint sample)
 {
   VolumeState dual_state = state;
   return dual_state;
@@ -70,8 +70,8 @@ VolumeState from_dual(in VolumeState state, in SampleContribution sample)
 
 VolumeState inverse_update_dual(
     in VolumeState new_state,
-    in SampleContribution new_sample,
-    in SampleContribution sample,
+    in SamplePoint new_sample,
+    in SamplePoint sample,
     in float t_min,
     in float t_max)
 {
@@ -123,7 +123,7 @@ VolumeState inverse_update_dual(
 [Differentiable]
 VolumeState update(
     in VolumeState state,
-    in SampleContribution sample,
+    in SamplePoint sample,
     no_diff in float t_min,
     no_diff in float t_max,
     no_diff in float max_prim_size)
