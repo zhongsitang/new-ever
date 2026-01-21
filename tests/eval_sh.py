@@ -19,7 +19,7 @@ import torch
 from absl.testing import absltest
 from absl.testing import parameterized
 
-from utils.math_util import l2_normalize_th
+from tests.utils.math_util import l2_normalize_th
 
 # Slang-compiled module for SH evaluation
 import eval_sh

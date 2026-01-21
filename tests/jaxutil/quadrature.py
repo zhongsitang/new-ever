@@ -17,7 +17,7 @@ import math
 
 import jax
 import jax.numpy as jnp
-from . import safe_math
+from tests.jaxutil import safe_math
 
 
 def assert_valid_stepfun(t, y):

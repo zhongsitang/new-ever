@@ -19,9 +19,9 @@ import torch
 from absl.testing import absltest
 from absl.testing import parameterized
 
-from utils.test_utils import ALL_QUAD_PAIRS, QUAD_PAIRS
-from utils.math_util import l2_normalize_th
-import quad
+from tests.utils.test_utils import ALL_QUAD_PAIRS, QUAD_PAIRS
+from tests.utils.math_util import l2_normalize_th
+from tests import quad
 
 torch.set_printoptions(precision=10)
 np.set_printoptions(precision=10)

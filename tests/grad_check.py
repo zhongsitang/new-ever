@@ -19,8 +19,8 @@ import torch
 from absl.testing import absltest
 from absl.testing import parameterized
 
-from utils.test_utils import METHODS
-from utils.math_util import l2_normalize_th
+from tests.utils.test_utils import METHODS
+from tests.utils.math_util import l2_normalize_th
 
 torch.set_printoptions(precision=10)
 np.set_printoptions(precision=10)

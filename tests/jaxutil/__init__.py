@@ -12,5 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from . import safe_math
-from . import quadrature
+from tests.jaxutil import safe_math
+from tests.jaxutil import quadrature
