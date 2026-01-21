@@ -43,7 +43,8 @@ using HitGroupSbtRecord = SbtRecord<HitGroupData>;
 // Launch parameters - must match slang layout exactly
 // Note: StructuredBuffer<T> = {T* data, size_t size} (16 bytes with padding)
 struct Params {
-    StructuredBuffer<float> image;                     // Rendered output (R, G, B, A, depth) per ray
+    StructuredBuffer<float4> image;                    // Rendered RGBA output
+    StructuredBuffer<float> depth_out;                 // Rendered depth output
     StructuredBuffer<uint> iters;                      // Iteration count per ray
     StructuredBuffer<uint> last_prim;                  // Last primitive hit
     StructuredBuffer<uint> primitive_hit_count;        // Hit count per primitive
@@ -84,7 +85,8 @@ public:
         size_t num_rays,
         float3* ray_origins,
         float3* ray_directions,
-        float* image_out,                          // (R, G, B, A, depth) * num_rays
+        float4* color_out,                         // RGBA output (num_rays, 4)
+        float* depth_out,                          // Depth output (num_rays,)
         uint sh_degree,
         float tmin, float* tmax,                   // tmax is now per-ray
         float4* initial_contrib,

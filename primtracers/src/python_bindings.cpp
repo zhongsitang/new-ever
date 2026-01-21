@@ -230,8 +230,10 @@ public:
     const size_t num_rays = ray_origins.numel() / 3;
     TORCH_CHECK(tmax.numel() == (long)num_rays, "tmax must have the same number of elements as rays");
 
-    // Output: 5 floats per ray (R, G, B, A, depth)
-    torch::Tensor color = torch::zeros({(long)num_rays, 5},
+    // Output: color RGBA (num_rays, 4) and depth (num_rays,)
+    torch::Tensor color = torch::zeros({(long)num_rays, 4},
+                         torch::device(device).dtype(torch::kFloat32));
+    torch::Tensor depth = torch::zeros({(long)num_rays},
                          torch::device(device).dtype(torch::kFloat32));
     torch::Tensor hit_collection =
         torch::zeros({(long)(num_rays * max_iters)},
@@ -251,7 +253,8 @@ public:
     pipeline.trace_rays(gas.gas.gas_handle, num_rays,
                        reinterpret_cast<float3 *>(ray_origins.data_ptr()),
                        reinterpret_cast<float3 *>(ray_directions.data_ptr()),
-                       reinterpret_cast<float *>(color.data_ptr()),
+                       reinterpret_cast<float4 *>(color.data_ptr()),
+                       reinterpret_cast<float *>(depth.data_ptr()),
                        sh_degree, tmin,
                        reinterpret_cast<float *>(tmax.data_ptr()),
                        reinterpret_cast<float4 *>(initial_contrib.data_ptr()),
@@ -266,6 +269,7 @@ public:
                        reinterpret_cast<int *>(initial_hit_count.data_ptr()),
                        reinterpret_cast<int *>(initial_hit_inds.data_ptr()));
     return py::dict("color"_a = color,
+                    "depth"_a = depth,
                     "saved"_a = saved_for_backward,
                     "hit_collection"_a = hit_collection,
                     "initial_contrib"_a = initial_contrib,

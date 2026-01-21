@@ -56,17 +56,19 @@ class QuadratureTest(parameterized.TestCase):
         features = torch.rand(N, 1, 3, dtype=torch.float32).to(device)
 
         tmin, tmax = 0, 3
-        color1, extras1 = quad.trace_rays(
+        color1, depth1, extras1 = quad.trace_rays(
             mean, scale, quat, density, features, rayo, rayd,
             tmin, tmax, return_extras=True, kernel=kernel)
-        color1 = color1[:, :3].reshape(-1)
+        color1_rgb = color1[:, :3].reshape(-1)
 
-        color2, extras2 = method.trace_rays(
+        color2, depth2, extras2 = method.trace_rays(
             mean, scale, quat, density, features, rayo, rayd,
             tmin, tmax, return_extras=True)
-        color2 = color2[:, :3].reshape(-1)
+        color2_rgb = color2[:, :3].reshape(-1)
 
-        np.testing.assert_allclose(np.asarray(color1), color2.cpu().numpy(), atol=1e-4, rtol=1e-4)
+        np.testing.assert_allclose(np.asarray(color1_rgb), color2_rgb.cpu().numpy(), atol=1e-4, rtol=1e-4)
+        # Verify alpha values match
+        np.testing.assert_allclose(np.asarray(color1[:, 3]), color2[:, 3].cpu().numpy(), atol=1e-4, rtol=1e-4)
 
     @parameterized.product(
         method_kernel=QUAD_PAIRS,
@@ -93,17 +95,19 @@ class QuadratureTest(parameterized.TestCase):
         features = torch.rand(N, 1, 3, dtype=torch.float32).to(device)
 
         tmin, tmax = 0, 3
-        color1, extras1 = quad.trace_rays(
+        color1, depth1, extras1 = quad.trace_rays(
             mean, scale, quat, density, features, rayo, rayd,
             tmin, tmax, return_extras=True, kernel=kernel)
-        color1 = color1[:, :3].reshape(-1)
+        color1_rgb = color1[:, :3].reshape(-1)
 
-        color2, extras2 = method.trace_rays(
+        color2, depth2, extras2 = method.trace_rays(
             mean, scale, quat, density, features, rayo, rayd,
             tmin, tmax, return_extras=True)
-        color2 = color2[:, :3].reshape(-1)
+        color2_rgb = color2[:, :3].reshape(-1)
 
-        np.testing.assert_allclose(np.asarray(color1), color2.cpu().numpy(), atol=1e-4, rtol=1e-4)
+        np.testing.assert_allclose(np.asarray(color1_rgb), color2_rgb.cpu().numpy(), atol=1e-4, rtol=1e-4)
+        # Verify alpha values match
+        np.testing.assert_allclose(np.asarray(color1[:, 3]), color2[:, 3].cpu().numpy(), atol=1e-4, rtol=1e-4)
 
 
 if __name__ == "__main__":

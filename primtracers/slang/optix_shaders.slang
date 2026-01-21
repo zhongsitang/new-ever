@@ -76,7 +76,8 @@ struct HitAttr {
 // =============================================================================
 
 // Output buffers
-RWStructuredBuffer<float>       image;              // Rendered output (R, G, B, A, depth) per ray
+RWStructuredBuffer<float4>      image;              // Rendered RGBA output
+RWStructuredBuffer<float>       depth_out;          // Rendered depth output
 RWStructuredBuffer<uint>        iters;              // Iteration count per ray
 RWStructuredBuffer<uint>        last_prim;          // Last primitive hit (for debugging)
 RWStructuredBuffer<uint>        primitive_hit_count; // Hit count per primitive
@@ -324,14 +325,10 @@ void render_volume()
         if (end) break;
     }
 
-    // Extract and output final color (R, G, B, A, depth)
+    // Extract and output final color (RGBA) and depth
     let output = extract_color(state, tmin);
-    uint base = idx.x * 5;
-    image[base + 0] = output.C.x;
-    image[base + 1] = output.C.y;
-    image[base + 2] = output.C.z;
-    image[base + 3] = output.alpha;
-    image[base + 4] = output.depth;
+    image[idx.x] = {output.C.x, output.C.y, output.C.z, output.alpha};
+    depth_out[idx.x] = output.depth;
 
     // Save state for backward pass
     let dual_state = to_dual(state, sample);

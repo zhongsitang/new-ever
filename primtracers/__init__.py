@@ -73,9 +73,9 @@ class PrimTracer(Function):
         distortion_pt2 = states[:, 1]
         distortion_loss = distortion_pt1 - distortion_pt2
 
-        # Output format: [R, G, B, A, depth] (5 columns)
-        # distortion_loss is a separate output tensor for autograd compatibility
-        color_and_depth = out["color"]  # Already (N, 5): R, G, B, A, depth
+        # Output format: color RGBA (M, 4), depth (M,)
+        color_rgba = out["color"]  # (N, 4): R, G, B, A
+        depth = out["depth"]       # (N,): depth
 
         initial_prim_indices = out['initial_hit_inds'][:out['initial_hit_count'][0]]
 
@@ -90,14 +90,12 @@ class PrimTracer(Function):
             saved=ctx.saved,
         ) if return_extras else {}
 
-        # Return format: (color_and_depth, extras_dict)
-        # distortion_loss is included in extras for backward compatibility
-        # but note: distortion_loss gradients are computed via the backward pass
+        # distortion_loss is included in extras
         extras['distortion_loss'] = distortion_loss
-        return color_and_depth, extras
+        return color_rgba, depth, extras
 
     @staticmethod
-    def backward(ctx, grad_output: torch.Tensor, grad_extras=None):
+    def backward(ctx, grad_color: torch.Tensor, grad_depth: torch.Tensor, grad_extras=None):
         (
             mean,
             scale,
@@ -130,9 +128,9 @@ class PrimTracer(Function):
         if grad_extras is not None and 'distortion_loss' in grad_extras and grad_extras['distortion_loss'] is not None:
             dL_ddistortion = grad_extras['distortion_loss'].reshape(-1, 1)
 
-        # Combine grad_output (R, G, B, A, depth) with distortion_loss gradient
+        # Combine grad_color (R, G, B, A), grad_depth, and distortion_loss gradient
         # Format for backward kernel: [R, G, B, A, depth, distortion_loss]
-        grad_combined = torch.cat([grad_output, dL_ddistortion], dim=1)
+        grad_combined = torch.cat([grad_color, grad_depth.reshape(-1, 1), dL_ddistortion], dim=1)
 
         block_size = 16
         if ctx.saved.iters.sum() > 0:
@@ -257,8 +255,9 @@ def trace_rays(
     Returns
     -------
     tuple
-        (color_and_depth, extras) where:
-        - color_and_depth: torch.Tensor of shape (M, 5) containing [R, G, B, A, depth]
+        (color, depth, extras) where:
+        - color: torch.Tensor of shape (M, 4) containing RGBA
+        - depth: torch.Tensor of shape (M,) containing depth values
         - extras: dict containing 'distortion_loss' and optionally other fields if return_extras=True
     """
     num_rays = rayo.shape[0]

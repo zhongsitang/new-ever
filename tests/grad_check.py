@@ -64,12 +64,11 @@ class GradCheckTest(parameterized.TestCase):
         fixed_random = 0.5
 
         def l2_loss(means, scales, quats, densities, feats):
-            color_and_depth, extras = method.trace_rays(
+            color, depth, extras = method.trace_rays(
                 means, scales, quats, densities, feats, rayo, rayd,
                 fixed_random, 100)
-            # color_and_depth: [R, G, B, A, depth]
-            weights = torch.tensor([1.0, 1.0, 1.0, 1.0, 0.0], dtype=dtype, device=device)
-            return (color_and_depth * weights).sum()
+            # color: [R, G, B, A], depth: scalar per ray
+            return color.sum()
 
         torch.autograd.gradcheck(
             l2_loss,
@@ -113,13 +112,12 @@ class GradCheckTest(parameterized.TestCase):
         fixed_random = 0.5
 
         def l2_loss_w_dist(means, scales, quats, densities, feats):
-            color_and_depth, extras = method.trace_rays(
+            color, depth, extras = method.trace_rays(
                 means, scales, quats, densities, feats, rayo, rayd,
                 fixed_random, 100)
-            # color_and_depth: [R, G, B, A, depth], distortion_loss in extras
-            weights = torch.tensor([1.0, 1.0, 1.0, 1.0, 0.0], dtype=dtype, device=device)
+            # color: [R, G, B, A], depth: scalar per ray, distortion_loss in extras
             distortion_loss = extras['distortion_loss']
-            return (color_and_depth * weights).sum() + 10.0 * distortion_loss.sum()
+            return color.sum() + 10.0 * distortion_loss.sum()
 
         torch.autograd.gradcheck(
             l2_loss_w_dist,
