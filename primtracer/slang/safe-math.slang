@@ -13,6 +13,13 @@
 // limitations under the License.
 
 // =============================================================================
+// Global constants
+// =============================================================================
+
+// Number of triangles per ellipsoid primitive (entry/exit faces)
+static const uint tri_per_g = 2;
+
+// =============================================================================
 // Integer utilities
 // =============================================================================
 
@@ -24,7 +31,6 @@ uint mod(uint a, uint b) {
 // Constants and basic utilities
 // =============================================================================
 
-// Found experimentally idk where it happens in slang
 static const float TINY_VAL = 1.0754944e-20;
 static const float MIN_VAL = -1e+20;
 static const float MAX_VAL = 1e+20;

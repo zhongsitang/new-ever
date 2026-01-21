@@ -13,8 +13,6 @@
 // limitations under the License.
 
 #define epsilon 1e-20
-static const float TINY_VAL = 1.0754944e-20;
-#define tri_per_g 2
 import spline_machine;
 import safe_math;
 

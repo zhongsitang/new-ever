@@ -17,7 +17,6 @@
 // Implements the volume rendering equation with piecewise-constant density
 // =============================================================================
 
-#define EPS 1e-18
 import safe_math;
 #define PRE_MULTI 1000
 #define LADDER_P -0.1

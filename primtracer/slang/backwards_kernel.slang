@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#define tri_per_g 2
 import spline_machine;
 import ellipsoid;
 import safe_math;

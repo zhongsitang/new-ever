@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#define RT_EPS 0
-#define tri_per_g 2
 #define LOG_CUTOFF 5.54
 #define BUFFER_SIZE 16
 import spline_machine;
