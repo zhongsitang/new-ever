@@ -76,12 +76,17 @@ pybind11_add_module(ellipsoid_splinetracer MODULE
   ${TRACER_DIR}/backward_kernel.h
   ${TRACER_DIR}/spline_tracer_autograd.cpp
   ${TRACER_DIR}/spline_tracer_autograd.h
+  ${TRACER_DIR}/sh_kernel.cu
+  ${TRACER_DIR}/sh_kernel.h
+  ${TRACER_DIR}/sh_autograd.cpp
+  ${TRACER_DIR}/sh_autograd.h
 )
 
 set_source_files_properties(
   ${TRACER_DIR}/create_aabbs.cu
   ${TRACER_DIR}/initialize_density.cu
   ${TRACER_DIR}/backward_kernel.cu
+  ${TRACER_DIR}/sh_kernel.cu
   PROPERTIES LANGUAGE CUDA
 )
 
@@ -114,6 +119,15 @@ slang_cuda_embed(
   SLANG_FILE   ${SLANG_DIR}/backwards_kernel.slang
   OUT_DIR      ${CUDA_OUT_DIR}
   INCLUDE_DIRS ${MAIN_SLANG_DIR} ${SLANG_DIR}
+)
+
+# Compile SH kernel from Slang to CUDA
+slang_cuda_embed(
+  TARGET       ellipsoid_splinetracer
+  NAME         sh_kernel
+  SLANG_FILE   ${MAIN_SLANG_DIR}/sh_kernel.slang
+  OUT_DIR      ${CUDA_OUT_DIR}
+  INCLUDE_DIRS ${MAIN_SLANG_DIR}
 )
 
 # -----------------------------------------------------------------------------

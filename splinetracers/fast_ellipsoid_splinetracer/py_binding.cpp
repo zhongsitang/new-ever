@@ -21,6 +21,7 @@
 
 #include "exception.h"
 #include "spline_tracer_autograd.h"
+#include "sh_autograd.h"
 
 namespace py = pybind11;
 using namespace pybind11::literals;
@@ -85,4 +86,8 @@ PYBIND11_MODULE(ellipsoid_splinetracer, m) {
         "ctx"_a, "mean"_a, "scale"_a, "quat"_a, "density"_a, "color"_a,
         "rayo"_a, "rayd"_a, "tmin"_a = 0.0f, "tmax"_a = 1000.0f,
         "max_prim_size"_a = 3.0f, "wcts"_a = torch::Tensor(), "max_iters"_a = 500);
+
+  m.def("eval_sh", &eval_sh,
+        "Evaluate spherical harmonics with automatic differentiation support",
+        "means"_a, "features"_a, "ray_origin"_a);
 }
