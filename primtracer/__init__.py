@@ -27,7 +27,7 @@ from torch.autograd import Function
 
 from . import primtracer_core as core
 from . import backwards_kernel
-from . import sh_kernel
+from . import sh
 
 # Global OptiX context (initialized once per process)
 _optix_context = core.OptixContext(torch.device("cuda:0"))
@@ -332,7 +332,7 @@ class SHEvaluator(Function):
         ctx.sh_degree = sh_degree
         num_prims = means.shape[0]
 
-        sh_kernel.sh_kernel(
+        sh.sh_kernel(
             (block_size, 1, 1),
             (num_prims // block_size + 1, 1, 1),
             means,
@@ -353,7 +353,7 @@ class SHEvaluator(Function):
         grad_sh_coeffs = torch.zeros_like(sh_coeffs)
         grad_color = grad_color.contiguous()
 
-        sh_kernel.bw_sh_kernel(
+        sh.bw_sh_kernel(
             (block_size, 1, 1),
             ((num_prims + block_size - 1) // block_size, 1, 1),
             means,

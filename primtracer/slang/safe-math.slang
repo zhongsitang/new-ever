@@ -12,6 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// =============================================================================
+// Integer utilities
+// =============================================================================
+
+uint mod(uint a, uint b) {
+    __intrinsic_asm "$0 % $1";
+}
+
+// =============================================================================
+// Constants and basic utilities
+// =============================================================================
+
 // Found experimentally idk where it happens in slang
 static const float TINY_VAL = 1.0754944e-20;
 static const float MIN_VAL = -1e+20;

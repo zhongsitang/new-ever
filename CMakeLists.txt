@@ -88,14 +88,6 @@ slang_ptx_embed(
   NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS} ${OptiX_ROOT}/include
 )
 
-slang_ptx_embed(
-  TARGET       primtracer_core
-  NAME         fast_shaders_ptx
-  SLANG_FILE   ${SLANG_DIR}/fast_shaders.slang
-  INCLUDE_DIRS ${SLANG_DIR}
-  NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS} ${OptiX_ROOT}/include
-)
-
 # -----------------------------------------------------------------------------
 # Slang PyTorch modules
 # -----------------------------------------------------------------------------
@@ -106,12 +98,12 @@ slang_add_py_module(backwards_kernel
 )
 target_link_libraries(backwards_kernel PRIVATE Torch::Torch)
 
-slang_add_py_module(sh_kernel
-  SLANG_FILES  ${SLANG_DIR}/sh_kernel.slang
+slang_add_py_module(sh
+  SLANG_FILES  ${SLANG_DIR}/sh.slang
   INCLUDE_DIRS ${SLANG_DIR}
   NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS}
 )
-target_link_libraries(sh_kernel PRIVATE Torch::Torch)
+target_link_libraries(sh PRIVATE Torch::Torch)
 
 # -----------------------------------------------------------------------------
 # Linking and compile options
