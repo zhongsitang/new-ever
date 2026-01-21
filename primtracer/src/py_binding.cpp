@@ -220,12 +220,12 @@ public:
                      const PrimitivesWrapper& prims,
                      bool enable_backward)
         : device_(device),
-          tracer_(ctx.context, device.index(), prims.data, enable_backward),
+          tracer_(ctx.context, device.index(), prims.data),
           num_prims_(prims.data.num_prims),
           sh_degree_(sqrt(prims.data.feature_size) - 1) {}
 
     void update_primitives(const PrimitivesWrapper& prims) {
-        tracer_.reset_features(prims.data);
+        tracer_.update_features(prims.data);
     }
 
     py::dict trace_rays(const AccelStructWrapper& accel,
