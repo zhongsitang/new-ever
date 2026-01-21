@@ -84,14 +84,6 @@ slang_ptx_embed(
   NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS} ${OptiX_ROOT}/include
 )
 
-slang_ptx_embed(
-  TARGET       ellipsoid_splinetracer
-  NAME         fast_shaders_ptx
-  SLANG_FILE   ${SLANG_DIR}/fast_shaders.slang
-  INCLUDE_DIRS ${SLANG_DIR}
-  NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS} ${OptiX_ROOT}/include
-)
-
 # -----------------------------------------------------------------------------
 # Slang PyTorch modules
 # -----------------------------------------------------------------------------

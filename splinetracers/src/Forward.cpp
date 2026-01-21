@@ -33,9 +33,6 @@ Forward::Forward(OptixDeviceContext context, int8_t device, const Primitives& mo
 {
     CUDA_CHECK(cudaSetDevice(device));
 
-    // Select PTX based on mode
-    const char* ptx = enable_backward ? shaders_ptx : fast_shaders_ptx;
-
     // Setup pipeline compile options
     pipeline_options_.usesMotionBlur = false;
     pipeline_options_.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
@@ -45,7 +42,7 @@ Forward::Forward(OptixDeviceContext context, int8_t device, const Primitives& mo
     pipeline_options_.pipelineLaunchParamsVariableName = "SLANG_globalParams";
     pipeline_options_.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_CUSTOM;
 
-    create_module(ptx);
+    create_module(shaders_ptx);
     create_program_groups();
     create_pipeline();
     create_sbt();

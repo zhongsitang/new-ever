@@ -28,9 +28,8 @@
 
 using uint = uint32_t;
 
-// Embedded PTX code (generated headers)
+// Embedded PTX code (generated header)
 #include "shaders_ptx.h"
-#include "fast_shaders_ptx.h"
 
 // SBT record types
 struct RayGenData {};
