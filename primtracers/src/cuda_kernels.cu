@@ -14,6 +14,7 @@
 
 #include "cuda_kernels.h"
 #include "optix_error.h"
+#include "glm/glm.hpp"
 #include "volume_types.h"
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -22,119 +23,13 @@
 #include <stdexcept>
 
 // =============================================================================
-// Math Utilities (replacing glm)
-// =============================================================================
-
-// float3 operations
-__device__ __host__ inline float3 operator+(const float3& a, const float3& b) {
-    return make_float3(a.x + b.x, a.y + b.y, a.z + b.z);
-}
-
-__device__ __host__ inline float3 operator-(const float3& a, const float3& b) {
-    return make_float3(a.x - b.x, a.y - b.y, a.z - b.z);
-}
-
-__device__ __host__ inline float3 operator*(const float3& a, float s) {
-    return make_float3(a.x * s, a.y * s, a.z * s);
-}
-
-__device__ __host__ inline float3 operator*(float s, const float3& a) {
-    return make_float3(a.x * s, a.y * s, a.z * s);
-}
-
-__device__ __host__ inline float3 operator/(const float3& a, const float3& b) {
-    return make_float3(a.x / b.x, a.y / b.y, a.z / b.z);
-}
-
-__device__ __host__ inline float dot3(const float3& a, const float3& b) {
-    return a.x * b.x + a.y * b.y + a.z * b.z;
-}
-
-__device__ __host__ inline float length3(const float3& v) {
-    return sqrtf(dot3(v, v));
-}
-
-__device__ __host__ inline float3 normalize3(const float3& v) {
-    float inv_len = rsqrtf(dot3(v, v));
-    return make_float3(v.x * inv_len, v.y * inv_len, v.z * inv_len);
-}
-
-// float4 operations
-__device__ __host__ inline float dot4(const float4& a, const float4& b) {
-    return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
-}
-
-__device__ __host__ inline float4 normalize4(const float4& v) {
-    float inv_len = rsqrtf(dot4(v, v));
-    return make_float4(v.x * inv_len, v.y * inv_len, v.z * inv_len, v.w * inv_len);
-}
-
-// 3x3 Matrix stored in column-major order (like glm)
-// mat3[col][row] -> m[col * 3 + row]
-struct Mat3 {
-    float m[9];
-
-    __device__ __host__ Mat3() {}
-
-    // Diagonal matrix constructor
-    __device__ __host__ Mat3(float diagonal) {
-        m[0] = diagonal; m[1] = 0.0f;     m[2] = 0.0f;      // col 0
-        m[3] = 0.0f;     m[4] = diagonal; m[5] = 0.0f;      // col 1
-        m[6] = 0.0f;     m[7] = 0.0f;     m[8] = diagonal;  // col 2
-    }
-
-    // Construct from 9 values in column-major order (same as glm brace initialization)
-    __device__ __host__ Mat3(
-        float m00, float m10, float m20,  // column 0
-        float m01, float m11, float m21,  // column 1
-        float m02, float m12, float m22   // column 2
-    ) {
-        m[0] = m00; m[1] = m10; m[2] = m20;  // col 0
-        m[3] = m01; m[4] = m11; m[5] = m21;  // col 1
-        m[6] = m02; m[7] = m12; m[8] = m22;  // col 2
-    }
-
-    // Access element at [col][row]
-    __device__ __host__ float& at(int col, int row) {
-        return m[col * 3 + row];
-    }
-
-    __device__ __host__ float at(int col, int row) const {
-        return m[col * 3 + row];
-    }
-};
-
-// Matrix-vector multiplication: M * v
-__device__ __host__ inline float3 mat3_mul_vec3(const Mat3& M, const float3& v) {
-    return make_float3(
-        M.at(0, 0) * v.x + M.at(1, 0) * v.y + M.at(2, 0) * v.z,
-        M.at(0, 1) * v.x + M.at(1, 1) * v.y + M.at(2, 1) * v.z,
-        M.at(0, 2) * v.x + M.at(1, 2) * v.y + M.at(2, 2) * v.z
-    );
-}
-
-// Matrix multiplication: A * B
-__device__ __host__ inline Mat3 mat3_mul_mat3(const Mat3& A, const Mat3& B) {
-    Mat3 result;
-    for (int col = 0; col < 3; col++) {
-        for (int row = 0; row < 3; row++) {
-            result.at(col, row) =
-                A.at(0, row) * B.at(col, 0) +
-                A.at(1, row) * B.at(col, 1) +
-                A.at(2, row) * B.at(col, 2);
-        }
-    }
-    return result;
-}
-
-// =============================================================================
 // Primitive Bounding Box Construction
 // =============================================================================
 
 __global__ void compute_primitive_bounds_kernel(
-    const float3 *means,
-    const float3 *scales,
-    const float4 *quats,
+    const glm::vec3 *means,
+    const glm::vec3 *scales,
+    const glm::vec4 *quats,
     const float *densities,
     const size_t num_prims,
     OptixAabb *aabbs)
@@ -143,45 +38,43 @@ __global__ void compute_primitive_bounds_kernel(
     if (i < 0 || i >= num_prims)
         return;
 
-    const float4 quat = normalize4(quats[i]);
-    const float3 center = means[i];
-    const float3 size = scales[i];
+    const glm::vec4 quat = glm::normalize(quats[i]);
+    const glm::vec3 center = means[i];
+    const glm::vec3 size = scales[i];
 
     const float r = quat.x;
     const float x = quat.y;
     const float y = quat.z;
     const float z = quat.w;
 
-    // Quaternion to rotation matrix transpose (Rt)
-    // Stored in column-major order like glm
-    const Mat3 Rt(
-        1.0f - 2.0f * (y * y + z * z), 2.0f * (x * y + r * z), 2.0f * (x * z - r * y),  // col 0
-        2.0f * (x * y - r * z), 1.0f - 2.0f * (x * x + z * z), 2.0f * (y * z + r * x),  // col 1
-        2.0f * (x * z + r * y), 2.0f * (y * z - r * x), 1.0f - 2.0f * (x * x + y * y)   // col 2
-    );
+    const glm::mat3 Rt = {
+        1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - r * z), 2.0 * (x * z + r * y),
+        2.0 * (x * y + r * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - r * x),
+        2.0 * (x * z - r * y), 2.0 * (y * z + r * x), 1.0 - 2.0 * (x * x + y * y)
+    };
 
-    // Scale matrix
-    Mat3 S(1.0f);
-    S.at(0, 0) = size.x;
-    S.at(1, 1) = size.y;
-    S.at(2, 2) = size.z;
+    float s = 1.0;
+    glm::mat3 S = glm::mat3(1.0);
+    S[0][0] = s * size.x;
+    S[1][1] = s * size.y;
+    S[2][2] = s * size.z;
 
-    // M = S * Rt (3x3 part of the transformation)
-    Mat3 M = mat3_mul_mat3(S, Rt);
+    glm::mat4 M = glm::mat4(S * Rt);
+    M[0][3] = center.x;
+    M[1][3] = center.y;
+    M[2][3] = center.z;
 
-    // Compute column norms of M for AABB extents
-    // In glm with column-major, M[col][row], so M[0][0], M[0][1], M[0][2] is column 0
-    float col0_norm = sqrtf(M.at(0, 0) * M.at(0, 0) + M.at(0, 1) * M.at(0, 1) + M.at(0, 2) * M.at(0, 2));
-    float col1_norm = sqrtf(M.at(1, 0) * M.at(1, 0) + M.at(1, 1) * M.at(1, 1) + M.at(1, 2) * M.at(1, 2));
-    float col2_norm = sqrtf(M.at(2, 0) * M.at(2, 0) + M.at(2, 1) * M.at(2, 1) + M.at(2, 2) * M.at(2, 2));
+    float row0_norm = sqrt(M[0][0]*M[0][0] + M[0][1]*M[0][1] + M[0][2]*M[0][2]);
+    float row1_norm = sqrt(M[1][0]*M[1][0] + M[1][1]*M[1][1] + M[1][2]*M[1][2]);
+    float row2_norm = sqrt(M[2][0]*M[2][0] + M[2][1]*M[2][1] + M[2][2]*M[2][2]);
 
     OptixAabb aabb;
-    aabb.minX = center.x - col0_norm;
-    aabb.minY = center.y - col1_norm;
-    aabb.minZ = center.z - col2_norm;
-    aabb.maxX = center.x + col0_norm;
-    aabb.maxY = center.y + col1_norm;
-    aabb.maxZ = center.z + col2_norm;
+    aabb.minX = center.x - row0_norm;
+    aabb.minY = center.y - row1_norm;
+    aabb.minZ = center.z - row2_norm;
+    aabb.maxX = center.x + row0_norm;
+    aabb.maxY = center.y + row1_norm;
+    aabb.maxZ = center.z + row2_norm;
     aabbs[i] = aabb;
 }
 
@@ -195,9 +88,9 @@ void build_primitive_aabbs(Primitives &prims) {
                               prims.num_prims * sizeof(OptixAabb)));
     }
     compute_primitive_bounds_kernel<<<(prims.num_prims + block_size - 1) / block_size, block_size>>>(
-        prims.means,
-        prims.scales,
-        prims.quats,
+        (glm::vec3 *)prims.means,
+        (glm::vec3 *)prims.scales,
+        (glm::vec4 *)prims.quats,
         prims.densities,
         prims.num_prims,
         prims.aabbs);
@@ -212,25 +105,24 @@ void build_primitive_aabbs(Primitives &prims) {
 
 __device__ static const float SH_C0 = 0.28209479177387814f;
 
-__device__ float3 transform_to_ellipsoid_space(
-    const float3 center,
-    const float4 quat,
-    const float3 size,
-    const float3 rayo)
+__device__ glm::vec3 transform_to_ellipsoid_space(
+    const glm::vec3 center,
+    const glm::vec4 quat,
+    const glm::vec3 size,
+    const glm::vec3 rayo)
 {
     const float r = quat.x;
     const float x = quat.y;
     const float y = quat.z;
     const float z = quat.w;
 
-    // Quaternion to rotation matrix transpose (Rt)
-    const Mat3 Rt(
-        1.0f - 2.0f * (y * y + z * z), 2.0f * (x * y + r * z), 2.0f * (x * z - r * y),  // col 0
-        2.0f * (x * y - r * z), 1.0f - 2.0f * (x * x + z * z), 2.0f * (y * z + r * x),  // col 1
-        2.0f * (x * z + r * y), 2.0f * (y * z - r * x), 1.0f - 2.0f * (x * x + y * y)   // col 2
-    );
+    const glm::mat3 Rt = {
+        1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - r * z), 2.0 * (x * z + r * y),
+        2.0 * (x * y + r * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - r * x),
+        2.0 * (x * z - r * y), 2.0 * (y * z + r * x), 1.0 - 2.0 * (x * x + y * y)
+    };
 
-    const float3 Trayo = mat3_mul_vec3(Rt, rayo - center) / size;
+    const glm::vec3 Trayo = (Rt * (rayo - center)) / size;
     return Trayo;
 }
 
@@ -238,7 +130,7 @@ __global__ void find_enclosing_primitives_kernel(
     const OptixAabb *aabbs,
     const size_t num_prims,
     const float tmin,
-    const float3 *rayos,
+    const glm::vec3 *rayos,
     int *touch_indices,
     int *touch_count)
 {
@@ -247,9 +139,9 @@ __global__ void find_enclosing_primitives_kernel(
         return;
 
     OptixAabb aabb = aabbs[i];
-    const float3 rayo = rayos[0];
+    const glm::vec3 rayo = rayos[0];
 
-    // Jim Arvo, Graphics Gems - point to AABB squared distance
+    // Jim Arvo, Graphics Gems.
     float dmin = 0;
     if (rayo.x < aabb.minX)
         dmin += SQR(rayo.x - aabb.minX);
@@ -273,16 +165,16 @@ __global__ void find_enclosing_primitives_kernel(
 }
 
 __global__ void accumulate_initial_samples_kernel(
-    const float3 *means,
-    const float3 *scales,
-    const float4 *quats,
+    const glm::vec3 *means,
+    const glm::vec3 *scales,
+    const glm::vec4 *quats,
     const float *densities,
     const float *features,
     const size_t num_prims,
     const size_t num_rays,
     const float tmin,
-    const float3 *rayos,
-    const float3 *rayds,
+    const glm::vec3 *rayos,
+    const glm::vec3 *rayds,
     float *initial_drgb,
     int *touch_indices,
     int *touch_count)
@@ -293,23 +185,23 @@ __global__ void accumulate_initial_samples_kernel(
     if (i >= *touch_count) return;
     if (j >= num_rays) return;
 
-    float3 rayo = rayos[j] + tmin * normalize3(rayds[j]);
+    glm::vec3 rayo = rayos[j] + tmin * glm::normalize(rayds[j]);
 
     const int prim_ind = touch_indices[i];
-    const float4 quat = normalize4(quats[prim_ind]);
-    const float3 center = means[prim_ind];
-    const float3 size = scales[prim_ind];
+    const glm::vec4 quat = glm::normalize(quats[prim_ind]);
+    const glm::vec3 center = means[prim_ind];
+    const glm::vec3 size = scales[prim_ind];
 
-    const float3 Trayo = transform_to_ellipsoid_space(center, quat, size, rayo);
-    const float dist = Trayo.x * Trayo.x + Trayo.y * Trayo.y + Trayo.z * Trayo.z;
+    const glm::vec3 Trayo = transform_to_ellipsoid_space(center, quat, size, rayo);
+    const float dist = Trayo.x*Trayo.x + Trayo.y*Trayo.y + Trayo.z*Trayo.z;
 
     if (dist <= 1) {
         const float density = densities[prim_ind];
-        const float3 color = make_float3(
-            features[prim_ind * 3 + 0] * SH_C0 + 0.5f,
-            features[prim_ind * 3 + 1] * SH_C0 + 0.5f,
-            features[prim_ind * 3 + 2] * SH_C0 + 0.5f
-        );
+        const glm::vec3 color = {
+            features[prim_ind * 3 + 0] * SH_C0 + 0.5,
+            features[prim_ind * 3 + 1] * SH_C0 + 0.5,
+            features[prim_ind * 3 + 2] * SH_C0 + 0.5,
+        };
         atomicAdd(initial_drgb + 4 * j + 0, density);
         atomicAdd(initial_drgb + 4 * j + 1, density * color.x);
         atomicAdd(initial_drgb + 4 * j + 2, density * color.y);
@@ -341,7 +233,7 @@ void init_ray_start_samples(Params *params, OptixAabb *aabbs, int *d_touch_count
         aabbs,
         num_prims,
         params->tmin,
-        (float3 *)(params->ray_origins.data),
+        (glm::vec3 *)(params->ray_origins.data),
         d_touch_inds,
         d_touch_count);
 
@@ -357,16 +249,16 @@ void init_ray_start_samples(Params *params, OptixAabb *aabbs, int *d_touch_count
         dim3 init_block_dim(ray_block_size, second_block_size, 1);
 
         accumulate_initial_samples_kernel<<<init_grid_dim, init_block_dim>>>(
-            (float3 *)(params->means.data),
-            (float3 *)(params->scales.data),
-            (float4 *)(params->quats.data),
+            (glm::vec3 *)(params->means.data),
+            (glm::vec3 *)(params->scales.data),
+            (glm::vec4 *)(params->quats.data),
             (float *)(params->densities.data),
             (float *)(params->features.data),
             num_prims,
             num_rays,
             params->tmin,
-            (float3 *)(params->ray_origins.data),
-            (float3 *)(params->ray_directions.data),
+            (glm::vec3 *)(params->ray_origins.data),
+            (glm::vec3 *)(params->ray_directions.data),
             (float *)(params->initial_drgb.data),
             d_touch_inds,
             d_touch_count);
@@ -381,45 +273,44 @@ void init_ray_start_samples(Params *params, OptixAabb *aabbs, int *d_touch_count
 }
 
 __global__ void accumulate_initial_samples_single_kernel(
-    const float3 *means,
-    const float3 *scales,
-    const float4 *quats,
+    const glm::vec3 *means,
+    const glm::vec3 *scales,
+    const glm::vec4 *quats,
     const float *densities,
     const float *features,
     const size_t num_prims,
-    const float3 *rayo,
+    const glm::vec3 *rayo,
     float *initial_drgb)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < 0 || i >= num_prims)
         return;
 
-    const float4 quat = normalize4(quats[i]);
+    const glm::vec4 quat = glm::normalize(quats[i]);
     const float density = densities[i];
-    const float3 center = means[i];
-    const float3 size = scales[i];
+    const glm::vec3 center = means[i];
+    const glm::vec3 size = scales[i];
 
     const float r = quat.x;
     const float x = quat.y;
     const float y = quat.z;
     const float z = quat.w;
 
-    // Quaternion to rotation matrix transpose (Rt)
-    const Mat3 Rt(
-        1.0f - 2.0f * (y * y + z * z), 2.0f * (x * y + r * z), 2.0f * (x * z - r * y),  // col 0
-        2.0f * (x * y - r * z), 1.0f - 2.0f * (x * x + z * z), 2.0f * (y * z + r * x),  // col 1
-        2.0f * (x * z + r * y), 2.0f * (y * z - r * x), 1.0f - 2.0f * (x * x + y * y)   // col 2
-    );
+    const glm::mat3 Rt = {
+        1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - r * z), 2.0 * (x * z + r * y),
+        2.0 * (x * y + r * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - r * x),
+        2.0 * (x * z - r * y), 2.0 * (y * z + r * x), 1.0 - 2.0 * (x * x + y * y)
+    };
 
-    const float3 Trayo = mat3_mul_vec3(Rt, rayo[0] - center) / size;
-    float dist = Trayo.x * Trayo.x + Trayo.y * Trayo.y + Trayo.z * Trayo.z;
+    const glm::vec3 Trayo = (Rt * (rayo[0] - center)) / size;
+    float dist = Trayo.x*Trayo.x + Trayo.y*Trayo.y + Trayo.z*Trayo.z;
 
     if (dist <= 1) {
-        float3 color = make_float3(
-            features[i * 3 + 0] * SH_C0 + 0.5f,
-            features[i * 3 + 1] * SH_C0 + 0.5f,
-            features[i * 3 + 2] * SH_C0 + 0.5f
-        );
+        glm::vec3 color = {
+            features[i * 3 + 0] * SH_C0 + 0.5,
+            features[i * 3 + 1] * SH_C0 + 0.5,
+            features[i * 3 + 2] * SH_C0 + 0.5,
+        };
         atomicAdd(initial_drgb + 0, density);
         atomicAdd(initial_drgb + 1, density * color.x);
         atomicAdd(initial_drgb + 2, density * color.y);
@@ -432,13 +323,13 @@ void init_ray_start_samples_single(Params *params) {
     int num_prims = params->means.size;
 
     accumulate_initial_samples_single_kernel<<<(num_prims + block_size - 1) / block_size, block_size>>>(
-        (float3 *)(params->means.data),
-        (float3 *)(params->scales.data),
-        (float4 *)(params->quats.data),
+        (glm::vec3 *)(params->means.data),
+        (glm::vec3 *)(params->scales.data),
+        (glm::vec4 *)(params->quats.data),
         (float *)(params->densities.data),
         (float *)(params->features.data),
         num_prims,
-        (float3 *)(params->ray_origins.data),
+        (glm::vec3 *)(params->ray_origins.data),
         (float *)(params->initial_drgb.data));
 
     CUDA_SYNC_CHECK();

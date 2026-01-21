@@ -26,6 +26,7 @@ cuda-toolkit = "12.9.*"
 shader-slang = ">=2025.18,<2026"
 
 # c++ libraries
+glm = ">=1.0.1,<2"
 unordered_dense = ">=4.8.1,<5"
 
 # python packages
