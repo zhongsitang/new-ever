@@ -1,5 +1,5 @@
 # =============================================================================
-# Ever - Primitive Volume Rendering Library (primtracers)
+# Ever - Primitive Volume Rendering Library (primtracer)
 # =============================================================================
 # Modern CMake (3.28+) configuration.
 #
@@ -13,7 +13,7 @@
 
 cmake_minimum_required(VERSION 3.28 FATAL_ERROR)
 
-project(primtracers
+project(primtracer
   VERSION 1.0.0
   DESCRIPTION "Primitive-based volume rendering with OptiX (ellipsoid, etc.)"
   LANGUAGES C CXX CUDA
@@ -32,8 +32,8 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
 endif()
 
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/primtracers")
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/primtracers")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/primtracer")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/primtracer")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 # -----------------------------------------------------------------------------
@@ -52,8 +52,8 @@ include(SlangHelper)
 # -----------------------------------------------------------------------------
 # Project paths
 # -----------------------------------------------------------------------------
-set(TRACER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/primtracers/src")
-set(SLANG_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/primtracers/slang")
+set(TRACER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/primtracer/src")
+set(SLANG_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/primtracer/slang")
 
 # -----------------------------------------------------------------------------
 # Main pybind11 extension module
