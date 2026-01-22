@@ -47,7 +47,7 @@ struct Params {
     StructuredBuffer<float> depth_out;                 // Rendered depth output
     StructuredBuffer<uint> iters;                      // Iteration count per ray
     StructuredBuffer<uint> last_prim;                  // Last primitive hit
-    StructuredBuffer<uint> primitive_hit_count;        // Hit count per primitive
+    StructuredBuffer<uint> prim_hits;        // Hit count per primitive
     StructuredBuffer<float4> last_delta_contrib;       // Last sample delta contribution
     StructuredBuffer<IntegratorState> last_state;          // Final volume state per ray
     StructuredBuffer<int> hit_collection;              // Collected hit IDs for backward pass
@@ -95,7 +95,7 @@ public:
         float max_prim_size = 3.0f,
         uint* iters = nullptr,
         uint* last_prim = nullptr,
-        uint* primitive_hit_count = nullptr,
+        uint* prim_hits = nullptr,
         float4* last_delta_contrib = nullptr,
         IntegratorState* last_state = nullptr,
         int* hit_collection = nullptr,

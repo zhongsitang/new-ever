@@ -80,7 +80,7 @@ RWStructuredBuffer<float4>      image;              // Rendered RGBA output
 RWStructuredBuffer<float>       depth_out;          // Rendered depth output
 RWStructuredBuffer<uint>        iters;              // Iteration count per ray
 RWStructuredBuffer<uint>        last_prim;          // Last primitive hit (for debugging)
-RWStructuredBuffer<uint>        primitive_hit_count; // Hit count per primitive
+RWStructuredBuffer<uint>        prim_hits; // Hit count per primitive
 RWStructuredBuffer<float4>      last_delta_contrib; // Last sample delta contribution
 RWStructuredBuffer<IntegratorState> last_state;         // Final volume state per ray
 RWStructuredBuffer<int>         hit_collection;     // Collected hit IDs for backward pass
@@ -316,7 +316,7 @@ void render_volume()
             state = update(state, sample, tmin, ray_tmax, max_prim_size);
 
             // Record hit for backward pass
-            primitive_hit_count[hit_id / HITS_PER_PRIMITIVE]++;
+            prim_hits[hit_id / HITS_PER_PRIMITIVE]++;
             hit_collection[idx.x + iter * dim.x] = hit_id;
             iter++;
 

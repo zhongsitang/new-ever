@@ -153,7 +153,7 @@ public:
   torch::Tensor states;              // Final volume state per ray
   torch::Tensor delta_contribs;      // Last sample delta contribution
   torch::Tensor last_prims;          // Last primitive hit per ray
-  torch::Tensor primitive_hit_count; // Hit count per primitive
+  torch::Tensor prim_hits; // Hit count per primitive
   torch::Tensor iters;               // Iteration count per ray
   size_t num_prims;
   size_t num_rays;
@@ -171,7 +171,7 @@ public:
   }
 
   uint *iters_data_ptr() { return reinterpret_cast<uint *>(iters.data_ptr()); }
-  uint *primitive_hit_count_data_ptr() { return reinterpret_cast<uint *>(primitive_hit_count.data_ptr()); }
+  uint *prim_hits_data_ptr() { return reinterpret_cast<uint *>(prim_hits.data_ptr()); }
   uint *last_prims_data_ptr() { return reinterpret_cast<uint *>(last_prims.data_ptr()); }
   float4 *delta_contribs_data_ptr() {
     return reinterpret_cast<float4 *>(delta_contribs.data_ptr());
@@ -185,7 +185,7 @@ public:
   torch::Tensor get_delta_contribs() { return delta_contribs; }
   torch::Tensor get_last_prims() { return last_prims; }
   torch::Tensor get_iters() { return iters; }
-  torch::Tensor get_primitive_hit_count() { return primitive_hit_count; }
+  torch::Tensor get_prim_hits() { return prim_hits; }
 
   void allocate(size_t num_rays) {
     states = torch::zeros({(long)num_rays, (long)num_float_per_state},
@@ -194,7 +194,7 @@ public:
                           torch::device(device).dtype(torch::kFloat32));
     last_prims = torch::zeros({(long)num_rays},
                          torch::device(device).dtype(torch::kInt32));
-    primitive_hit_count = torch::zeros({(long)num_prims},
+    prim_hits = torch::zeros({(long)num_prims},
                          torch::device(device).dtype(torch::kInt32));
     iters = torch::zeros({(long)num_rays},
                          torch::device(device).dtype(torch::kInt32));
@@ -262,7 +262,7 @@ public:
                        max_iters, max_prim_size,
                        saved_for_backward.iters_data_ptr(),
                        saved_for_backward.last_prims_data_ptr(),
-                       saved_for_backward.primitive_hit_count_data_ptr(),
+                       saved_for_backward.prim_hits_data_ptr(),
                        saved_for_backward.delta_contribs_data_ptr(),
                        saved_for_backward.states_data_ptr(),
                        reinterpret_cast<int *>(hit_collection.data_ptr()),
@@ -284,7 +284,7 @@ PYBIND11_MODULE(ellipsoid_tracer, m) {
   py::class_<fesSavedForBackward>(m, "SavedForBackward")
       .def_property_readonly("states", &fesSavedForBackward::get_states)
       .def_property_readonly("delta_contribs", &fesSavedForBackward::get_delta_contribs)
-      .def_property_readonly("primitive_hit_count", &fesSavedForBackward::get_primitive_hit_count)
+      .def_property_readonly("prim_hits", &fesSavedForBackward::get_prim_hits)
       .def_property_readonly("iters", &fesSavedForBackward::get_iters)
       .def_property_readonly("last_prims", &fesSavedForBackward::get_last_prims);
   py::class_<fesPyPrimitives>(m, "Primitives")

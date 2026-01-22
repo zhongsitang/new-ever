@@ -86,7 +86,7 @@ class PrimTracer(Function):
             distortion_loss=distortion_loss,
             hit_collection=hit_collection,
             iters=ctx.saved.iters,
-            primitive_hit_count=ctx.saved.primitive_hit_count,
+            prim_hits=ctx.saved.prim_hits,
             saved=ctx.saved,
         )
 
@@ -118,7 +118,7 @@ class PrimTracer(Function):
         dL_dfeatures = torch.zeros_like(features)
         dL_drayo = torch.zeros((num_rays, 3), dtype=torch.float32, device=device)
         dL_drayd = torch.zeros((num_rays, 3), dtype=torch.float32, device=device)
-        primitive_hit_count = torch.zeros((num_prims), dtype=torch.int32, device=device)
+        prim_hits = torch.zeros((num_prims), dtype=torch.int32, device=device)
         dL_dinitial_contrib = torch.zeros((num_rays, 4), dtype=torch.float32, device=device)
 
         # Handle distortion_loss gradient from extras
@@ -158,7 +158,7 @@ class PrimTracer(Function):
                 dual_model,
                 initial_contrib,
                 dL_dinitial_contrib,
-                primitive_hit_count,
+                prim_hits,
                 grad_combined.contiguous(),
                 ctx.tmin,
                 tmax,
@@ -182,7 +182,7 @@ class PrimTracer(Function):
                     initial_contrib,
                     initial_prim_indices,
                     dL_dinitial_contrib,
-                    primitive_hit_count,
+                    prim_hits,
                     ctx.tmin,
                 )
 
@@ -273,7 +273,7 @@ def trace_rays(
                   loss for regularization.
                 - 'hit_collection': torch.Tensor, primitive hit IDs for backward pass.
                 - 'iters': torch.Tensor, number of iterations per ray.
-                - 'primitive_hit_count': torch.Tensor, hit count per primitive.
+                - 'prim_hits': torch.Tensor, hit count per primitive.
                 - 'saved': internal state object for backward pass.
     """
     num_rays = rayo.shape[0]

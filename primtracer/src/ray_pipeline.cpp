@@ -193,7 +193,7 @@ void RayPipeline::trace_rays(
     float max_prim_size,
     uint* iters,
     uint* last_prim,
-    uint* primitive_hit_count,
+    uint* prim_hits,
     float4* last_delta_contrib,
     IntegratorState* last_state,
     int* hit_collection,
@@ -210,7 +210,7 @@ void RayPipeline::trace_rays(
     params_.hit_collection = {hit_collection, num_rays * max_iters};
     params_.iters = {iters, num_rays};
     params_.last_prim = {last_prim, num_rays};
-    params_.primitive_hit_count = {primitive_hit_count, num_prims};
+    params_.prim_hits = {prim_hits, num_prims};
     params_.sh_degree = sh_degree;
     params_.max_prim_size = max_prim_size;
     params_.max_iters = max_iters;

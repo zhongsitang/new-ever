@@ -271,7 +271,7 @@ void backwards_kernel(
     DualModel model,
     TensorView<float> initial_contrib,
     TensorView<float> dL_dinitial_contrib,
-    TensorView<int32_t> primitive_hit_count,
+    TensorView<int32_t> prim_hits,
 
     TensorView<float> dL_doutputs,  // (R, G, B, A, depth, distortion_loss)
 
@@ -339,7 +339,7 @@ void backwards_kernel(
                 origin, direction, tmin, ray_tmax, sh_degree, max_prim_size,
                 model);
         int itemp;
-        primitive_hit_count.InterlockedAdd((uint)floor(hit_id / HITS_PER_PRIMITIVE), 1, itemp);
+        prim_hits.InterlockedAdd((uint)floor(hit_id / HITS_PER_PRIMITIVE), 1, itemp);
 
         hit_id = old_hit_id;
         dual_state = old_dual_state;
@@ -370,7 +370,7 @@ void backwards_initial_contrib_kernel(
     TensorView<float> initial_contrib,
     TensorView<int32_t> initial_prim_indices,
     TensorView<float> dL_dinitial_contrib,
-    TensorView<int32_t> primitive_hit_count,
+    TensorView<int32_t> prim_hits,
     float tmin,
 )
 {
