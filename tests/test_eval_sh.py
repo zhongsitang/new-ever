@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 import torch
 
-import primtracers
+import primtracer
 from tests.test_utils import get_device, l2_normalize, eval_sh_torch
 
 # Suppress gradcheck warning about non-double precision inputs
@@ -45,7 +45,7 @@ class TestEvalSHCorrectness:
         rayo = torch.tensor([[0, 0, -2]], dtype=torch.float32, device=DEVICE)
 
         rgb_ref = eval_sh_torch(means, features, rayo, sh_degree)
-        rgb = primtracers.eval_sh(means, features, rayo, sh_degree)
+        rgb = primtracer.eval_sh(means, features, rayo, sh_degree)
 
         torch.testing.assert_close(rgb, rgb_ref, atol=1e-5, rtol=1e-5)
 
@@ -62,7 +62,7 @@ class TestEvalSHCorrectness:
         rayo = torch.tensor([[0, 0, 0]], dtype=torch.float32, device=DEVICE)
 
         rgb_ref = eval_sh_torch(means, features, rayo, sh_degree)
-        rgb = primtracers.eval_sh(means, features, rayo, sh_degree)
+        rgb = primtracer.eval_sh(means, features, rayo, sh_degree)
 
         torch.testing.assert_close(rgb, rgb_ref, atol=1e-5, rtol=1e-5)
 
@@ -81,7 +81,7 @@ class TestEvalSHGradient:
         rayo = torch.tensor([[0, 0, -2]], dtype=torch.float32, device=DEVICE)
 
         def loss(f):
-            return primtracers.eval_sh(means, f, rayo, sh_degree).sum()
+            return primtracer.eval_sh(means, f, rayo, sh_degree).sum()
 
         torch.autograd.gradcheck(loss, (features,), eps=1e-4, atol=2e-2)
 
@@ -99,7 +99,7 @@ class TestEvalSHGradient:
         for i in range(3):
             grad = torch.nn.functional.one_hot(torch.tensor([i]), 3).float().to(DEVICE)
             _, vjp_impl = torch.autograd.functional.vjp(
-                lambda f: primtracers.eval_sh(means, f, rayo, sh_degree), features_param, grad
+                lambda f: primtracer.eval_sh(means, f, rayo, sh_degree), features_param, grad
             )
             _, vjp_ref = torch.autograd.functional.vjp(
                 lambda f: eval_sh_torch(means, f, rayo, sh_degree), features_param, grad

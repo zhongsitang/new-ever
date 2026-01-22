@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import pytest
 import torch
 
-import primtracers
+import primtracer
 from tests.test_utils import (
     get_device,
     to_tensor,
@@ -55,7 +55,7 @@ class TestTraceRaysCorrectness:
             rayo, rayd,
             tmin=0, tmax=3,
         )
-        c, d = primtracers.trace_rays(
+        c, d = primtracer.trace_rays(
             p['mean'], p['scale'], p['quat'],
             p['density'], p['features'],
             rayo, rayd,
@@ -82,7 +82,7 @@ class TestTraceRaysCorrectness:
             rayo, rayd,
             tmin=0, tmax=3,
         )
-        c, d = primtracers.trace_rays(
+        c, d = primtracer.trace_rays(
             p['mean'], p['scale'], p['quat'],
             p['density'], p['features'],
             rayo, rayd,
@@ -121,7 +121,7 @@ class TestTraceRaysCorrectness:
         color_ref = torch.concat(colors_ref).to(DEVICE).float()
         depth_ref = torch.concat(depths_ref).to(DEVICE).float()
 
-        color, depth = primtracers.trace_rays(
+        color, depth = primtracer.trace_rays(
             p['mean'], p['scale'], p['quat'],
             p['density'], p['features'],
             rayo, rayd,
@@ -151,7 +151,7 @@ class TestTraceRaysGradient:
         rayo, rayd = create_rays(n=2, device=DEVICE)
 
         def loss(m, s, q, d, f):
-            c, _ = primtracers.trace_rays(
+            c, _ = primtracer.trace_rays(
                 m, s, q, d, f,
                 rayo, rayd,
                 tmin=0.5, tmax=100,
@@ -172,7 +172,7 @@ class TestTraceRaysGradient:
         rayo, rayd = create_rays(n=2, device=DEVICE)
 
         def loss(m, s, q, d, f):
-            _, depth = primtracers.trace_rays(
+            _, depth = primtracer.trace_rays(
                 m, s, q, d, f,
                 rayo, rayd,
                 tmin=0.5, tmax=100,
@@ -194,7 +194,7 @@ class TestTraceRaysGradient:
         rayo[1, 2] = 0.1
 
         def loss(m, s, q, d, f):
-            c, _, extras = primtracers.trace_rays(
+            c, _, extras = primtracer.trace_rays(
                 m, s, q, d, f,
                 rayo, rayd,
                 tmin=0.5, tmax=100,
