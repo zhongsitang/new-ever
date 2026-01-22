@@ -72,7 +72,7 @@ def trace_rays(
     rayo: torch.Tensor,
     rayd: torch.Tensor,
     tmin: float = 0.0,
-    tmax: float = 1000,
+    tmax = 1000,  # Can be float or array-like for per-ray tmax
     max_prim_size: float = 3,
     dL_dmeans2D=None,
     wcts=None,
@@ -95,8 +95,6 @@ def trace_rays(
         colors = safe_math.safe_div(colors.sum(axis=0), density)
         return density.reshape(-1), colors.clip(min=0)
 
-    num_quad = 2**16
-    tdist = jnp.linspace(*(tmin, tmax), num_quad + 1)
     params = {
         'mean': mean.detach().cpu().numpy().astype(np.float64).reshape(-1, 3),
         'scale': scale.detach().cpu().numpy().astype(np.float64).reshape(-1, 3),
@@ -104,11 +102,51 @@ def trace_rays(
         'density': density.detach().cpu().numpy().astype(np.float64).reshape(-1, 1),
         'features': SH2RGB(features).detach().cpu().numpy().astype(np.float64).reshape(-1, 3),
     }
-    rayo = rayo.detach().cpu().numpy().astype(np.float64)
-    rayd = rayd.detach().cpu().numpy().astype(np.float64)
-    color_rgba, depth, extras = quadrature.render_quadrature(
-        tdist,
-        lambda t: sum_vquery_ellipsoid(t, rayo, rayd, params),
-        return_extras=return_extras,
-    )
+    rayo_np = rayo.detach().cpu().numpy().astype(np.float64)
+    rayd_np = rayd.detach().cpu().numpy().astype(np.float64)
+
+    # Handle per-ray tmax
+    if isinstance(tmax, torch.Tensor):
+        tmax_np = tmax.detach().cpu().numpy().astype(np.float64)
+    else:
+        tmax_np = np.array(tmax, dtype=np.float64)
+
+    num_rays = rayo_np.shape[0]
+    if tmax_np.ndim == 0 or tmax_np.size == 1:
+        # Scalar tmax - use original implementation
+        tmax_scalar = float(tmax_np.flat[0])
+        num_quad = 2**16
+        tdist = jnp.linspace(tmin, tmax_scalar, num_quad + 1)
+        color_rgba, depth, extras = quadrature.render_quadrature(
+            tdist,
+            lambda t: sum_vquery_ellipsoid(t, rayo_np, rayd_np, params),
+            return_extras=return_extras,
+        )
+    else:
+        # Per-ray tmax - render each ray separately
+        all_colors = []
+        all_depths = []
+        all_distortion = []
+        num_quad = 2**16
+
+        for i in range(num_rays):
+            ray_tmax = float(tmax_np[i])
+            tdist = jnp.linspace(tmin, ray_tmax, num_quad + 1)
+            ray_o = rayo_np[i:i+1]
+            ray_d = rayd_np[i:i+1]
+            color_rgba_i, depth_i, extras_i = quadrature.render_quadrature(
+                tdist,
+                lambda t, ro=ray_o, rd=ray_d: sum_vquery_ellipsoid(t, ro, rd, params),
+                return_extras=True,
+            )
+            all_colors.append(color_rgba_i)
+            all_depths.append(depth_i)
+            all_distortion.append(extras_i['distortion_loss'])
+
+        color_rgba = np.concatenate(all_colors, axis=0)
+        depth = np.concatenate(all_depths, axis=0)
+        extras = {
+            'distortion_loss': np.concatenate(all_distortion, axis=0),
+        }
+
     return color_rgba, depth, extras
