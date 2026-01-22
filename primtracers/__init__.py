@@ -44,7 +44,6 @@ class PrimTracer(Function):
         tmax: torch.Tensor,  # Now a tensor (per-ray)
         max_prim_size: float,
         max_iters: int,
-        return_extras: bool = False,
     ):
         ctx.device = rayo.device
         ctx.prims = tracer.Primitives(ctx.device)
@@ -84,18 +83,17 @@ class PrimTracer(Function):
         )
 
         extras = dict(
+            distortion_loss=distortion_loss,
             hit_collection=hit_collection,
             iters=ctx.saved.iters,
             primitive_hit_count=ctx.saved.primitive_hit_count,
             saved=ctx.saved,
-        ) if return_extras else {}
+        )
 
-        # distortion_loss is included in extras
-        extras['distortion_loss'] = distortion_loss
         return color_rgba, depth, extras
 
     @staticmethod
-    def backward(ctx, grad_color: torch.Tensor, grad_depth: torch.Tensor, grad_extras=None):
+    def backward(ctx, grad_color: torch.Tensor, grad_depth: torch.Tensor, grad_extras: dict = None):
         (
             mean,
             scale,
@@ -125,11 +123,10 @@ class PrimTracer(Function):
 
         # Handle distortion_loss gradient from extras
         dL_ddistortion = torch.zeros((num_rays, 1), dtype=torch.float32, device=device)
-        if grad_extras is not None and 'distortion_loss' in grad_extras and grad_extras['distortion_loss'] is not None:
+        if grad_extras is not None and grad_extras['distortion_loss'] is not None:
             dL_ddistortion = grad_extras['distortion_loss'].reshape(-1, 1)
 
         # Combine grad_color (R, G, B, A), grad_depth, and distortion_loss gradient
-        # Format for backward kernel: [R, G, B, A, depth, distortion_loss]
         grad_combined = torch.cat([grad_color, grad_depth.reshape(-1, 1), dL_ddistortion], dim=1)
 
         block_size = 16
@@ -203,7 +200,6 @@ class PrimTracer(Function):
             None,  # tmax
             None,  # max_prim_size
             None,  # max_iters
-            None,  # return_extras
         )
 
 
@@ -227,38 +223,58 @@ def trace_rays(
     Parameters
     ----------
     mean : torch.Tensor
-        Primitive centers, shape (N, 3)
+        Primitive centers, shape (N, 3).
     scale : torch.Tensor
-        Primitive scales, shape (N, 3)
+        Primitive scales (radii along each axis), shape (N, 3).
     quat : torch.Tensor
-        Primitive rotations as quaternions, shape (N, 4)
+        Primitive rotations as unit quaternions (w, x, y, z), shape (N, 4).
     density : torch.Tensor
-        Primitive densities, shape (N,) or (N, 1)
+        Primitive densities, shape (N,) or (N, 1).
     features : torch.Tensor
-        Primitive features/colors, shape (N, C, 3)
+        Primitive SH features/colors, shape (N, C, 3) where C is the number of
+        SH coefficients. For degree-0 SH, C=1.
     rayo : torch.Tensor
-        Ray origins, shape (M, 3)
+        Ray origins, shape (M, 3).
     rayd : torch.Tensor
-        Ray directions, shape (M, 3)
+        Ray directions (should be normalized), shape (M, 3).
     tmin : float
-        Minimum t value for ray marching
+        Minimum t value for ray marching (ray starts at origin + tmin * direction).
     tmax : torch.Tensor or float
         Maximum t value for ray marching. Can be a scalar (broadcast to all rays)
         or a tensor of shape (M,) for per-ray tmax values.
     max_prim_size : float
-        Maximum primitive size for acceleration
+        Maximum primitive size for BVH acceleration structure.
     max_iters : int
-        Maximum iterations per ray
+        Maximum number of hit iterations per ray.
     return_extras : bool
-        Whether to return extra information
+        If True, return additional debugging information.
 
     Returns
     -------
-    tuple
-        (color, depth, extras) where:
-        - color: torch.Tensor of shape (M, 4) containing RGBA
-        - depth: torch.Tensor of shape (M,) containing depth values
-        - extras: dict containing 'distortion_loss' and optionally other fields if return_extras=True
+    If return_extras=False (default):
+        tuple of (color, depth)
+            color : torch.Tensor
+                RGBA color output, shape (M, 4). Channels are [R, G, B, A] where
+                RGB are the accumulated colors and A is the accumulated opacity
+                (alpha = 1 - transmittance).
+            depth : torch.Tensor
+                Expected depth along each ray, shape (M,). Computed as the
+                transmittance-weighted mean of hit distances.
+
+    If return_extras=True:
+        tuple of (color, depth, extras)
+            color : torch.Tensor
+                Same as above.
+            depth : torch.Tensor
+                Same as above.
+            extras : dict
+                Dictionary containing:
+                - 'distortion_loss': torch.Tensor of shape (M,), per-ray distortion
+                  loss for regularization.
+                - 'hit_collection': torch.Tensor, primitive hit IDs for backward pass.
+                - 'iters': torch.Tensor, number of iterations per ray.
+                - 'primitive_hit_count': torch.Tensor, hit count per primitive.
+                - 'saved': internal state object for backward pass.
     """
     num_rays = rayo.shape[0]
 
@@ -273,7 +289,7 @@ def trace_rays(
             raise ValueError(f"tmax must have shape ({num_rays},) or be a scalar, got {tmax.shape}")
         tmax = tmax.to(dtype=torch.float32, device=rayo.device)
 
-    return PrimTracer.apply(
+    color_rgba, depth, extras = PrimTracer.apply(
         mean,
         scale,
         quat,
@@ -285,8 +301,11 @@ def trace_rays(
         tmax,
         max_prim_size,
         max_iters,
-        return_extras,
     )
+    if return_extras:
+        return color_rgba, depth, extras
+    else:
+        return color_rgba, depth
 
 
 # =============================================================================

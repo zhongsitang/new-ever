@@ -261,22 +261,19 @@ def render_quadrature(
     tdist: jnp.ndarray,
     query_fn: Callable[[jnp.ndarray], Tuple[jnp.ndarray, jnp.ndarray]],
     return_extras: bool = False,
-) -> Tuple[jnp.ndarray, jnp.ndarray, Dict[str, jnp.ndarray]]:
+):
     """
     Numerical quadrature rendering of a set of colored Gaussians.
 
     Returns:
-        color_rgba: (N, 4) RGBA
-        depth: (N,) expected termination depth
-        extras: dict (includes distortion_loss, and optionally debugging fields)
+        If return_extras=False: (color_rgba, depth)
+        If return_extras=True: (color_rgba, depth, extras)
     """
     t_avg = 0.5 * (tdist[..., 1:] + tdist[..., :-1])
     t_delta = jnp.diff(tdist)
 
     total_density, avg_colors = query_fn(t_avg)  # (S,), (S,3) or broadcastable
     weights = compute_alpha_weights(total_density * t_delta)
-
-    dist_loss = lossfun_distortion(tdist, weights)
 
     rendered_color = jnp.sum(weights[..., None] * avg_colors, axis=-2)
     alpha = jnp.sum(weights, axis=-1).reshape(-1, 1)
@@ -285,18 +282,18 @@ def render_quadrature(
     color_rgba = jnp.concatenate([rendered_color.reshape(-1, 3), alpha], axis=1)
     depth = expected_termination.reshape(-1)
 
-    extras: Dict[str, jnp.ndarray] = {"distortion_loss": dist_loss.reshape(-1)}
     if return_extras:
-        extras.update(
-            {
-                "tdist": tdist,
-                "avg_colors": avg_colors,
-                "weights": weights,
-                "total_density": jnp.sum(total_density * t_delta, axis=-1),
-            }
-        )
-
-    return color_rgba, depth, extras
+        dist_loss = lossfun_distortion(tdist, weights)
+        extras: Dict[str, jnp.ndarray] = {
+            "distortion_loss": dist_loss.reshape(-1),
+            "tdist": tdist,
+            "avg_colors": avg_colors,
+            "weights": weights,
+            "total_density": jnp.sum(total_density * t_delta, axis=-1),
+        }
+        return color_rgba, depth, extras
+    else:
+        return color_rgba, depth
 
 
 def sh_to_rgb(sh: torch.Tensor) -> torch.Tensor:
@@ -339,10 +336,14 @@ def trace_rays_reference(
     tmax: float = 1000.0,
     num_samples: int = 2**16,
     return_extras: bool = False,
-) -> Tuple[jnp.ndarray, jnp.ndarray, Dict[str, jnp.ndarray]]:
+):
     """
     Reference ray tracing using dense quadrature (JAX).
     Inputs are torch tensors; converted to numpy->jax arrays inside.
+
+    Returns:
+        If return_extras=False: (color_rgba, depth)
+        If return_extras=True: (color_rgba, depth, extras)
     """
 
     vquery_ellipsoid = jax.vmap(
@@ -379,12 +380,11 @@ def trace_rays_reference(
     ray_o = rayo.detach().cpu().numpy().astype(np.float64)
     ray_d = rayd.detach().cpu().numpy().astype(np.float64)
 
-    color_rgba, depth, extras = render_quadrature(
+    return render_quadrature(
         tdist,
         lambda t: sum_vquery_ellipsoid(t, ray_o, ray_d, params),
         return_extras=return_extras,
     )
-    return color_rgba, depth, extras
 
 
 # =============================================================================

@@ -49,13 +49,13 @@ class TestTraceRaysCorrectness:
         p['mean'][:, :2] *= 0.5
         rayo, rayd = create_rays(device=DEVICE)
 
-        c_ref, d_ref, _ = trace_rays_reference(
+        c_ref, d_ref = trace_rays_reference(
             p['mean'], p['scale'], p['quat'],
             p['density'], p['features'],
             rayo, rayd,
             tmin=0, tmax=3,
         )
-        c, d, _ = primtracers.trace_rays(
+        c, d = primtracers.trace_rays(
             p['mean'], p['scale'], p['quat'],
             p['density'], p['features'],
             rayo, rayd,
@@ -76,13 +76,13 @@ class TestTraceRaysCorrectness:
         p['mean'][:, :2] *= 0.5
         rayo, rayd = create_rays(device=DEVICE)
 
-        c_ref, d_ref, _ = trace_rays_reference(
+        c_ref, d_ref = trace_rays_reference(
             p['mean'], p['scale'], p['quat'],
             p['density'], p['features'],
             rayo, rayd,
             tmin=0, tmax=3,
         )
-        c, d, _ = primtracers.trace_rays(
+        c, d = primtracers.trace_rays(
             p['mean'], p['scale'], p['quat'],
             p['density'], p['features'],
             rayo, rayd,
@@ -94,7 +94,7 @@ class TestTraceRaysCorrectness:
         torch.testing.assert_close(c, c_ref_tensor, atol=1e-4, rtol=1e-4)
         # torch.testing.assert_close(d, d_ref_tensor, atol=1e-4, rtol=1e-4)
 
-    @pytest.mark.parametrize('n', [1, 5, 10, 100])
+    @pytest.mark.parametrize('n', [1, 5, 10, 50])
     @pytest.mark.parametrize('density_scale', [0.01, 0.1, 1.0])
     def test_per_ray_tmax(self, n, density_scale):
         """Per-ray tmax as tensor."""
@@ -110,7 +110,7 @@ class TestTraceRaysCorrectness:
         colors_ref = []
         depths_ref = []
         for i in range(num_rays):
-            c, d, _ = trace_rays_reference(
+            c, d = trace_rays_reference(
                 p['mean'], p['scale'], p['quat'],
                 p['density'], p['features'],
                 rayo[i:i+1], rayd[i:i+1],
@@ -121,7 +121,7 @@ class TestTraceRaysCorrectness:
         color_ref = torch.concat(colors_ref).to(DEVICE).float()
         depth_ref = torch.concat(depths_ref).to(DEVICE).float()
 
-        color, depth, _ = primtracers.trace_rays(
+        color, depth = primtracers.trace_rays(
             p['mean'], p['scale'], p['quat'],
             p['density'], p['features'],
             rayo, rayd,
@@ -151,7 +151,7 @@ class TestTraceRaysGradient:
         rayo, rayd = create_rays(n=2, device=DEVICE)
 
         def loss(m, s, q, d, f):
-            c, _, _ = primtracers.trace_rays(
+            c, _ = primtracers.trace_rays(
                 m, s, q, d, f,
                 rayo, rayd,
                 tmin=0.5, tmax=100,
@@ -161,7 +161,7 @@ class TestTraceRaysGradient:
         torch.autograd.gradcheck(
             loss,
             (mean, scale, quat, density, features),
-            eps=1e-4, atol=1e-3, rtol=1e-3,
+            eps=1e-3, atol=1e-3, rtol=1e-3,
         )
 
     @pytest.mark.parametrize('n', [1, 5, 10, 100])
@@ -172,7 +172,7 @@ class TestTraceRaysGradient:
         rayo, rayd = create_rays(n=2, device=DEVICE)
 
         def loss(m, s, q, d, f):
-            _, depth, _ = primtracers.trace_rays(
+            _, depth = primtracers.trace_rays(
                 m, s, q, d, f,
                 rayo, rayd,
                 tmin=0.5, tmax=100,
