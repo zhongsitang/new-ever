@@ -26,6 +26,7 @@
 #include <memory>
 #include <stdexcept>
 #include "types.h"
+#include "accel_structure.h"
 
 using uint = uint32_t;
 
@@ -107,44 +108,6 @@ private:
 
     int device_ = -1;
     OptixDeviceContext context_ = nullptr;
-};
-
-// =============================================================================
-// AccelStructure - AABB and GAS management for primitives
-// =============================================================================
-
-/// Manages acceleration structure: AABB buffer and GAS (Geometry Acceleration Structure).
-/// Owns its buffers with RAII.
-class AccelStructure {
-public:
-    /// Build acceleration structure for primitives.
-    AccelStructure(DeviceContext& ctx, const Primitives& prims);
-
-    ~AccelStructure();
-
-    // Non-copyable
-    AccelStructure(const AccelStructure&) = delete;
-    AccelStructure& operator=(const AccelStructure&) = delete;
-
-    OptixTraversableHandle handle() const { return gas_handle_; }
-    OptixAabb* aabbs() const { return aabb_buffer_; }
-
-private:
-    void build_aabbs(const Primitives& prims);
-    void build_gas(const Primitives& prims);
-
-    DeviceContext& ctx_;
-    OptixTraversableHandle gas_handle_ = 0;
-
-    // AABB buffer
-    OptixAabb* aabb_buffer_ = nullptr;
-    size_t num_prims_ = 0;
-
-    // GAS buffers
-    CUdeviceptr gas_output_ = 0;
-    size_t gas_output_size_ = 0;
-    CUdeviceptr gas_temp_ = 0;
-    CUdeviceptr gas_compact_ = 0;
 };
 
 // =============================================================================

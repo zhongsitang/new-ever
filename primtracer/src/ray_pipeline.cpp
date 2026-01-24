@@ -69,12 +69,15 @@ DeviceContext::~DeviceContext() {
 // AccelStructure implementation
 // =============================================================================
 
-AccelStructure::AccelStructure(DeviceContext& ctx, const Primitives& prims)
-    : ctx_(ctx), num_prims_(prims.num_prims)
+AccelStructure::AccelStructure(DeviceContext& ctx)
+    : ctx_(ctx)
 {
-    CUDA_CHECK(cudaSetDevice(ctx_.device()));
-    build_aabbs(prims);
-    build_gas(prims);
+}
+
+AccelStructure::AccelStructure(DeviceContext& ctx, const Primitives& prims)
+    : ctx_(ctx)
+{
+    rebuild(prims);
 }
 
 AccelStructure::~AccelStructure() {
@@ -84,12 +87,47 @@ AccelStructure::~AccelStructure() {
     if (aabb_buffer_) cudaFree(aabb_buffer_);
 }
 
-void AccelStructure::build_aabbs(const Primitives& prims) {
-    CUDA_CHECK(cudaMalloc(&aabb_buffer_, prims.num_prims * sizeof(OptixAabb)));
-    prims.compute_aabbs(aabb_buffer_);
+void AccelStructure::rebuild(const Primitives& prims) {
+    CUDA_CHECK(cudaSetDevice(ctx_.device()));
+    num_prims_ = prims.num_prims;
+
+    // Ensure AABB buffer capacity and compute AABBs
+    ensure_aabb_capacity(num_prims_);
+    compute_primitive_aabbs(prims, aabb_buffer_);
+
+    // Build GAS
+    build_gas(num_prims_);
 }
 
-void AccelStructure::build_gas(const Primitives& prims) {
+void AccelStructure::ensure_aabb_capacity(size_t num_prims) {
+    if (num_prims > aabb_capacity_) {
+        if (aabb_buffer_) {
+            CUDA_CHECK(cudaFree(aabb_buffer_));
+        }
+        CUDA_CHECK(cudaMalloc(&aabb_buffer_, num_prims * sizeof(OptixAabb)));
+        aabb_capacity_ = num_prims;
+    }
+}
+
+void AccelStructure::ensure_gas_capacity(size_t output_size, size_t temp_size) {
+    if (output_size > gas_output_capacity_) {
+        if (gas_output_) {
+            CUDA_CHECK(cudaFree(reinterpret_cast<void*>(gas_output_)));
+        }
+        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&gas_output_), output_size));
+        gas_output_capacity_ = output_size;
+    }
+
+    if (temp_size > gas_temp_capacity_) {
+        if (gas_temp_) {
+            CUDA_CHECK(cudaFree(reinterpret_cast<void*>(gas_temp_)));
+        }
+        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&gas_temp_), temp_size));
+        gas_temp_capacity_ = temp_size;
+    }
+}
+
+void AccelStructure::build_gas(size_t num_prims) {
     OptixAccelBuildOptions accel_options = {};
     accel_options.buildFlags = OPTIX_BUILD_FLAG_PREFER_FAST_TRACE | OPTIX_BUILD_FLAG_ALLOW_COMPACTION;
     accel_options.operation = OPTIX_BUILD_OPERATION_BUILD;
@@ -100,17 +138,15 @@ void AccelStructure::build_gas(const Primitives& prims) {
     OptixBuildInput input = {};
     input.type = OPTIX_BUILD_INPUT_TYPE_CUSTOM_PRIMITIVES;
     input.customPrimitiveArray.aabbBuffers = &d_aabbs;
-    input.customPrimitiveArray.numPrimitives = prims.num_prims;
+    input.customPrimitiveArray.numPrimitives = num_prims;
     input.customPrimitiveArray.flags = &flags;
     input.customPrimitiveArray.numSbtRecords = 1;
 
     OptixAccelBufferSizes sizes;
     OPTIX_CHECK(optixAccelComputeMemoryUsage(ctx_.context(), &accel_options, &input, 1, &sizes));
 
-    // Allocate buffers
-    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&gas_output_), sizes.outputSizeInBytes));
-    gas_output_size_ = sizes.outputSizeInBytes;
-    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&gas_temp_), sizes.tempSizeInBytes));
+    // Ensure buffer capacity (reuses existing if sufficient)
+    ensure_gas_capacity(sizes.outputSizeInBytes, sizes.tempSizeInBytes);
 
     // Query compacted size
     size_t* d_compacted_size;
@@ -133,7 +169,14 @@ void AccelStructure::build_gas(const Primitives& prims) {
     CUDA_CHECK(cudaFree(d_compacted_size));
 
     if (compacted_size < sizes.outputSizeInBytes) {
-        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&gas_compact_), compacted_size));
+        // Ensure compact buffer capacity
+        if (compacted_size > gas_compact_capacity_) {
+            if (gas_compact_) {
+                CUDA_CHECK(cudaFree(reinterpret_cast<void*>(gas_compact_)));
+            }
+            CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&gas_compact_), compacted_size));
+            gas_compact_capacity_ = compacted_size;
+        }
         OPTIX_CHECK(optixAccelCompact(ctx_.context(), 0, gas_handle_, gas_compact_, compacted_size, &gas_handle_));
     }
 }

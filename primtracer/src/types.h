@@ -58,7 +58,7 @@ struct IntegratorState
 static_assert(sizeof(IntegratorState) == 48, "IntegratorState must be 48 bytes");
 static_assert(alignof(IntegratorState) == 16, "IntegratorState must be 16-byte aligned");
 
-// Always on GPU
+/// Primitive geometry data (GPU pointers)
 struct Primitives {
   float3 *means;
   float3 *scales;
@@ -67,9 +67,6 @@ struct Primitives {
   size_t num_prims;
   float *features;
   size_t feature_size;
-
-  /// Compute AABBs into pre-allocated buffer
-  void compute_aabbs(OptixAabb* aabbs) const;
 };
 
 struct Cam {
