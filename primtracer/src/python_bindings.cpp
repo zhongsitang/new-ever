@@ -28,14 +28,14 @@ using namespace pybind11::literals;
 
 #define CHECK_CUDA(x) \
     TORCH_CHECK(x.device().is_cuda(), #x " must be a CUDA tensor")
-#define CHECK_DEVICE(x, device) \
-    TORCH_CHECK(x.device() == device, #x " must be on the same device")
+#define CHECK_DEVICE(x, dev) \
+    TORCH_CHECK(x.device() == dev, #x " must be on the same device")
 #define CHECK_CONTIGUOUS(x) \
     TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
 #define CHECK_FLOAT(x) \
     TORCH_CHECK(x.dtype() == torch::kFloat32, #x " must have float32 type")
-#define CHECK_INPUT(x, device, dim) \
-    CHECK_CUDA(x); CHECK_CONTIGUOUS(x); CHECK_DEVICE(x, device); CHECK_FLOAT(x); \
+#define CHECK_INPUT(x, dev, dim) \
+    CHECK_CUDA(x); CHECK_CONTIGUOUS(x); CHECK_DEVICE(x, dev); CHECK_FLOAT(x); \
     TORCH_CHECK(x.size(-1) == dim, #x " must have last dimension " #dim)
 
 // Helper for casting tensor data pointer to custom types
