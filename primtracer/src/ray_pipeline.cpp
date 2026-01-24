@@ -15,7 +15,6 @@
 #include "ray_pipeline.h"
 #include "accel_structure.h"
 #include "optix_error.h"
-#include "cuda_buffer.h"
 #include "cuda_kernels.h"
 
 #include <optix_stubs.h>

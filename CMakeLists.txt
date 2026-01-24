@@ -64,7 +64,6 @@ pybind11_add_module(ellipsoid_tracer MODULE
   ${TRACER_DIR}/accel_structure.h
   ${TRACER_DIR}/python_bindings.cpp
   ${TRACER_DIR}/volume_types.h
-  ${TRACER_DIR}/cuda_buffer.h
   ${TRACER_DIR}/cuda_kernels.cu
   ${TRACER_DIR}/cuda_kernels.h
 )
