@@ -32,32 +32,17 @@ import safe_math;
 // Core Data Structures
 // =============================================================================
 
-/// State for volume rendering integration along a ray.
+/// Volume rendering state per ray (48 bytes, 16-byte aligned)
 ///
-/// This tracks both the integration state (accumulated density-weighted values)
-/// and the volume rendering state (transmittance and accumulated color).
-///
-/// Memory layout (12 floats, 48 bytes, 16-byte aligned):
-///   [0-3]:  accumulated_contrib (float4) - density, r*density, g*density, b*density
-///   [4-7]:  C_logT (float4) - C.x, C.y, C.z, logT
-///   [8-11]: scalars (float4) - depth_accum, t, pad, pad
+/// Memory layout must match C++ IntegratorState in volume_types.h
 struct IntegratorState : IDifferentiable
 {
-    // Accumulated density-weighted contributions: (density, r*density, g*density, b*density)
-    // This accumulates the "delta" contributions from ellipsoid boundaries.
-    float4 accumulated_contrib;
-
-    // Combined: accumulated color (xyz) + log transmittance (w)
-    float4 C_logT;
-
-    // Scalars packed into float4: depth_accum (x), t (y), unused (z, w)
-    float4 scalars;
-
-    // Accessor properties
-    property float3 C { get { return C_logT.xyz; } set { C_logT.xyz = newValue; } }
-    property float logT { get { return C_logT.w; } set { C_logT.w = newValue; } }
-    property float depth_accum { get { return scalars.x; } set { scalars.x = newValue; } }
-    property float t { get { return scalars.y; } set { scalars.y = newValue; } }
+    float4 accumulated_contrib;  // density, r*d, g*d, b*d
+    float3 C;                    // accumulated color
+    float logT;                  // log transmittance
+    float depth_accum;           // accumulated depth
+    float t;                     // current t
+    float2 _pad;                 // padding to 48 bytes
 };
 
 /// Create initial volume state for a new ray.
@@ -65,8 +50,11 @@ IntegratorState make_initial_state()
 {
     IntegratorState state;
     state.accumulated_contrib = float4(0.0f);
-    state.C_logT = float4(0.0f);
-    state.scalars = float4(0.0f);
+    state.C = float3(0.0f);
+    state.logT = 0.0f;
+    state.depth_accum = 0.0f;
+    state.t = 0.0f;
+    state._pad = float2(0.0f);
     return state;
 }
 
