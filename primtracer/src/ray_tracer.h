@@ -273,6 +273,7 @@ private:
 
 template <typename T>
 struct SbtRecord {
+    using DataType = T;
     __align__(OPTIX_SBT_RECORD_ALIGNMENT) char header[OPTIX_SBT_RECORD_HEADER_SIZE];
     T data;
 };
@@ -358,4 +359,8 @@ private:
 
     Params params_ = {};
     OptixPipelineCompileOptions pipeline_options_ = {};
+
+    // Reusable buffer for per-ray last_prim tracking
+    uint32_t* last_prim_ = nullptr;
+    size_t last_prim_capacity_ = 0;
 };
