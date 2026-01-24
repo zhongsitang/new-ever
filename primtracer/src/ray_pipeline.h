@@ -71,9 +71,6 @@ struct Params {
     OptixTraversableHandle handle;                     // BVH acceleration structure
 };
 
-// Forward declaration
-class GAS;
-
 /// State saved during forward pass for backward gradient computation.
 struct SavedState {
     IntegratorState* states;        // (M, 12) volume integrator state per ray
@@ -86,20 +83,70 @@ struct SavedState {
     int* initial_prim_count;        // (1,) count of initial_prim_indices
 };
 
-/// RayPipeline: Complete ray tracing pipeline for ellipsoid volume rendering.
+// =============================================================================
+// DeviceResources - Per-device cached resources with RAII
+// =============================================================================
+
+/// Manages per-device OptiX resources: context, AABB buffer, GAS buffers.
+/// Resources are cached globally and reused across RayPipeline instances.
+class DeviceResources {
+public:
+    /// Get or create resources for a specific device (cached globally)
+    static DeviceResources& get(int device_index);
+
+    // Accessors
+    OptixDeviceContext context() const { return context_; }
+    int device() const { return device_; }
+
+    /// Prepare AABB buffer and compute AABBs for primitives
+    void prepare_aabbs(Primitives& prims);
+
+    /// Build GAS (Geometry Acceleration Structure) for primitives
+    /// Returns the traversable handle
+    OptixTraversableHandle build_gas(const Primitives& prims);
+
+    // Non-copyable
+    DeviceResources(const DeviceResources&) = delete;
+    DeviceResources& operator=(const DeviceResources&) = delete;
+
+    ~DeviceResources();
+
+private:
+    explicit DeviceResources(int device_index);
+
+    int device_ = -1;
+    OptixDeviceContext context_ = nullptr;
+
+    // AABB buffer
+    OptixAabb* aabb_buffer_ = nullptr;
+    size_t aabb_capacity_ = 0;
+
+    // GAS build buffers
+    CUdeviceptr gas_output_ = 0;
+    size_t gas_output_size_ = 0;
+    CUdeviceptr gas_temp_ = 0;
+    size_t gas_temp_size_ = 0;
+    CUdeviceptr gas_compact_ = 0;
+    size_t gas_compact_size_ = 0;
+};
+
+// =============================================================================
+// RayPipeline - OptiX ray tracing pipeline for volume rendering
+// =============================================================================
+
+/// Complete ray tracing pipeline for ellipsoid volume rendering.
 ///
 /// This class manages:
-/// - OptiX context (lazy-initialized, cached per device)
-/// - Primitive data and AABB computation
-/// - Acceleration structure (GAS)
-/// - OptiX pipeline and shader binding table
+/// - OptiX pipeline (module, program groups, SBT)
+/// - Ray tracing execution
+///
+/// Device resources (context, buffers) are managed by DeviceResources.
 class RayPipeline {
 public:
     /// Construct a ray pipeline with primitive data.
-    /// Note: aabbs in the Primitives struct is set internally.
     RayPipeline(const Primitives& prims, int device_index);
 
-    ~RayPipeline() noexcept(false);
+    ~RayPipeline();
 
     // Non-copyable
     RayPipeline(const RayPipeline&) = delete;
@@ -138,12 +185,9 @@ private:
     void create_pipeline();
     void create_sbt();
 
-    int8_t device_ = -1;
-    OptixDeviceContext context_ = nullptr;
-
-    // Primitive data and acceleration structure
+    DeviceResources& resources_;
     Primitives model_ = {};
-    std::unique_ptr<GAS> gas_;
+    OptixTraversableHandle gas_handle_ = 0;
 
     // OptiX pipeline objects
     OptixModule module_ = nullptr;
