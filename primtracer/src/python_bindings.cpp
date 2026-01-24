@@ -38,6 +38,10 @@ using namespace pybind11::literals;
     CHECK_CUDA(x); CHECK_CONTIGUOUS(x); CHECK_DEVICE(x, device); CHECK_FLOAT(x); \
     TORCH_CHECK(x.size(-1) == dim, #x " must have last dimension " #dim)
 
+// Helper for casting tensor data pointer to custom types
+template<typename T>
+T* data_ptr(const torch::Tensor& t) { return static_cast<T*>(t.data_ptr()); }
+
 // =============================================================================
 // Main API: trace_rays
 // =============================================================================
@@ -86,11 +90,11 @@ py::dict trace_rays(
     // Create pipeline (handles context, primitives, GAS internally)
     RayPipeline pipeline(
         device_index,
-        means.data_ptr<float3>(),
-        scales.data_ptr<float3>(),
-        quats.data_ptr<float4>(),
-        densities.data_ptr<float>(),
-        features.data_ptr<float>(),
+        data_ptr<float3>(means),
+        data_ptr<float3>(scales),
+        data_ptr<float4>(quats),
+        data_ptr<float>(densities),
+        data_ptr<float>(features),
         num_prims,
         feature_size
     );
@@ -115,26 +119,26 @@ py::dict trace_rays(
 
     // Setup backward state
     SavedState saved = {
-        .states = states.data_ptr<IntegratorState>(),
-        .delta_contribs = delta_contribs.data_ptr<float4>(),
-        .iters = iters.data_ptr<uint>(),
-        .prim_hits = prim_hits.data_ptr<uint>(),
-        .hit_collection = hit_collection.data_ptr<int>(),
-        .initial_contrib = initial_contrib.data_ptr<float4>(),
-        .initial_prim_indices = initial_prim_indices.data_ptr<int>(),
-        .initial_prim_count = initial_prim_count.data_ptr<int>(),
+        .states = data_ptr<IntegratorState>(states),
+        .delta_contribs = data_ptr<float4>(delta_contribs),
+        .iters = data_ptr<uint>(iters),
+        .prim_hits = data_ptr<uint>(prim_hits),
+        .hit_collection = data_ptr<int>(hit_collection),
+        .initial_contrib = data_ptr<float4>(initial_contrib),
+        .initial_prim_indices = data_ptr<int>(initial_prim_indices),
+        .initial_prim_count = data_ptr<int>(initial_prim_count),
     };
 
     // Trace rays
     pipeline.trace_rays(
         num_rays,
-        ray_origins.data_ptr<float3>(),
-        ray_directions.data_ptr<float3>(),
-        color.data_ptr<float4>(),
-        depth.data_ptr<float>(),
+        data_ptr<float3>(ray_origins),
+        data_ptr<float3>(ray_directions),
+        data_ptr<float4>(color),
+        data_ptr<float>(depth),
         sh_degree,
         tmin,
-        tmax.data_ptr<float>(),
+        data_ptr<float>(tmax),
         max_iters,
         &saved
     );
