@@ -48,13 +48,17 @@ struct Primitives {
 // =============================================================================
 
 /// Per-ray volume integrator state (48 bytes, 16-byte aligned)
+///
+/// NOTE: We use explicit float scalars instead of float3 for C to ensure
+/// consistent memory layout across C++ and Slang. Slang may add padding
+/// after float3 types, causing layout mismatch with C++.
 struct IntegratorState {
-    float4 accumulated_contrib;  // (density, r*d, g*d, b*d)
-    float3 C;                    // accumulated color RGB
-    float logT;                  // log transmittance
-    float depth_accum;           // accumulated depth
-    float t;                     // current ray parameter
-    float _pad[2];
+    float4 accumulated_contrib;  // (density, r*d, g*d, b*d) - offset 0, 16 bytes
+    float C_r, C_g, C_b;         // accumulated color RGB    - offset 16, 12 bytes
+    float logT;                  // log transmittance        - offset 28, 4 bytes
+    float depth_accum;           // accumulated depth        - offset 32, 4 bytes
+    float t;                     // current ray parameter    - offset 36, 4 bytes
+    float _pad[2];               // padding to 48 bytes      - offset 40, 8 bytes
 };
 
 static_assert(sizeof(IntegratorState) == 48);
@@ -76,12 +80,20 @@ struct SavedState {
 // OptiX Launch Parameters (must match slang layout)
 // =============================================================================
 
+/// Camera parameters for ray generation.
+///
+/// NOTE: We use explicit float scalars instead of float3 to ensure
+/// consistent memory layout across C++ and Slang compilers.
 struct Camera {
-    float fx, fy;
-    int height, width;
-    float3 U, V, W;
-    float3 eye;
-};
+    float fx, fy;                        // focal lengths        - offset 0, 8 bytes
+    int height, width;                   // image dimensions     - offset 8, 8 bytes
+    float U_x, U_y, U_z;                 // camera right vector  - offset 16, 12 bytes
+    float V_x, V_y, V_z;                 // camera up vector     - offset 28, 12 bytes
+    float W_x, W_y, W_z;                 // camera forward vector- offset 40, 12 bytes
+    float eye_x, eye_y, eye_z;           // camera position      - offset 52, 12 bytes
+};                                       // total: 64 bytes
+
+static_assert(sizeof(Camera) == 64, "Camera size must be 64 bytes for GPU compatibility");
 
 struct Params {
     // Output buffers

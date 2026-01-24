@@ -51,13 +51,18 @@ import spherical_harmonics;
 // Data Structures
 // =============================================================================
 
+/// Camera parameters for ray generation (64 bytes).
+/// Memory layout must match C++ Camera in types.h.
+/// NOTE: We use explicit float scalars instead of float3 to ensure
+/// consistent memory layout across C++ and Slang compilers.
 struct Camera {
-    float fx, fy;
-    int height;
-    int width;
-    float3 U, V, W;
-    float3 eye;
-};
+    float fx, fy;                        // focal lengths        - offset 0, 8 bytes
+    int height, width;                   // image dimensions     - offset 8, 8 bytes
+    float U_x, U_y, U_z;                 // camera right vector  - offset 16, 12 bytes
+    float V_x, V_y, V_z;                 // camera up vector     - offset 28, 12 bytes
+    float W_x, W_y, W_z;                 // camera forward vector- offset 40, 12 bytes
+    float eye_x, eye_y, eye_z;           // camera position      - offset 52, 12 bytes
+};                                       // total: 64 bytes
 
 /// Buffer for collecting and sorting ray-primitive intersections.
 /// Maintains hits sorted by t value for front-to-back traversal.

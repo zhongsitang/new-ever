@@ -34,15 +34,17 @@ import safe_math;
 
 /// Volume rendering state per ray (48 bytes, 16-byte aligned)
 ///
-/// Memory layout must match C++ IntegratorState in volume_types.h
+/// Memory layout must match C++ IntegratorState in types.h
+/// NOTE: We use explicit float scalars instead of float3 for C to ensure
+/// consistent memory layout. Slang may add padding after float3 types.
 struct IntegratorState : IDifferentiable
 {
-    float4 accumulated_contrib;  // density, r*d, g*d, b*d
-    float3 C;                    // accumulated color
-    float logT;                  // log transmittance
-    float depth_accum;           // accumulated depth
-    float t;                     // current t
-    float2 _pad;                 // padding to 48 bytes
+    float4 accumulated_contrib;  // density, r*d, g*d, b*d  - offset 0, 16 bytes
+    float C_r, C_g, C_b;         // accumulated color RGB   - offset 16, 12 bytes
+    float logT;                  // log transmittance       - offset 28, 4 bytes
+    float depth_accum;           // accumulated depth       - offset 32, 4 bytes
+    float t;                     // current t               - offset 36, 4 bytes
+    float _pad0, _pad1;          // padding to 48 bytes     - offset 40, 8 bytes
 };
 
 /// Create initial volume state for a new ray.
@@ -50,11 +52,14 @@ IntegratorState make_initial_state()
 {
     IntegratorState state;
     state.accumulated_contrib = float4(0.0f);
-    state.C = float3(0.0f);
+    state.C_r = 0.0f;
+    state.C_g = 0.0f;
+    state.C_b = 0.0f;
     state.logT = 0.0f;
     state.depth_accum = 0.0f;
     state.t = 0.0f;
-    state._pad = float2(0.0f);
+    state._pad0 = 0.0f;
+    state._pad1 = 0.0f;
     return state;
 }
 
@@ -123,7 +128,11 @@ IntegratorState inverse_update_dual(
     state.logT = max(new_state.logT - area, 0.f);
     const float weight = clip((1 - safe_exp(-area)) * safe_exp(-state.logT), 0.f, 1.f);
 
-    state.C = new_state.C - weight * rgb_norm;
+    let new_C = float3(new_state.C_r, new_state.C_g, new_state.C_b);
+    let updated_C = new_C - weight * rgb_norm;
+    state.C_r = updated_C.x;
+    state.C_g = updated_C.y;
+    state.C_b = updated_C.z;
     float alpha = -safe_expm1(-area);
 
     const float AREA_THRESHOLD = 1e-6f;
@@ -174,7 +183,11 @@ IntegratorState update(
     new_state.logT = max(area + state.logT, 0.f);
     float alpha = -safe_expm1(-area);
     const float weight = clip(alpha * safe_exp(-state.logT), 0.f, 1.f);
-    new_state.C = state.C + weight * rgb_norm;
+    let old_C = float3(state.C_r, state.C_g, state.C_b);
+    let updated_C = old_C + weight * rgb_norm;
+    new_state.C_r = updated_C.x;
+    new_state.C_g = updated_C.y;
+    new_state.C_b = updated_C.z;
 
     const float AREA_THRESHOLD = 1e-6f;
     float segment_depth_val;
@@ -210,7 +223,7 @@ struct RenderOutput : IDifferentiable
 RenderOutput extract_color(in IntegratorState state, in float tmin)
 {
     return {
-        state.C,
+        float3(state.C_r, state.C_g, state.C_b),
         -safe_expm1(-state.logT),  // alpha = 1 - exp(-logT)
         state.depth_accum
     };
