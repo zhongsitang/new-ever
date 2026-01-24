@@ -114,7 +114,7 @@ py::dict trace_rays(
     torch::Tensor initial_prim_count = torch::zeros({1}, opts_i);
 
     // Setup backward state
-    BackwardState backward = {
+    SavedState saved = {
         .states = reinterpret_cast<IntegratorState*>(states.data_ptr()),
         .delta_contribs = reinterpret_cast<float4*>(delta_contribs.data_ptr()),
         .iters = reinterpret_cast<uint*>(iters.data_ptr()),
@@ -136,7 +136,7 @@ py::dict trace_rays(
         tmin,
         reinterpret_cast<float*>(tmax.data_ptr()),
         max_iters,
-        &backward
+        &saved
     );
 
     return py::dict(

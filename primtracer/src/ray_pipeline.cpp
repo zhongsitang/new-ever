@@ -255,7 +255,7 @@ void RayPipeline::trace_rays(
     float tmin,
     float* tmax,
     size_t max_iters,
-    BackwardState* backward)
+    SavedState* saved)
 {
     CUDA_CHECK(cudaSetDevice(device_));
 
@@ -275,19 +275,19 @@ void RayPipeline::trace_rays(
     params_.tmax = {tmax, num_rays};
     params_.last_prim = {last_prim, num_rays};
 
-    if (backward) {
-        params_.last_state = {backward->states, num_rays};
-        params_.last_delta_contrib = {backward->delta_contribs, num_rays};
-        params_.hit_collection = {backward->hit_collection, num_rays * max_iters};
-        params_.iters = {backward->iters, num_rays};
-        params_.prim_hits = {backward->prim_hits, model_.num_prims};
+    if (saved) {
+        params_.last_state = {saved->states, num_rays};
+        params_.last_delta_contrib = {saved->delta_contribs, num_rays};
+        params_.hit_collection = {saved->hit_collection, num_rays * max_iters};
+        params_.iters = {saved->iters, num_rays};
+        params_.prim_hits = {saved->prim_hits, model_.num_prims};
 
-        CUDA_CHECK(cudaMemset(backward->initial_contrib, 0, num_rays * sizeof(float4)));
-        params_.initial_contrib = {backward->initial_contrib, num_rays};
+        CUDA_CHECK(cudaMemset(saved->initial_contrib, 0, num_rays * sizeof(float4)));
+        params_.initial_contrib = {saved->initial_contrib, num_rays};
 
         init_ray_start_samples(&params_, model_.aabbs,
-                               backward->initial_prim_count,
-                               backward->initial_prim_indices);
+                               saved->initial_prim_count,
+                               saved->initial_prim_indices);
     } else {
         params_.last_state = {nullptr, 0};
         params_.last_delta_contrib = {nullptr, 0};

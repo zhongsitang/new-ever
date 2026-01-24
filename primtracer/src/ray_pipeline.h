@@ -74,8 +74,8 @@ struct Params {
 // Forward declaration
 class GAS;
 
-/// Output buffers for backward pass gradient computation.
-struct BackwardState {
+/// State saved during forward pass for backward gradient computation.
+struct SavedState {
     IntegratorState* states;        // (M, 12) volume integrator state per ray
     float4* delta_contribs;         // (M, 4) last delta contribution
     uint* iters;                    // (M,) iteration count per ray
@@ -124,7 +124,7 @@ public:
     /// @param tmin Minimum ray parameter
     /// @param tmax Maximum ray parameter per ray (M,)
     /// @param max_iters Maximum hit iterations per ray
-    /// @param backward Output buffers for backward pass (can be nullptr if not needed)
+    /// @param saved Output buffers for backward pass (can be nullptr if not needed)
     void trace_rays(
         size_t num_rays,
         float3* ray_origins,
@@ -135,7 +135,7 @@ public:
         float tmin,
         float* tmax,
         size_t max_iters,
-        BackwardState* backward
+        SavedState* saved
     );
 
     size_t num_prims() const { return model_.num_prims; }
