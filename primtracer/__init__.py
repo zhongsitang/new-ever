@@ -78,10 +78,16 @@ class PrimTracer(Function):
             hit_collection, initial_contrib, initial_prim_indices
         )
 
-        return color_rgba, depth
+        extras = dict(
+            hit_collection=hit_collection,
+            iters=saved.iters,
+            prim_hits=saved.prim_hits,
+        )
+
+        return color_rgba, depth, extras
 
     @staticmethod
-    def backward(ctx, grad_color: torch.Tensor, grad_depth: torch.Tensor):
+    def backward(ctx, grad_color: torch.Tensor, grad_depth: torch.Tensor, grad_extras: dict = None):
         (
             mean, scale, quat, density, features, rayo, rayd, tmax,
             hit_collection, initial_contrib, initial_prim_indices,
@@ -180,7 +186,8 @@ def trace_rays(
     tmin: float = 0.0,
     tmax: torch.Tensor | float = 1000.0,
     max_iters: int = 500,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    return_extras: bool = False,
+):
     """
     Trace rays through ellipsoid primitives using differentiable volume rendering.
 
@@ -196,12 +203,16 @@ def trace_rays(
         tmin: Minimum t value for ray marching
         tmax: Maximum t value. Can be a scalar or per-ray tensor of shape (M,)
         max_iters: Maximum number of hit iterations per ray
+        return_extras: If True, return additional info (hit_collection, iters, prim_hits)
 
     Returns:
-        Tuple of (color, depth):
-            color: RGBA output, shape (M, 4). RGB are accumulated colors,
-                   A is opacity (1 - transmittance)
-            depth: Expected depth along each ray, shape (M,)
+        If return_extras=False (default):
+            Tuple of (color, depth)
+        If return_extras=True:
+            Tuple of (color, depth, extras) where extras is a dict containing:
+                - hit_collection: Primitive hit indices for each ray
+                - iters: Number of iterations per ray
+                - prim_hits: Hit count per primitive
     """
     num_rays = rayo.shape[0]
 
@@ -215,10 +226,14 @@ def trace_rays(
             raise ValueError(f"tmax must have shape ({num_rays},) or be a scalar, got {tmax.shape}")
         tmax = tmax.to(dtype=torch.float32, device=rayo.device)
 
-    return PrimTracer.apply(
+    color, depth, extras = PrimTracer.apply(
         mean, scale, quat, density, features,
         rayo, rayd, tmin, tmax, max_iters
     )
+
+    if return_extras:
+        return color, depth, extras
+    return color, depth
 
 
 # =============================================================================
