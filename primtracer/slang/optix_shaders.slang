@@ -113,8 +113,8 @@ RaytracingAccelerationStructure traversable; // BVH acceleration structure
 /// Create a SamplePoint from a hit ID and t value.
 ///
 /// Decodes the hit_id to get primitive index and hit type, then evaluates
-/// the color and computes the delta contribution.
-SamplePoint create_sample(uint hit_id, float t) {
+/// the color using spherical harmonics and computes the delta contribution.
+SamplePoint create_sample(uint hit_id, float t, float3 direction) {
     SamplePoint sample;
     let prim_index = hit_id / HITS_PER_PRIMITIVE;
     let hit_type = hit_id % HITS_PER_PRIMITIVE;
@@ -123,12 +123,34 @@ SamplePoint create_sample(uint hit_id, float t) {
     let density = densities[prim_index];
     let signed_density = density * ((hit_type == HIT_TYPE_ENTRY) ? 1.0f : -1.0f);
 
-    // Evaluate base color from SH degree 0
+    // Load SH features based on sh_degree
     Features feat;
     SHFeatures sh_feats = {prim_index, sh_degree, features};
     feat.f0 = get_sh(sh_feats, 0);
-    float3 rayd = {0, 0, 1};  // Default direction for SH evaluation
-    let color = eval_sh_col0(rayd, feat);
+    if (sh_degree > 0) {
+        feat.f1 = get_sh(sh_feats, 1);
+        feat.f2 = get_sh(sh_feats, 2);
+        feat.f3 = get_sh(sh_feats, 3);
+        if (sh_degree > 1) {
+            feat.f4 = get_sh(sh_feats, 4);
+            feat.f5 = get_sh(sh_feats, 5);
+            feat.f6 = get_sh(sh_feats, 6);
+            feat.f7 = get_sh(sh_feats, 7);
+            feat.f8 = get_sh(sh_feats, 8);
+            if (sh_degree > 2) {
+                feat.f9 = get_sh(sh_feats, 9);
+                feat.f10 = get_sh(sh_feats, 10);
+                feat.f11 = get_sh(sh_feats, 11);
+                feat.f12 = get_sh(sh_feats, 12);
+                feat.f13 = get_sh(sh_feats, 13);
+                feat.f14 = get_sh(sh_feats, 14);
+                feat.f15 = get_sh(sh_feats, 15);
+            }
+        }
+    }
+
+    // Evaluate color using full spherical harmonics with actual ray direction
+    let color = eval_color(direction, feat, sh_degree);
 
     // Pack into sample
     sample.t = t;
@@ -312,7 +334,7 @@ void render_volume()
             }
 
             // Create sample and update volume state
-            sample = create_sample(hit_id, sample.t);
+            sample = create_sample(hit_id, sample.t, direction);
             state = update(state, sample, tmin, ray_tmax, max_prim_size);
 
             // Record hit for backward pass
