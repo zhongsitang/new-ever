@@ -112,16 +112,15 @@ void atomic_add_float4(TensorView<float> view, uint ind, float4 val) {
 }
 
 /// Load IntegratorState from tensor (48 bytes = 12 floats).
-/// Layout: [0-3] accumulated_contrib, [4-6] C_r/g/b, [7] logT, [8] depth_accum, [9] t, [10-11] implicit pad
+/// Layout: [0-3] accumulated_contrib, [4-7] C (RGBA), [8] logT, [9] depth_accum, [10] t, [11] pad
 IntegratorState get_state(TensorView<float> view, uint ind) {
     IntegratorState state;
     state.accumulated_contrib = float4(view[ind, 0], view[ind, 1], view[ind, 2], view[ind, 3]);
-    state.C_r = view[ind, 4];
-    state.C_g = view[ind, 5];
-    state.C_b = view[ind, 6];
-    state.logT = view[ind, 7];
-    state.depth_accum = view[ind, 8];
-    state.t = view[ind, 9];
+    state.C = float4(view[ind, 4], view[ind, 5], view[ind, 6], view[ind, 7]);
+    state.logT = view[ind, 8];
+    state.depth_accum = view[ind, 9];
+    state.t = view[ind, 10];
+    state._pad = 0.0f;
     return state;
 }
 

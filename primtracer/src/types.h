@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optix.h>
 
@@ -49,21 +50,24 @@ struct Primitives {
 
 /// Per-ray volume integrator state (48 bytes, 16-byte aligned)
 ///
-/// NOTE: We use explicit float scalars instead of float3 for C to ensure
-/// consistent memory layout across C++ and Slang. Slang may add padding
-/// after float3 types, causing layout mismatch with C++.
-/// Tail padding (8 bytes) is implicit due to float4's 16-byte alignment.
+/// We use float4 for C (RGB color) instead of float3 to ensure consistent
+/// memory layout across C++ and Slang. C.w is reserved for future use (e.g. alpha).
 struct IntegratorState {
     float4 accumulated_contrib;  // (density, r*d, g*d, b*d) - offset 0, 16 bytes
-    float C_r, C_g, C_b;         // accumulated color RGB    - offset 16, 12 bytes
-    float logT;                  // log transmittance        - offset 28, 4 bytes
-    float depth_accum;           // accumulated depth        - offset 32, 4 bytes
-    float t;                     // current ray parameter    - offset 36, 4 bytes
-    // implicit 8-byte tail padding to align float4 in arrays
-};
+    float4 C;                    // accumulated color RGBA   - offset 16, 16 bytes
+    float logT;                  // log transmittance        - offset 32, 4 bytes
+    float depth_accum;           // accumulated depth        - offset 36, 4 bytes
+    float t;                     // current ray parameter    - offset 40, 4 bytes
+    float _pad;                  // padding                  - offset 44, 4 bytes
+};                               // total: 48 bytes
 
-static_assert(sizeof(IntegratorState) == 48);
-static_assert(alignof(IntegratorState) == 16);
+static_assert(sizeof(IntegratorState) == 48, "IntegratorState must be 48 bytes");
+static_assert(alignof(IntegratorState) == 16, "IntegratorState must be 16-byte aligned");
+static_assert(offsetof(IntegratorState, accumulated_contrib) == 0, "accumulated_contrib offset");
+static_assert(offsetof(IntegratorState, C) == 16, "C offset");
+static_assert(offsetof(IntegratorState, logT) == 32, "logT offset");
+static_assert(offsetof(IntegratorState, depth_accum) == 36, "depth_accum offset");
+static_assert(offsetof(IntegratorState, t) == 40, "t offset");
 
 /// State saved for backward gradient computation
 struct SavedState {
@@ -81,7 +85,7 @@ struct SavedState {
 // OptiX Launch Parameters (must match slang layout)
 // =============================================================================
 
-/// Camera parameters for ray generation.
+/// Camera parameters for ray generation (64 bytes).
 ///
 /// NOTE: We use explicit float scalars instead of float3 to ensure
 /// consistent memory layout across C++ and Slang compilers.
@@ -94,7 +98,13 @@ struct Camera {
     float eye_x, eye_y, eye_z;           // camera position      - offset 52, 12 bytes
 };                                       // total: 64 bytes
 
-static_assert(sizeof(Camera) == 64, "Camera size must be 64 bytes for GPU compatibility");
+static_assert(sizeof(Camera) == 64, "Camera must be 64 bytes");
+static_assert(offsetof(Camera, fx) == 0, "fx offset");
+static_assert(offsetof(Camera, height) == 8, "height offset");
+static_assert(offsetof(Camera, U_x) == 16, "U_x offset");
+static_assert(offsetof(Camera, V_x) == 28, "V_x offset");
+static_assert(offsetof(Camera, W_x) == 40, "W_x offset");
+static_assert(offsetof(Camera, eye_x) == 52, "eye_x offset");
 
 struct Params {
     // Output buffers
