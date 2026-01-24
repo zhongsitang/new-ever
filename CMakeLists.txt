@@ -62,13 +62,13 @@ pybind11_add_module(ellipsoid_tracer MODULE
   ${TRACER_DIR}/ray_pipeline.cpp
   ${TRACER_DIR}/ray_pipeline.h
   ${TRACER_DIR}/python_bindings.cpp
-  ${TRACER_DIR}/volume_types.h
-  ${TRACER_DIR}/cuda_kernels.cu
-  ${TRACER_DIR}/cuda_kernels.h
+  ${TRACER_DIR}/types.h
+  ${TRACER_DIR}/primitive_kernels.cu
+  ${TRACER_DIR}/primitive_kernels.h
 )
 
 set_source_files_properties(
-  ${TRACER_DIR}/cuda_kernels.cu
+  ${TRACER_DIR}/primitive_kernels.cu
   PROPERTIES LANGUAGE CUDA
 )
 

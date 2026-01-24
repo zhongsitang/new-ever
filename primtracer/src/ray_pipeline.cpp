@@ -14,7 +14,7 @@
 
 #include "ray_pipeline.h"
 #include "optix_error.h"
-#include "cuda_kernels.h"
+#include "primitive_kernels.h"
 
 #include <optix_stubs.h>
 #include <optix_stack_size.h>
@@ -22,7 +22,7 @@
 #include <unordered_map>
 
 // =============================================================================
-// DeviceResources implementation
+// DeviceContext implementation
 // =============================================================================
 
 namespace {
@@ -32,24 +32,23 @@ void context_log_cb(unsigned int level, const char* tag,
     // Silently ignore OptiX log messages
 }
 
-std::unordered_map<int, std::unique_ptr<DeviceResources>> g_resources;
+std::unordered_map<int, std::unique_ptr<DeviceContext>> g_contexts;
 
 }  // namespace
 
-DeviceResources& DeviceResources::get(int device_index) {
-    auto it = g_resources.find(device_index);
-    if (it != g_resources.end()) {
+DeviceContext& DeviceContext::get(int device_index) {
+    auto it = g_contexts.find(device_index);
+    if (it != g_contexts.end()) {
         return *it->second;
     }
 
-    // Create new resources (constructor is private, use unique_ptr with custom construction)
-    auto resources = std::unique_ptr<DeviceResources>(new DeviceResources(device_index));
-    auto& ref = *resources;
-    g_resources[device_index] = std::move(resources);
+    auto ctx = std::unique_ptr<DeviceContext>(new DeviceContext(device_index));
+    auto& ref = *ctx;
+    g_contexts[device_index] = std::move(ctx);
     return ref;
 }
 
-DeviceResources::DeviceResources(int device_index) : device_(device_index) {
+DeviceContext::DeviceContext(int device_index) : device_(device_index) {
     CUDA_CHECK(cudaSetDevice(device_));
     CUDA_CHECK(cudaFree(0));  // Initialize CUDA context
     OPTIX_CHECK(optixInit());
@@ -62,32 +61,36 @@ DeviceResources::DeviceResources(int device_index) : device_(device_index) {
     OPTIX_CHECK(optixDeviceContextCreate(cuCtx, &options, &context_));
 }
 
-DeviceResources::~DeviceResources() {
+DeviceContext::~DeviceContext() {
+    if (context_) optixDeviceContextDestroy(context_);
+}
+
+// =============================================================================
+// AccelStructure implementation
+// =============================================================================
+
+AccelStructure::AccelStructure(DeviceContext& ctx, Primitives& prims)
+    : ctx_(ctx), num_prims_(prims.num_prims)
+{
+    CUDA_CHECK(cudaSetDevice(ctx_.device()));
+    build_aabbs(prims);
+    build_gas(prims);
+}
+
+AccelStructure::~AccelStructure() {
     if (gas_compact_) cudaFree(reinterpret_cast<void*>(gas_compact_));
     if (gas_temp_) cudaFree(reinterpret_cast<void*>(gas_temp_));
     if (gas_output_) cudaFree(reinterpret_cast<void*>(gas_output_));
     if (aabb_buffer_) cudaFree(aabb_buffer_);
-    if (context_) optixDeviceContextDestroy(context_);
 }
 
-void DeviceResources::prepare_aabbs(Primitives& prims) {
-    // Ensure buffer capacity
-    if (aabb_capacity_ < prims.num_prims) {
-        if (aabb_buffer_) {
-            CUDA_CHECK(cudaFree(aabb_buffer_));
-        }
-        CUDA_CHECK(cudaMalloc(&aabb_buffer_, prims.num_prims * sizeof(OptixAabb)));
-        aabb_capacity_ = prims.num_prims;
-    }
-
-    // Set buffer and compute AABBs
+void AccelStructure::build_aabbs(Primitives& prims) {
+    CUDA_CHECK(cudaMalloc(&aabb_buffer_, prims.num_prims * sizeof(OptixAabb)));
     prims.aabbs = aabb_buffer_;
     prims.compute_aabbs();
 }
 
-OptixTraversableHandle DeviceResources::build_gas(const Primitives& prims) {
-    CUDA_CHECK(cudaSetDevice(device_));
-
+void AccelStructure::build_gas(const Primitives& prims) {
     OptixAccelBuildOptions accel_options = {};
     accel_options.buildFlags = OPTIX_BUILD_FLAG_PREFER_FAST_TRACE | OPTIX_BUILD_FLAG_ALLOW_COMPACTION;
     accel_options.operation = OPTIX_BUILD_OPERATION_BUILD;
@@ -103,19 +106,12 @@ OptixTraversableHandle DeviceResources::build_gas(const Primitives& prims) {
     input.customPrimitiveArray.numSbtRecords = 1;
 
     OptixAccelBufferSizes sizes;
-    OPTIX_CHECK(optixAccelComputeMemoryUsage(context_, &accel_options, &input, 1, &sizes));
+    OPTIX_CHECK(optixAccelComputeMemoryUsage(ctx_.context(), &accel_options, &input, 1, &sizes));
 
-    // Ensure buffers
-    if (gas_output_size_ < sizes.outputSizeInBytes) {
-        if (gas_output_) CUDA_CHECK(cudaFree(reinterpret_cast<void*>(gas_output_)));
-        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&gas_output_), sizes.outputSizeInBytes));
-        gas_output_size_ = sizes.outputSizeInBytes;
-    }
-    if (gas_temp_size_ < sizes.tempSizeInBytes) {
-        if (gas_temp_) CUDA_CHECK(cudaFree(reinterpret_cast<void*>(gas_temp_)));
-        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&gas_temp_), sizes.tempSizeInBytes));
-        gas_temp_size_ = sizes.tempSizeInBytes;
-    }
+    // Allocate buffers
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&gas_output_), sizes.outputSizeInBytes));
+    gas_output_size_ = sizes.outputSizeInBytes;
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&gas_temp_), sizes.tempSizeInBytes));
 
     // Query compacted size
     size_t* d_compacted_size;
@@ -125,12 +121,11 @@ OptixTraversableHandle DeviceResources::build_gas(const Primitives& prims) {
     emit.type = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE;
     emit.result = reinterpret_cast<CUdeviceptr>(d_compacted_size);
 
-    OptixTraversableHandle gas_handle;
     OPTIX_CHECK(optixAccelBuild(
-        context_, 0, &accel_options, &input, 1,
+        ctx_.context(), 0, &accel_options, &input, 1,
         gas_temp_, sizes.tempSizeInBytes,
         gas_output_, sizes.outputSizeInBytes,
-        &gas_handle, &emit, 1
+        &gas_handle_, &emit, 1
     ));
 
     // Compact if beneficial
@@ -139,32 +134,23 @@ OptixTraversableHandle DeviceResources::build_gas(const Primitives& prims) {
     CUDA_CHECK(cudaFree(d_compacted_size));
 
     if (compacted_size < sizes.outputSizeInBytes) {
-        if (gas_compact_size_ < compacted_size) {
-            if (gas_compact_) CUDA_CHECK(cudaFree(reinterpret_cast<void*>(gas_compact_)));
-            CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&gas_compact_), compacted_size));
-            gas_compact_size_ = compacted_size;
-        }
-        OPTIX_CHECK(optixAccelCompact(context_, 0, gas_handle, gas_compact_, gas_compact_size_, &gas_handle));
+        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&gas_compact_), compacted_size));
+        OPTIX_CHECK(optixAccelCompact(ctx_.context(), 0, gas_handle_, gas_compact_, compacted_size, &gas_handle_));
     }
-
-    return gas_handle;
 }
 
 // =============================================================================
 // RayPipeline implementation
 // =============================================================================
 
-RayPipeline::RayPipeline(const Primitives& prims, int device_index)
-    : resources_(DeviceResources::get(device_index))
+RayPipeline::RayPipeline(Primitives& prims, int device_index)
+    : ctx_(DeviceContext::get(device_index))
 {
-    CUDA_CHECK(cudaSetDevice(resources_.device()));
+    CUDA_CHECK(cudaSetDevice(ctx_.device()));
 
-    // Prepare primitives (compute AABBs)
+    // Build acceleration structure
     model_ = prims;
-    resources_.prepare_aabbs(model_);
-
-    // Build GAS
-    gas_handle_ = resources_.build_gas(model_);
+    accel_ = std::make_unique<AccelStructure>(ctx_, model_);
 
     // Setup pipeline compile options
     pipeline_options_.usesMotionBlur = false;
@@ -196,7 +182,7 @@ void RayPipeline::create_module(const char* ptx) {
     module_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
 
     OPTIX_CHECK_LOG(optixModuleCreate(
-        resources_.context(),
+        ctx_.context(),
         &module_options,
         &pipeline_options_,
         ptx,
@@ -215,7 +201,7 @@ void RayPipeline::create_program_groups() {
     raygen_desc.raygen.module = module_;
     raygen_desc.raygen.entryFunctionName = "__raygen__render_volume";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
-        resources_.context(), &raygen_desc, 1, &pg_options, log_, &log_size_, &raygen_pg_
+        ctx_.context(), &raygen_desc, 1, &pg_options, log_, &log_size_, &raygen_pg_
     ));
 
     // Miss
@@ -224,7 +210,7 @@ void RayPipeline::create_program_groups() {
     miss_desc.miss.module = module_;
     miss_desc.miss.entryFunctionName = "__miss__miss";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
-        resources_.context(), &miss_desc, 1, &pg_options, log_, &log_size_, &miss_pg_
+        ctx_.context(), &miss_desc, 1, &pg_options, log_, &log_size_, &miss_pg_
     ));
 
     // Hitgroup
@@ -235,7 +221,7 @@ void RayPipeline::create_program_groups() {
     hitgroup_desc.hitgroup.moduleIS = module_;
     hitgroup_desc.hitgroup.entryFunctionNameIS = "__intersection__intersect_ellipsoid";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
-        resources_.context(), &hitgroup_desc, 1, &pg_options, log_, &log_size_, &hitgroup_pg_
+        ctx_.context(), &hitgroup_desc, 1, &pg_options, log_, &log_size_, &hitgroup_pg_
     ));
 }
 
@@ -248,7 +234,7 @@ void RayPipeline::create_pipeline() {
     link_options.maxTraceDepth = max_trace_depth;
 
     OPTIX_CHECK_LOG(optixPipelineCreate(
-        resources_.context(),
+        ctx_.context(),
         &pipeline_options_,
         &link_options,
         program_groups,
@@ -322,7 +308,7 @@ void RayPipeline::trace_rays(
     size_t max_iters,
     SavedState* saved)
 {
-    CUDA_CHECK(cudaSetDevice(resources_.device()));
+    CUDA_CHECK(cudaSetDevice(ctx_.device()));
 
     // Allocate temporary buffer for last_prim (internal use only)
     uint* last_prim = nullptr;
@@ -350,7 +336,7 @@ void RayPipeline::trace_rays(
         CUDA_CHECK(cudaMemset(saved->initial_contrib, 0, num_rays * sizeof(float4)));
         params_.initial_contrib = {saved->initial_contrib, num_rays};
 
-        init_ray_start_samples(&params_, model_.aabbs,
+        init_ray_start_samples(&params_, accel_->aabbs(),
                                saved->initial_prim_count,
                                saved->initial_prim_indices);
     } else {
@@ -362,7 +348,7 @@ void RayPipeline::trace_rays(
         params_.initial_contrib = {nullptr, 0};
     }
 
-    params_.handle = gas_handle_;
+    params_.handle = accel_->handle();
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,
                           sizeof(Params), cudaMemcpyHostToDevice));
 
@@ -404,5 +390,6 @@ RayPipeline::~RayPipeline() {
     if (module_)
         OPTIX_CHECK(optixModuleDestroy(std::exchange(module_, nullptr)));
 
-    // Note: DeviceResources are globally cached, not destroyed here
+    // Note: DeviceContext is globally cached, not destroyed here
+    // AccelStructure is destroyed automatically via unique_ptr
 }

@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "cuda_kernels.h"
+#include "primitive_kernels.h"
 #include "optix_error.h"
 #include "glm/glm.hpp"
-#include "volume_types.h"
+#include "types.h"
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <iostream>

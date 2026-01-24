@@ -25,7 +25,7 @@
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
-#include "volume_types.h"
+#include "types.h"
 
 using uint = uint32_t;
 
@@ -84,50 +84,68 @@ struct SavedState {
 };
 
 // =============================================================================
-// DeviceResources - Per-device cached resources with RAII
+// DeviceContext - Per-device OptiX context (cached globally)
 // =============================================================================
 
-/// Manages per-device OptiX resources: context, AABB buffer, GAS buffers.
-/// Resources are cached globally and reused across RayPipeline instances.
-class DeviceResources {
+/// Manages per-device OptiX context. Cached globally and shared.
+class DeviceContext {
 public:
-    /// Get or create resources for a specific device (cached globally)
-    static DeviceResources& get(int device_index);
+    /// Get or create context for a specific device (cached globally)
+    static DeviceContext& get(int device_index);
 
-    // Accessors
     OptixDeviceContext context() const { return context_; }
     int device() const { return device_; }
 
-    /// Prepare AABB buffer and compute AABBs for primitives
-    void prepare_aabbs(Primitives& prims);
-
-    /// Build GAS (Geometry Acceleration Structure) for primitives
-    /// Returns the traversable handle
-    OptixTraversableHandle build_gas(const Primitives& prims);
-
     // Non-copyable
-    DeviceResources(const DeviceResources&) = delete;
-    DeviceResources& operator=(const DeviceResources&) = delete;
+    DeviceContext(const DeviceContext&) = delete;
+    DeviceContext& operator=(const DeviceContext&) = delete;
 
-    ~DeviceResources();
+    ~DeviceContext();
 
 private:
-    explicit DeviceResources(int device_index);
+    explicit DeviceContext(int device_index);
 
     int device_ = -1;
     OptixDeviceContext context_ = nullptr;
+};
+
+// =============================================================================
+// AccelStructure - AABB and GAS management for primitives
+// =============================================================================
+
+/// Manages acceleration structure: AABB buffer and GAS (Geometry Acceleration Structure).
+/// Owns its buffers with RAII.
+class AccelStructure {
+public:
+    /// Build acceleration structure for primitives.
+    /// Sets prims.aabbs to point to internal buffer.
+    AccelStructure(DeviceContext& ctx, Primitives& prims);
+
+    ~AccelStructure();
+
+    // Non-copyable
+    AccelStructure(const AccelStructure&) = delete;
+    AccelStructure& operator=(const AccelStructure&) = delete;
+
+    OptixTraversableHandle handle() const { return gas_handle_; }
+    OptixAabb* aabbs() const { return aabb_buffer_; }
+
+private:
+    void build_aabbs(Primitives& prims);
+    void build_gas(const Primitives& prims);
+
+    DeviceContext& ctx_;
+    OptixTraversableHandle gas_handle_ = 0;
 
     // AABB buffer
     OptixAabb* aabb_buffer_ = nullptr;
-    size_t aabb_capacity_ = 0;
+    size_t num_prims_ = 0;
 
-    // GAS build buffers
+    // GAS buffers
     CUdeviceptr gas_output_ = 0;
     size_t gas_output_size_ = 0;
     CUdeviceptr gas_temp_ = 0;
-    size_t gas_temp_size_ = 0;
     CUdeviceptr gas_compact_ = 0;
-    size_t gas_compact_size_ = 0;
 };
 
 // =============================================================================
@@ -139,12 +157,10 @@ private:
 /// This class manages:
 /// - OptiX pipeline (module, program groups, SBT)
 /// - Ray tracing execution
-///
-/// Device resources (context, buffers) are managed by DeviceResources.
 class RayPipeline {
 public:
     /// Construct a ray pipeline with primitive data.
-    RayPipeline(const Primitives& prims, int device_index);
+    RayPipeline(Primitives& prims, int device_index);
 
     ~RayPipeline();
 
@@ -153,17 +169,6 @@ public:
     RayPipeline& operator=(const RayPipeline&) = delete;
 
     /// Trace rays through the scene.
-    ///
-    /// @param num_rays Number of rays to trace
-    /// @param ray_origins Ray origin positions (M, 3)
-    /// @param ray_directions Ray directions, should be normalized (M, 3)
-    /// @param color_out Output RGBA colors (M, 4)
-    /// @param depth_out Output expected depths (M,)
-    /// @param sh_degree Spherical harmonics degree
-    /// @param tmin Minimum ray parameter
-    /// @param tmax Maximum ray parameter per ray (M,)
-    /// @param max_iters Maximum hit iterations per ray
-    /// @param saved Output buffers for backward pass (can be nullptr if not needed)
     void trace_rays(
         size_t num_rays,
         float3* ray_origins,
@@ -185,9 +190,9 @@ private:
     void create_pipeline();
     void create_sbt();
 
-    DeviceResources& resources_;
+    DeviceContext& ctx_;
+    std::unique_ptr<AccelStructure> accel_;
     Primitives model_ = {};
-    OptixTraversableHandle gas_handle_ = 0;
 
     // OptiX pipeline objects
     OptixModule module_ = nullptr;

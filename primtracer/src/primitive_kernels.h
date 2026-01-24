@@ -14,7 +14,7 @@
 
 #pragma once
 #include "ray_pipeline.h"
-#include "volume_types.h"
+#include "types.h"
 
 // Initial ray sample accumulation (for rays starting inside primitives)
 void init_ray_start_samples(Params *params, OptixAabb *aabbs, int *d_hit_count=NULL, int *d_hit_inds=NULL);
