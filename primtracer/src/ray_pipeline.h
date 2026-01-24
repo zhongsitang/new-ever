@@ -23,6 +23,7 @@
 #include <cuda_runtime.h>
 #include <optix.h>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include "volume_types.h"
 
@@ -47,9 +48,9 @@ struct Params {
     StructuredBuffer<float> depth_out;                 // Rendered depth output
     StructuredBuffer<uint> iters;                      // Iteration count per ray
     StructuredBuffer<uint> last_prim;                  // Last primitive hit
-    StructuredBuffer<uint> prim_hits;        // Hit count per primitive
+    StructuredBuffer<uint> prim_hits;                  // Hit count per primitive
     StructuredBuffer<float4> last_delta_contrib;       // Last sample delta contribution
-    StructuredBuffer<IntegratorState> last_state;          // Final volume state per ray
+    StructuredBuffer<IntegratorState> last_state;      // Final volume state per ray
     StructuredBuffer<int> hit_collection;              // Collected hit IDs for backward pass
     StructuredBuffer<float3> ray_origins;
     StructuredBuffer<float3> ray_directions;
@@ -70,43 +71,70 @@ struct Params {
     OptixTraversableHandle handle;                     // BVH acceleration structure
 };
 
+// Forward declaration
+class GAS;
+
+/// RayPipeline: Complete ray tracing pipeline for ellipsoid volume rendering.
+///
+/// This class manages:
+/// - OptiX context (lazy-initialized, cached per device)
+/// - Primitive data and AABB computation
+/// - Acceleration structure (GAS)
+/// - OptiX pipeline and shader binding table
 class RayPipeline {
 public:
-    RayPipeline() = default;
-    RayPipeline(OptixDeviceContext context, int8_t device, const Primitives& model, bool enable_backward);
+    /// Construct a ray pipeline with primitive data.
+    ///
+    /// @param device_index CUDA device index
+    /// @param means Primitive centers (N, 3)
+    /// @param scales Primitive scales (N, 3)
+    /// @param quats Primitive rotations as quaternions (N, 4)
+    /// @param densities Primitive densities (N,)
+    /// @param features SH features (N, C * 3)
+    /// @param num_prims Number of primitives
+    /// @param feature_size Number of SH coefficients per primitive
+    RayPipeline(
+        int device_index,
+        float* means,
+        float* scales,
+        float* quats,
+        float* densities,
+        float* features,
+        size_t num_prims,
+        size_t feature_size
+    );
+
     ~RayPipeline() noexcept(false);
 
     // Non-copyable
     RayPipeline(const RayPipeline&) = delete;
     RayPipeline& operator=(const RayPipeline&) = delete;
 
+    /// Trace rays through the scene.
     void trace_rays(
-        OptixTraversableHandle handle,
         size_t num_rays,
         float3* ray_origins,
         float3* ray_directions,
-        float4* color_out,                         // RGBA output (num_rays, 4)
-        float* depth_out,                          // Depth output (num_rays,)
+        float4* color_out,
+        float* depth_out,
         uint sh_degree,
-        float tmin, float* tmax,                   // tmax is now per-ray
+        float tmin,
+        float* tmax,
         float4* initial_contrib,
-        Cam* camera = nullptr,
-        size_t max_iters = 10000,
-        float max_prim_size = 3.0f,
-        uint* iters = nullptr,
-        uint* last_prim = nullptr,
-        uint* prim_hits = nullptr,
-        float4* last_delta_contrib = nullptr,
-        IntegratorState* last_state = nullptr,
-        int* hit_collection = nullptr,
-        int* d_hit_count = nullptr,
-        int* d_hit_inds = nullptr
+        Cam* camera,
+        size_t max_iters,
+        float max_prim_size,
+        uint* iters,
+        uint* last_prim,
+        uint* prim_hits,
+        float4* last_delta_contrib,
+        IntegratorState* last_state,
+        int* hit_collection,
+        int* d_hit_count,
+        int* d_hit_inds
     );
 
-    void reset_features(const Primitives& model);
-
-    bool enable_backward = false;
-    size_t num_prims = 0;
+    size_t num_prims() const { return model_.num_prims; }
 
 private:
     void create_module(const char* ptx);
@@ -114,10 +142,14 @@ private:
     void create_pipeline();
     void create_sbt();
 
-    OptixDeviceContext context_ = nullptr;
     int8_t device_ = -1;
-    const Primitives* model_ = nullptr;
+    OptixDeviceContext context_ = nullptr;
 
+    // Primitive data and acceleration structure
+    Primitives model_ = {};
+    std::unique_ptr<GAS> gas_;
+
+    // OptiX pipeline objects
     OptixModule module_ = nullptr;
     OptixPipeline pipeline_ = nullptr;
     OptixProgramGroup raygen_pg_ = nullptr;
@@ -130,4 +162,9 @@ private:
 
     Params params_ = {};
     OptixPipelineCompileOptions pipeline_options_ = {};
+
+    // Log buffer for OptiX
+    static constexpr size_t LOG_SIZE = 2048;
+    char log_[LOG_SIZE];
+    size_t log_size_ = LOG_SIZE;
 };

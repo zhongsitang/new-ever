@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "ray_pipeline.h"
+#include "accel_structure.h"
 #include "optix_error.h"
 #include "cuda_buffer.h"
 #include "cuda_kernels.h"
@@ -20,18 +21,85 @@
 #include <optix_stubs.h>
 #include <optix_stack_size.h>
 #include <cstring>
+#include <unordered_map>
 
-// -----------------------------------------------------------------------------
+// =============================================================================
+// Global OptiX context and AABB buffer management
+// =============================================================================
+
+namespace {
+
+void context_log_cb(unsigned int level, const char* tag,
+                    const char* message, void* /*cbdata*/) {
+    // Silently ignore OptiX log messages
+}
+
+std::unordered_map<int, OptixDeviceContext> g_optix_contexts;
+OptixAabb* g_aabbs = nullptr;
+size_t g_num_aabbs = 0;
+
+OptixDeviceContext get_or_create_context(int device_index) {
+    auto it = g_optix_contexts.find(device_index);
+    if (it != g_optix_contexts.end()) {
+        return it->second;
+    }
+
+    CUDA_CHECK(cudaSetDevice(device_index));
+    CUDA_CHECK(cudaFree(0));  // Initialize CUDA context
+    OPTIX_CHECK(optixInit());
+
+    OptixDeviceContextOptions options = {};
+    options.logCallbackFunction = &context_log_cb;
+    options.logCallbackLevel = 4;
+
+    CUcontext cuCtx = 0;
+    OptixDeviceContext context;
+    OPTIX_CHECK(optixDeviceContextCreate(cuCtx, &options, &context));
+
+    g_optix_contexts[device_index] = context;
+    return context;
+}
+
+}  // namespace
+
+// =============================================================================
 // RayPipeline implementation
-// -----------------------------------------------------------------------------
+// =============================================================================
 
-RayPipeline::RayPipeline(OptixDeviceContext context, int8_t device, const Primitives& model, bool enable_backward)
-    : enable_backward(enable_backward)
-    , context_(context)
-    , device_(device)
-    , model_(&model)
+RayPipeline::RayPipeline(
+    int device_index,
+    float* means,
+    float* scales,
+    float* quats,
+    float* densities,
+    float* features,
+    size_t num_prims,
+    size_t feature_size)
+    : device_(device_index)
 {
-    CUDA_CHECK(cudaSetDevice(device));
+    CUDA_CHECK(cudaSetDevice(device_));
+
+    // Get or create OptiX context
+    context_ = get_or_create_context(device_index);
+
+    // Build primitives structure
+    model_.means = reinterpret_cast<float3*>(means);
+    model_.scales = reinterpret_cast<float3*>(scales);
+    model_.quats = reinterpret_cast<float4*>(quats);
+    model_.densities = densities;
+    model_.features = features;
+    model_.num_prims = num_prims;
+    model_.feature_size = feature_size;
+    model_.prev_alloc_size = g_num_aabbs;
+    model_.aabbs = g_aabbs;
+
+    // Compute AABBs for primitives
+    build_primitive_aabbs(model_);
+    g_aabbs = model_.aabbs;
+    g_num_aabbs = std::max(num_prims, g_num_aabbs);
+
+    // Build acceleration structure
+    gas_ = std::make_unique<GAS>(context_, device_, model_, /*enable_anyhit=*/true, /*fast_build=*/false);
 
     // Setup pipeline compile options
     pipeline_options_.usesMotionBlur = false;
@@ -48,13 +116,12 @@ RayPipeline::RayPipeline(OptixDeviceContext context, int8_t device, const Primit
     create_sbt();
 
     // Initialize params with model data
-    params_.means = {reinterpret_cast<float3*>(model.means), model.num_prims};
-    params_.scales = {reinterpret_cast<float3*>(model.scales), model.num_prims};
-    params_.quats = {reinterpret_cast<float4*>(model.quats), model.num_prims};
-    params_.densities = {model.densities, model.num_prims};
-    params_.features = {model.features, model.num_prims * model.feature_size};
+    params_.means = {model_.means, model_.num_prims};
+    params_.scales = {model_.scales, model_.num_prims};
+    params_.quats = {model_.quats, model_.num_prims};
+    params_.densities = {model_.densities, model_.num_prims};
+    params_.features = {model_.features, model_.num_prims * model_.feature_size};
 
-    num_prims = model.num_prims;
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_param_), sizeof(Params)));
 }
 
@@ -179,7 +246,6 @@ void RayPipeline::create_sbt() {
 }
 
 void RayPipeline::trace_rays(
-    OptixTraversableHandle handle,
     size_t num_rays,
     float3* ray_origins,
     float3* ray_directions,
@@ -210,7 +276,7 @@ void RayPipeline::trace_rays(
     params_.hit_collection = {hit_collection, num_rays * max_iters};
     params_.iters = {iters, num_rays};
     params_.last_prim = {last_prim, num_rays};
-    params_.prim_hits = {prim_hits, num_prims};
+    params_.prim_hits = {prim_hits, model_.num_prims};
     params_.sh_degree = sh_degree;
     params_.max_prim_size = max_prim_size;
     params_.max_iters = max_iters;
@@ -226,9 +292,9 @@ void RayPipeline::trace_rays(
     CUDA_CHECK(cudaMemset(initial_contrib, 0, num_rays * sizeof(float4)));
     params_.initial_contrib = {initial_contrib, num_rays};
 
-    init_ray_start_samples(&params_, model_->aabbs, d_hit_count, d_hit_inds);
+    init_ray_start_samples(&params_, model_.aabbs, d_hit_count, d_hit_inds);
 
-    params_.handle = handle;
+    params_.handle = gas_->gas_handle;
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,
                           sizeof(Params), cudaMemcpyHostToDevice));
 
@@ -244,11 +310,10 @@ void RayPipeline::trace_rays(
     CUDA_CHECK(cudaStreamSynchronize(stream_));
 }
 
-void RayPipeline::reset_features(const Primitives& model) {
-    params_.features = {model.features, model.num_prims * model.feature_size};
-}
-
 RayPipeline::~RayPipeline() noexcept(false) {
+    // Release GAS first (it may hold references to context)
+    gas_.reset();
+
     if (d_param_)
         CUDA_CHECK(cudaFree(reinterpret_cast<void*>(std::exchange(d_param_, 0))));
     if (sbt_.raygenRecord)
@@ -275,4 +340,6 @@ RayPipeline::~RayPipeline() noexcept(false) {
         OPTIX_CHECK(optixProgramGroupDestroy(std::exchange(hitgroup_pg_, nullptr)));
     if (module_)
         OPTIX_CHECK(optixModuleDestroy(std::exchange(module_, nullptr)));
+
+    // Note: We don't destroy the OptiX context here as it's globally cached
 }
