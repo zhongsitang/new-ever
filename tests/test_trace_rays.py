@@ -185,25 +185,3 @@ class TestTraceRaysGradient:
             eps=1e-3, atol=1e-3, rtol=1e-3,
         )
 
-    @pytest.mark.parametrize('n', [1, 5, 10, 100])
-    @pytest.mark.parametrize('density_scale', [0.01, 0.1, 1.0])
-    def test_grad_distortion(self, n, density_scale):
-        """Gradient check including distortion loss."""
-        mean, scale, quat, density, features = self._make_params(n, density_scale)
-        rayo, rayd = create_rays(n=2, device=DEVICE)
-        rayo[1, 2] = 0.1
-
-        def loss(m, s, q, d, f):
-            c, _, extras = primtracer.trace_rays(
-                m, s, q, d, f,
-                rayo, rayd,
-                tmin=0.5, tmax=100,
-                return_extras=True,
-            )
-            return c.sum() + 10.0 * extras['distortion_loss'].sum()
-
-        torch.autograd.gradcheck(
-            loss,
-            (mean, scale, quat, density, features),
-            eps=1e-3, atol=1e-3, rtol=1e-3,
-        )

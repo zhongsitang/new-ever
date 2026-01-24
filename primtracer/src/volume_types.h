@@ -40,12 +40,8 @@ struct HitData {
 /// Volume rendering state - must match slang IntegratorState layout exactly
 struct IntegratorState
 {
-  // Distortion loss components (for regularization)
-  float2 distortion_parts;
-  float2 cum_sum;
-
-  // Depth accumulator ([0] used, [1-2] reserved for memory layout compatibility)
-  float3 depth_accum;
+  // Depth accumulator
+  float depth_accum;
 
   // Current ray parameter t
   float t;

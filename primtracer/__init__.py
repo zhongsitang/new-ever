@@ -66,12 +66,6 @@ class PrimTracer(Function):
         ctx.tmax = tmax
         hit_collection = out["hit_collection"]
 
-        # Extract distortion loss from integrator state
-        states = ctx.saved.states.reshape(rayo.shape[0], -1)
-        distortion_pt1 = states[:, 0]
-        distortion_pt2 = states[:, 1]
-        distortion_loss = distortion_pt1 - distortion_pt2
-
         # Output format: color RGBA (M, 4), depth (M,)
         color_rgba = out["color"]  # (N, 4): R, G, B, A
         depth = out["depth"]       # (N,): depth
@@ -83,7 +77,6 @@ class PrimTracer(Function):
         )
 
         extras = dict(
-            distortion_loss=distortion_loss,
             hit_collection=hit_collection,
             iters=ctx.saved.iters,
             prim_hits=ctx.saved.prim_hits,
@@ -121,13 +114,8 @@ class PrimTracer(Function):
         prim_hits = torch.zeros((num_prims), dtype=torch.int32, device=device)
         dL_dinitial_contrib = torch.zeros((num_rays, 4), dtype=torch.float32, device=device)
 
-        # Handle distortion_loss gradient from extras
-        dL_ddistortion = torch.zeros((num_rays, 1), dtype=torch.float32, device=device)
-        if grad_extras is not None and grad_extras['distortion_loss'] is not None:
-            dL_ddistortion = grad_extras['distortion_loss'].reshape(-1, 1)
-
-        # Combine grad_color (R, G, B, A), grad_depth, and distortion_loss gradient
-        grad_combined = torch.cat([grad_color, grad_depth.reshape(-1, 1), dL_ddistortion], dim=1)
+        # Combine grad_color (R, G, B, A) and grad_depth
+        grad_combined = torch.cat([grad_color, grad_depth.reshape(-1, 1)], dim=1)
 
         block_size = 16
         if ctx.saved.iters.sum() > 0:
@@ -269,8 +257,6 @@ def trace_rays(
                 Same as above.
             extras : dict
                 Dictionary containing:
-                - 'distortion_loss': torch.Tensor of shape (M,), per-ray distortion
-                  loss for regularization.
                 - 'hit_collection': torch.Tensor, primitive hit IDs for backward pass.
                 - 'iters': torch.Tensor, number of iterations per ray.
                 - 'prim_hits': torch.Tensor, hit count per primitive.

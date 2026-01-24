@@ -244,19 +244,6 @@ def compute_alpha_weights(density_delta: jnp.ndarray) -> jnp.ndarray:
     return jnp.exp(log_weights)
 
 
-@jax.jit
-def lossfun_distortion(t: jnp.ndarray, w: jnp.ndarray) -> jnp.ndarray:
-    """Compute ∬ w[i] w[j] |t[i] - t[j]| di dj."""
-    assert_valid_stepfun(t, w)
-
-    ut = (t[..., 1:] + t[..., :-1]) / 2.0
-    dut = jnp.abs(ut[..., :, None] - ut[..., None, :])
-    loss_inter = jnp.sum(w * jnp.sum(w[..., None, :] * dut, axis=-1), axis=-1)
-
-    loss_intra = jnp.sum(w**2 * jnp.diff(t), axis=-1) / 3.0
-    return loss_inter + loss_intra
-
-
 def render_quadrature(
     tdist: jnp.ndarray,
     query_fn: Callable[[jnp.ndarray], Tuple[jnp.ndarray, jnp.ndarray]],
@@ -283,9 +270,7 @@ def render_quadrature(
     depth = expected_termination.reshape(-1)
 
     if return_extras:
-        dist_loss = lossfun_distortion(tdist, weights)
         extras: Dict[str, jnp.ndarray] = {
-            "distortion_loss": dist_loss.reshape(-1),
             "tdist": tdist,
             "avg_colors": avg_colors,
             "weights": weights,
