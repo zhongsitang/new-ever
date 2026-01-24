@@ -16,9 +16,6 @@
 #include "ray_pipeline.h"
 #include "volume_types.h"
 
-// Primitive bounding box computation (aabbs buffer must be pre-allocated)
-void compute_primitive_aabbs(const Primitives& prims);
-
 // Initial ray sample accumulation (for rays starting inside primitives)
 void init_ray_start_samples(Params *params, OptixAabb *aabbs, int *d_hit_count=NULL, int *d_hit_inds=NULL);
 void init_ray_start_samples_single(Params *params);

@@ -69,6 +69,9 @@ struct Primitives {
   size_t feature_size;
 
   OptixAabb *aabbs;  // Set by RayPipeline, managed by DeviceResources
+
+  /// Compute AABBs for all primitives (aabbs buffer must be pre-allocated)
+  void compute_aabbs() const;
 };
 
 struct Cam {

@@ -109,7 +109,7 @@ RayPipeline::RayPipeline(const Primitives& prims, int device_index)
     resources.ensure_aabb_capacity(prims.num_prims);
     model_ = prims;
     model_.aabbs = resources.aabb_buffer;
-    compute_primitive_aabbs(model_);
+    model_.compute_aabbs();
 
     // Build acceleration structure
     gas_ = std::make_unique<GAS>(context_, device_, model_, /*enable_anyhit=*/true, /*fast_build=*/false);

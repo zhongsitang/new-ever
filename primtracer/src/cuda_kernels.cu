@@ -78,15 +78,15 @@ __global__ void compute_primitive_bounds_kernel(
     aabbs[i] = aabb;
 }
 
-void compute_primitive_aabbs(const Primitives& prims) {
+void Primitives::compute_aabbs() const {
     const size_t block_size = 1024;
-    compute_primitive_bounds_kernel<<<(prims.num_prims + block_size - 1) / block_size, block_size>>>(
-        (glm::vec3 *)prims.means,
-        (glm::vec3 *)prims.scales,
-        (glm::vec4 *)prims.quats,
-        prims.densities,
-        prims.num_prims,
-        prims.aabbs);
+    compute_primitive_bounds_kernel<<<(num_prims + block_size - 1) / block_size, block_size>>>(
+        (glm::vec3 *)means,
+        (glm::vec3 *)scales,
+        (glm::vec4 *)quats,
+        densities,
+        num_prims,
+        aabbs);
     CUDA_SYNC_CHECK();
 }
 
