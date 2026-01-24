@@ -60,7 +60,7 @@ void RayTracer::create_module(const char* ptx) {
         &pipeline_options_,
         ptx,
         strlen(ptx),
-        log_, &log_size_,
+        log_, &log_sz_,
         &module_
     ));
 }
@@ -74,7 +74,7 @@ void RayTracer::create_program_groups() {
     raygen_desc.raygen.module = module_;
     raygen_desc.raygen.entryFunctionName = "__raygen__render_volume";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
-        ctx_.context(), &raygen_desc, 1, &pg_options, log_, &log_size_, &raygen_pg_
+        ctx_.context(), &raygen_desc, 1, &pg_options, log_, &log_sz_, &raygen_pg_
     ));
 
     // Miss
@@ -83,7 +83,7 @@ void RayTracer::create_program_groups() {
     miss_desc.miss.module = module_;
     miss_desc.miss.entryFunctionName = "__miss__miss";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
-        ctx_.context(), &miss_desc, 1, &pg_options, log_, &log_size_, &miss_pg_
+        ctx_.context(), &miss_desc, 1, &pg_options, log_, &log_sz_, &miss_pg_
     ));
 
     // Hitgroup
@@ -94,7 +94,7 @@ void RayTracer::create_program_groups() {
     hitgroup_desc.hitgroup.moduleIS = module_;
     hitgroup_desc.hitgroup.entryFunctionNameIS = "__intersection__intersect_ellipsoid";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
-        ctx_.context(), &hitgroup_desc, 1, &pg_options, log_, &log_size_, &hitgroup_pg_
+        ctx_.context(), &hitgroup_desc, 1, &pg_options, log_, &log_sz_, &hitgroup_pg_
     ));
 }
 
@@ -112,7 +112,7 @@ void RayTracer::create_pipeline() {
         &link_options,
         program_groups,
         std::size(program_groups),
-        log_, &log_size_,
+        log_, &log_sz_,
         &pipeline_
     ));
 
