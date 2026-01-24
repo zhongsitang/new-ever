@@ -160,7 +160,7 @@ class PrimTracer(Function):
             dL_dmeans.clip(min=-clip_val, max=clip_val),
             dL_dscales.clip(min=-clip_val, max=clip_val),
             dL_dquats.clip(min=-clip_val, max=clip_val),
-            dL_ddensities.clip(min=-50, max=50).reshape(density.shape),
+            dL_ddensities.clip(min=-clip_val, max=clip_val),
             dL_dfeatures.clip(min=-clip_val, max=clip_val),
             dL_drayo.clip(min=-clip_val, max=clip_val),
             dL_drayd.clip(min=-clip_val, max=clip_val),
@@ -190,7 +190,7 @@ def trace_rays(
         mean: Primitive centers, shape (N, 3)
         scale: Primitive scales (radii along each axis), shape (N, 3)
         quat: Primitive rotations as unit quaternions (w, x, y, z), shape (N, 4)
-        density: Primitive densities, shape (N,) or (N, 1)
+        density: Primitive densities, shape (N,)
         features: SH color features, shape (N, C, 3) where C is the number of
             SH coefficients. For degree-0 SH, C=1.
         rayo: Ray origins, shape (M, 3)
@@ -210,6 +210,9 @@ def trace_rays(
                 - prim_hits: Hit count per primitive
     """
     num_rays = rayo.shape[0]
+
+    # Normalize density to 1D
+    density = density.reshape(-1)
 
     # Convert tmax to per-ray tensor if needed
     if isinstance(tmax, (int, float)):
