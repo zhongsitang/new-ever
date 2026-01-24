@@ -47,6 +47,9 @@ RayTracer::RayTracer(int device_index)
     create_sbt();
 
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_param_), sizeof(Params)));
+
+    // Allocate ABI check buffer: [0]=magic, [1]=error_flag
+    CUDA_CHECK(cudaMalloc(&d_abi_check_, 2 * sizeof(uint32_t)));
 }
 
 void RayTracer::create_module(const char* ptx) {
@@ -225,6 +228,12 @@ void RayTracer::trace_rays(
     }
 
     params_.handle = accel_->handle();
+
+    // Setup ABI check: write magic to abi_check[0], clear error_flag at abi_check[1]
+    params_.abi_check = {d_abi_check_, 2};
+    uint32_t abi_init[2] = {PARAMS_MAGIC, 0};
+    CUDA_CHECK(cudaMemcpy(d_abi_check_, abi_init, sizeof(abi_init), cudaMemcpyHostToDevice));
+
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,
                           sizeof(Params), cudaMemcpyHostToDevice));
 
@@ -234,6 +243,14 @@ void RayTracer::trace_rays(
     CUDA_SYNC_CHECK();
     CUDA_CHECK(cudaStreamSynchronize(0));
 
+    // Check ABI validation: read back error_flag from abi_check[1]
+    uint32_t error_flag = 0;
+    CUDA_CHECK(cudaMemcpy(&error_flag, d_abi_check_ + 1, sizeof(uint32_t), cudaMemcpyDeviceToHost));
+    if (error_flag != 0) {
+        throw Exception("ABI mismatch: Params struct layout differs between C++ and Slang. "
+                        "Rebuild shaders or check struct alignment.");
+    }
+
     // Free temporary buffer
     CUDA_CHECK(cudaFree(last_prim));
 }
@@ -242,6 +259,8 @@ RayTracer::~RayTracer() {
     // Note: Don't use CUDA_CHECK/OPTIX_CHECK in destructor - they may throw,
     // but destructors are implicitly noexcept.
 
+    if (d_abi_check_)
+        cudaFree(std::exchange(d_abi_check_, nullptr));
     if (d_param_)
         cudaFree(reinterpret_cast<void*>(std::exchange(d_param_, 0)));
     if (sbt_.raygenRecord)

@@ -227,8 +227,8 @@ __global__ void accumulate_initial_samples_single_kernel(
 // =============================================================================
 
 void init_ray_start_samples(Params* params, OptixAabb* aabbs, int* d_hit_count, int* d_hit_inds) {
-    const int num_prims = params->means.size;
-    const int num_rays = params->initial_contrib.size;
+    const int num_prims = params->means.count;
+    const int num_rays = params->initial_contrib.count;
 
     // Allocate temporary buffers if not provided
     const bool alloc_temp = (d_hit_count == nullptr);
@@ -277,7 +277,7 @@ void init_ray_start_samples(Params* params, OptixAabb* aabbs, int* d_hit_count, 
 }
 
 void init_ray_start_samples_single(Params* params) {
-    const int num_prims = params->means.size;
+    const int num_prims = params->means.count;
     const size_t grid_size = (num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     accumulate_initial_samples_single_kernel<<<grid_size, BLOCK_SIZE>>>(

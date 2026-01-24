@@ -345,6 +345,7 @@ private:
 
     OptixShaderBindingTable sbt_ = {};
     CUdeviceptr d_param_ = 0;
+    uint32_t* d_abi_check_ = nullptr;  // ABI validation buffer [magic, error_flag]
 
     Params params_ = {};
     OptixPipelineCompileOptions pipeline_options_ = {};

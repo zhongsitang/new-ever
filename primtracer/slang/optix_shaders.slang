@@ -48,13 +48,19 @@ import safe_math;
 import spherical_harmonics;
 
 // =============================================================================
+// ABI Stability Constants
+// =============================================================================
+
+static const uint PARAMS_MAGIC = 0x5052494D;  // ASCII "PRIM" - must match C++
+
+// =============================================================================
 // Data Structures
 // =============================================================================
 
 struct Camera {
     float fx, fy;
-    int height;
-    int width;
+    int height;       // int32_t in C++
+    int width;        // int32_t in C++
     float3 U, V, W;
     float3 eye;
 };
@@ -72,39 +78,45 @@ struct HitAttr {
 };
 
 // =============================================================================
-// Launch Parameters (set by host)
+// Launch Parameters (set by host via SLANG_globalParams)
+// Order and types MUST match C++ Params struct exactly for ABI stability.
 // =============================================================================
 
+// ABI validation buffer: [0]=magic (read), [1]=error_flag (write)
+RWStructuredBuffer<uint>            abi_check;
+
 // Output buffers
-RWStructuredBuffer<float4>      image;              // Rendered RGBA output
-RWStructuredBuffer<float>       depth_out;          // Rendered depth output
-RWStructuredBuffer<uint>        iters;              // Iteration count per ray
-RWStructuredBuffer<uint>        last_prim;          // Last primitive hit (for debugging)
-RWStructuredBuffer<uint>        prim_hits; // Hit count per primitive
-RWStructuredBuffer<float4>      last_delta_contrib; // Last sample delta contribution
+RWStructuredBuffer<float4>          image;              // Rendered RGBA output
+RWStructuredBuffer<float>           depth_out;          // Rendered depth output
+RWStructuredBuffer<uint>            iters;              // Iteration count per ray
+RWStructuredBuffer<uint>            last_prim;          // Last primitive hit (for debugging)
+RWStructuredBuffer<uint>            prim_hits;          // Hit count per primitive
+RWStructuredBuffer<float4>          last_delta_contrib; // Last sample delta contribution
 RWStructuredBuffer<IntegratorState> last_state;         // Final volume state per ray
-RWStructuredBuffer<int>         hit_collection;     // Collected hit IDs for backward pass
+RWStructuredBuffer<int>             hit_collection;     // Collected hit IDs for backward pass
 
 // Input buffers
-StructuredBuffer<float3>        ray_origins;
-StructuredBuffer<float3>        ray_directions;
-Camera                          camera;
+StructuredBuffer<float3>            ray_origins;
+StructuredBuffer<float3>            ray_directions;
+Camera                              camera;
 
 // Primitive data
-RWStructuredBuffer<float3>      means;      // Ellipsoid centers
-RWStructuredBuffer<float3>      scales;     // Ellipsoid radii
-RWStructuredBuffer<float4>      quats;      // Ellipsoid rotations (quaternion wxyz)
-RWStructuredBuffer<float>       densities;  // Ellipsoid densities
-RWStructuredBuffer<float>       features;   // SH coefficients for color
+RWStructuredBuffer<float3>          means;              // Ellipsoid centers
+RWStructuredBuffer<float3>          scales;             // Ellipsoid radii
+RWStructuredBuffer<float4>          quats;              // Ellipsoid rotations (quaternion wxyz)
+RWStructuredBuffer<float>           densities;          // Ellipsoid densities
+RWStructuredBuffer<float>           features;           // SH coefficients for color
 
-// Rendering parameters
-size_t sh_degree;                           // Spherical harmonics degree
-size_t max_iters;                           // Maximum iterations per ray
-float tmin;                                 // Minimum ray t
-StructuredBuffer<float>         tmax;       // Maximum ray t (per-ray)
-RWStructuredBuffer<float4>      initial_contrib;  // Initial accumulated contribution
-float max_prim_size;                        // Maximum primitive size (for acceleration)
-RaytracingAccelerationStructure traversable; // BVH acceleration structure
+// Rendering parameters (use uint64 for ABI stability, not size_t)
+uint64_t                            sh_degree;          // Spherical harmonics degree
+uint64_t                            max_iters;          // Maximum iterations per ray
+float                               tmin;               // Minimum ray t
+float                               _pad0;              // Explicit padding (match C++)
+StructuredBuffer<float>             tmax;               // Maximum ray t (per-ray)
+RWStructuredBuffer<float4>          initial_contrib;    // Initial accumulated contribution
+float                               max_prim_size;      // Maximum primitive size (for acceleration)
+uint                                _pad1;              // Explicit padding (match C++)
+RaytracingAccelerationStructure     traversable;        // BVH acceleration structure
 
 // =============================================================================
 // Helper Functions
@@ -253,15 +265,25 @@ void miss(inout HitBuffer buf)
 /// Ray generation shader: main entry point for rendering.
 ///
 /// For each pixel/ray:
-/// 1. Initialize volume rendering state
-/// 2. Trace ray through scene, collecting sorted hits
-/// 3. Process hits front-to-back, updating volume state
-/// 4. Output final color
+/// 1. Validate binary layout (first thread only)
+/// 2. Initialize volume rendering state
+/// 3. Trace ray through scene, collecting sorted hits
+/// 4. Process hits front-to-back, updating volume state
+/// 5. Output final color
 [shader("raygeneration")]
 void render_volume()
 {
     const uint3 idx = DispatchRaysIndex();
     const uint3 dim = DispatchRaysDimensions();
+
+    // ABI validation: first thread checks magic number
+    // abi_check[0] = magic (written by host), abi_check[1] = error_flag (written by shader)
+    // If magic mismatch, shader writes error_flag=1 and host will abort after launch
+    if (idx.x == 0 && idx.y == 0 && idx.z == 0) {
+        if (abi_check[0] != PARAMS_MAGIC) {
+            abi_check[1] = 1;  // Signal ABI mismatch to host
+        }
+    }
 
     // Initialize ray
     float3 direction = l2_normalize(ray_directions[idx.x]);

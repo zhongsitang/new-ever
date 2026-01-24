@@ -15,32 +15,45 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <optix.h>
+
+// =============================================================================
+// ABI Stability Constants
+// =============================================================================
+
+/// Magic number for binary layout validation (ASCII "PRIM")
+constexpr uint32_t PARAMS_MAGIC = 0x5052494D;
 
 // =============================================================================
 // Basic Types
 // =============================================================================
 
-/// Slang StructuredBuffer layout: {T* data, size_t size}
+/// Slang StructuredBuffer layout: {T* data, uint64 count}
+/// Note: Uses uint64_t instead of size_t for ABI stability across platforms.
 template <typename T>
 struct StructuredBuffer {
     T* data;
-    size_t size;
+    uint64_t count;  // Element count (not byte size)
 };
+
+static_assert(sizeof(StructuredBuffer<float>) == 16);
+static_assert(alignof(StructuredBuffer<float>) == 8);
 
 // =============================================================================
 // Primitive Data
 // =============================================================================
 
 /// Ellipsoid primitive geometry (GPU pointers)
+/// Note: Uses uint64_t instead of size_t for ABI stability.
 struct Primitives {
     float3* means;
     float3* scales;
     float4* quats;        // quaternion (w,x,y,z)
     float* densities;
-    size_t num_prims;
+    uint64_t num_prims;
     float* features;      // SH coefficients
-    size_t feature_size;
+    uint64_t feature_size;
 };
 
 // =============================================================================
@@ -76,14 +89,26 @@ struct SavedState {
 // OptiX Launch Parameters (must match slang layout)
 // =============================================================================
 
+/// Camera parameters (64 bytes, 16-byte aligned)
+/// Note: Uses int32_t instead of int for ABI stability.
 struct Camera {
     float fx, fy;
-    int height, width;
+    int32_t height, width;
     float3 U, V, W;
     float3 eye;
 };
 
+static_assert(sizeof(Camera) == 64);
+static_assert(alignof(Camera) == 16);
+
+/// OptiX Launch Parameters
+/// Layout must match Slang global variables exactly (same order, same types).
+/// Note: Uses uint64_t instead of size_t for ABI stability.
 struct Params {
+    // ABI validation buffer: [0]=magic (host writes), [1]=error_flag (shader writes)
+    // Shader checks magic on first thread; if mismatch, writes error_flag=1
+    StructuredBuffer<uint32_t> abi_check;
+
     // Output buffers
     StructuredBuffer<float4> image;
     StructuredBuffer<float> depth_out;
@@ -107,11 +132,18 @@ struct Params {
     StructuredBuffer<float> features;
 
     // Render settings
-    size_t sh_degree;
-    size_t max_iters;
+    uint64_t sh_degree;
+    uint64_t max_iters;
     float tmin;
+    float _pad0;               // Explicit padding before 8-byte aligned pointer
     StructuredBuffer<float> tmax;
     StructuredBuffer<float4> initial_contrib;
     float max_prim_size;
+    uint32_t _pad1;            // Explicit padding before 8-byte aligned handle
     OptixTraversableHandle handle;
 };
+
+// Verify critical field offsets for ABI stability
+static_assert(offsetof(Params, abi_check) == 0);
+static_assert(offsetof(Params, image) == 16);
+static_assert(offsetof(Params, handle) == sizeof(Params) - sizeof(OptixTraversableHandle));
