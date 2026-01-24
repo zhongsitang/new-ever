@@ -13,25 +13,23 @@
 // limitations under the License.
 
 #include "ray_pipeline.h"
-#include "optix_error.h"
-#include "cuda_buffer.h"
-#include "cuda_kernels.h"
+#include "primitive_kernels.h"
 
-#include <optix_stubs.h>
 #include <optix_stack_size.h>
 #include <cstring>
 
-// -----------------------------------------------------------------------------
+// =============================================================================
 // RayPipeline implementation
-// -----------------------------------------------------------------------------
+// =============================================================================
 
-RayPipeline::RayPipeline(OptixDeviceContext context, int8_t device, const Primitives& model, bool enable_backward)
-    : enable_backward(enable_backward)
-    , context_(context)
-    , device_(device)
-    , model_(&model)
+RayPipeline::RayPipeline(const Primitives& prims, int device_index)
+    : ctx_(DeviceContext::get(device_index))
 {
-    CUDA_CHECK(cudaSetDevice(device));
+    CUDA_CHECK(cudaSetDevice(ctx_.device()));
+
+    // Build acceleration structure
+    model_ = prims;
+    accel_ = std::make_unique<AccelStructure>(ctx_, model_);
 
     // Setup pipeline compile options
     pipeline_options_.usesMotionBlur = false;
@@ -48,13 +46,12 @@ RayPipeline::RayPipeline(OptixDeviceContext context, int8_t device, const Primit
     create_sbt();
 
     // Initialize params with model data
-    params_.means = {reinterpret_cast<float3*>(model.means), model.num_prims};
-    params_.scales = {reinterpret_cast<float3*>(model.scales), model.num_prims};
-    params_.quats = {reinterpret_cast<float4*>(model.quats), model.num_prims};
-    params_.densities = {model.densities, model.num_prims};
-    params_.features = {model.features, model.num_prims * model.feature_size};
+    params_.means = {model_.means, model_.num_prims};
+    params_.scales = {model_.scales, model_.num_prims};
+    params_.quats = {model_.quats, model_.num_prims};
+    params_.densities = {model_.densities, model_.num_prims};
+    params_.features = {model_.features, model_.num_prims * model_.feature_size};
 
-    num_prims = model.num_prims;
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_param_), sizeof(Params)));
 }
 
@@ -64,7 +61,7 @@ void RayPipeline::create_module(const char* ptx) {
     module_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
 
     OPTIX_CHECK_LOG(optixModuleCreate(
-        context_,
+        ctx_.context(),
         &module_options,
         &pipeline_options_,
         ptx,
@@ -83,7 +80,7 @@ void RayPipeline::create_program_groups() {
     raygen_desc.raygen.module = module_;
     raygen_desc.raygen.entryFunctionName = "__raygen__render_volume";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
-        context_, &raygen_desc, 1, &pg_options, log_, &log_size_, &raygen_pg_
+        ctx_.context(), &raygen_desc, 1, &pg_options, log_, &log_size_, &raygen_pg_
     ));
 
     // Miss
@@ -92,7 +89,7 @@ void RayPipeline::create_program_groups() {
     miss_desc.miss.module = module_;
     miss_desc.miss.entryFunctionName = "__miss__miss";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
-        context_, &miss_desc, 1, &pg_options, log_, &log_size_, &miss_pg_
+        ctx_.context(), &miss_desc, 1, &pg_options, log_, &log_size_, &miss_pg_
     ));
 
     // Hitgroup
@@ -103,7 +100,7 @@ void RayPipeline::create_program_groups() {
     hitgroup_desc.hitgroup.moduleIS = module_;
     hitgroup_desc.hitgroup.entryFunctionNameIS = "__intersection__intersect_ellipsoid";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
-        context_, &hitgroup_desc, 1, &pg_options, log_, &log_size_, &hitgroup_pg_
+        ctx_.context(), &hitgroup_desc, 1, &pg_options, log_, &log_size_, &hitgroup_pg_
     ));
 }
 
@@ -116,7 +113,7 @@ void RayPipeline::create_pipeline() {
     link_options.maxTraceDepth = max_trace_depth;
 
     OPTIX_CHECK_LOG(optixPipelineCreate(
-        context_,
+        ctx_.context(),
         &pipeline_options_,
         &link_options,
         program_groups,
@@ -179,100 +176,102 @@ void RayPipeline::create_sbt() {
 }
 
 void RayPipeline::trace_rays(
-    OptixTraversableHandle handle,
     size_t num_rays,
     float3* ray_origins,
     float3* ray_directions,
     float4* color_out,
     float* depth_out,
     uint sh_degree,
-    float tmin, float* tmax,
-    float4* initial_contrib,
-    Cam* camera,
+    float tmin,
+    float* tmax,
     size_t max_iters,
-    float max_prim_size,
-    uint* iters,
-    uint* last_prim,
-    uint* prim_hits,
-    float4* last_delta_contrib,
-    IntegratorState* last_state,
-    int* hit_collection,
-    int* d_hit_count,
-    int* d_hit_inds)
+    SavedState* saved)
 {
-    CUDA_CHECK(cudaSetDevice(device_));
+    CUDA_CHECK(cudaSetDevice(ctx_.device()));
+
+    // Allocate temporary buffer for last_prim (internal use only)
+    uint* last_prim = nullptr;
+    CUDA_CHECK(cudaMalloc(&last_prim, num_rays * sizeof(uint)));
 
     // Setup params
     params_.image = {color_out, num_rays};
     params_.depth_out = {depth_out, num_rays};
-    params_.last_state = {last_state, num_rays};
-    params_.last_delta_contrib = {last_delta_contrib, num_rays};
-    params_.hit_collection = {hit_collection, num_rays * max_iters};
-    params_.iters = {iters, num_rays};
-    params_.last_prim = {last_prim, num_rays};
-    params_.prim_hits = {prim_hits, num_prims};
     params_.sh_degree = sh_degree;
-    params_.max_prim_size = max_prim_size;
+    params_.max_prim_size = 3.0f;
     params_.max_iters = max_iters;
     params_.ray_origins = {ray_origins, num_rays};
     params_.ray_directions = {ray_directions, num_rays};
     params_.tmin = tmin;
     params_.tmax = {tmax, num_rays};
+    params_.last_prim = {last_prim, num_rays};
 
-    if (camera) {
-        params_.camera = *camera;
+    if (saved) {
+        params_.last_state = {saved->states, num_rays};
+        params_.last_delta_contrib = {saved->delta_contribs, num_rays};
+        params_.hit_collection = {saved->hit_collection, num_rays * max_iters};
+        params_.iters = {saved->iters, num_rays};
+        params_.prim_hits = {saved->prim_hits, model_.num_prims};
+
+        CUDA_CHECK(cudaMemset(saved->initial_contrib, 0, num_rays * sizeof(float4)));
+        params_.initial_contrib = {saved->initial_contrib, num_rays};
+
+        init_ray_start_samples(&params_, accel_->aabbs(),
+                               saved->initial_prim_count,
+                               saved->initial_prim_indices);
+    } else {
+        params_.last_state = {nullptr, 0};
+        params_.last_delta_contrib = {nullptr, 0};
+        params_.hit_collection = {nullptr, 0};
+        params_.iters = {nullptr, 0};
+        params_.prim_hits = {nullptr, 0};
+        params_.initial_contrib = {nullptr, 0};
     }
 
-    CUDA_CHECK(cudaMemset(initial_contrib, 0, num_rays * sizeof(float4)));
-    params_.initial_contrib = {initial_contrib, num_rays};
-
-    init_ray_start_samples(&params_, model_->aabbs, d_hit_count, d_hit_inds);
-
-    params_.handle = handle;
+    params_.handle = accel_->handle();
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,
                           sizeof(Params), cudaMemcpyHostToDevice));
 
-    if (camera) {
-        OPTIX_CHECK(optixLaunch(pipeline_, stream_, d_param_, sizeof(Params), &sbt_,
-                                camera->width, camera->height, 1));
-    } else {
-        OPTIX_CHECK(optixLaunch(pipeline_, stream_, d_param_, sizeof(Params), &sbt_,
-                                num_rays, 1, 1));
-    }
+    OPTIX_CHECK(optixLaunch(pipeline_, stream_, d_param_, sizeof(Params), &sbt_,
+                            num_rays, 1, 1));
 
     CUDA_SYNC_CHECK();
     CUDA_CHECK(cudaStreamSynchronize(stream_));
+
+    // Free temporary buffer
+    CUDA_CHECK(cudaFree(last_prim));
 }
 
-void RayPipeline::reset_features(const Primitives& model) {
-    params_.features = {model.features, model.num_prims * model.feature_size};
-}
+RayPipeline::~RayPipeline() {
+    // Note: Don't use CUDA_CHECK/OPTIX_CHECK in destructor - they may throw,
+    // but destructors are implicitly noexcept. Cleanup failures are logged but ignored.
 
-RayPipeline::~RayPipeline() noexcept(false) {
     if (d_param_)
-        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(std::exchange(d_param_, 0))));
+        cudaFree(reinterpret_cast<void*>(std::exchange(d_param_, 0)));
     if (sbt_.raygenRecord)
-        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.raygenRecord, 0))));
+        cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.raygenRecord, 0)));
     if (sbt_.missRecordBase)
-        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.missRecordBase, 0))));
+        cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.missRecordBase, 0)));
     if (sbt_.hitgroupRecordBase)
-        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.hitgroupRecordBase, 0))));
+        cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.hitgroupRecordBase, 0)));
     if (sbt_.callablesRecordBase)
-        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.callablesRecordBase, 0))));
+        cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.callablesRecordBase, 0)));
     if (sbt_.exceptionRecord)
-        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.exceptionRecord, 0))));
+        cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.exceptionRecord, 0)));
     sbt_ = {};
 
     if (stream_)
-        CUDA_CHECK(cudaStreamDestroy(std::exchange(stream_, nullptr)));
+        cudaStreamDestroy(std::exchange(stream_, nullptr));
     if (pipeline_)
-        OPTIX_CHECK(optixPipelineDestroy(std::exchange(pipeline_, nullptr)));
+        optixPipelineDestroy(std::exchange(pipeline_, nullptr));
     if (raygen_pg_)
-        OPTIX_CHECK(optixProgramGroupDestroy(std::exchange(raygen_pg_, nullptr)));
+        optixProgramGroupDestroy(std::exchange(raygen_pg_, nullptr));
     if (miss_pg_)
-        OPTIX_CHECK(optixProgramGroupDestroy(std::exchange(miss_pg_, nullptr)));
+        optixProgramGroupDestroy(std::exchange(miss_pg_, nullptr));
     if (hitgroup_pg_)
-        OPTIX_CHECK(optixProgramGroupDestroy(std::exchange(hitgroup_pg_, nullptr)));
+        optixProgramGroupDestroy(std::exchange(hitgroup_pg_, nullptr));
     if (module_)
-        OPTIX_CHECK(optixModuleDestroy(std::exchange(module_, nullptr)));
+        optixModuleDestroy(std::exchange(module_, nullptr));
+
+    // Note: DeviceContext is globally cached, not destroyed here
+    // AccelStructure is destroyed automatically via unique_ptr
 }

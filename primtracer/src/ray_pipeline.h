@@ -23,10 +23,9 @@
 #include <cuda_runtime.h>
 #include <optix.h>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
-#include "volume_types.h"
-
-using uint = uint32_t;
+#include "accel_structure.h"
 
 // Embedded PTX code (generated header)
 #include "shaders_ptx.h"
@@ -40,73 +39,41 @@ using RayGenSbtRecord   = SbtRecord<RayGenData>;
 using MissSbtRecord     = SbtRecord<MissData>;
 using HitGroupSbtRecord = SbtRecord<HitGroupData>;
 
-// Launch parameters - must match slang layout exactly
-// Note: StructuredBuffer<T> = {T* data, size_t size} (16 bytes with padding)
-struct Params {
-    StructuredBuffer<float4> image;                    // Rendered RGBA output
-    StructuredBuffer<float> depth_out;                 // Rendered depth output
-    StructuredBuffer<uint> iters;                      // Iteration count per ray
-    StructuredBuffer<uint> last_prim;                  // Last primitive hit
-    StructuredBuffer<uint> prim_hits;        // Hit count per primitive
-    StructuredBuffer<float4> last_delta_contrib;       // Last sample delta contribution
-    StructuredBuffer<IntegratorState> last_state;          // Final volume state per ray
-    StructuredBuffer<int> hit_collection;              // Collected hit IDs for backward pass
-    StructuredBuffer<float3> ray_origins;
-    StructuredBuffer<float3> ray_directions;
-    Cam camera;
+// =============================================================================
+// RayPipeline - OptiX ray tracing pipeline for volume rendering
+// =============================================================================
 
-    StructuredBuffer<float3> means;                    // Ellipsoid centers
-    StructuredBuffer<float3> scales;                   // Ellipsoid radii
-    StructuredBuffer<float4> quats;                    // Ellipsoid rotations (quaternion wxyz)
-    StructuredBuffer<float> densities;                 // Ellipsoid densities
-    StructuredBuffer<float> features;                  // SH coefficients for color
-
-    size_t sh_degree;                                  // Spherical harmonics degree
-    size_t max_iters;                                  // Maximum iterations per ray
-    float tmin;                                        // Minimum ray t
-    StructuredBuffer<float> tmax;                      // Maximum ray t (per-ray)
-    StructuredBuffer<float4> initial_contrib;          // Initial accumulated contribution
-    float max_prim_size;                               // Maximum primitive size
-    OptixTraversableHandle handle;                     // BVH acceleration structure
-};
-
+/// Complete ray tracing pipeline for ellipsoid volume rendering.
+///
+/// This class manages:
+/// - OptiX pipeline (module, program groups, SBT)
+/// - Ray tracing execution
 class RayPipeline {
 public:
-    RayPipeline() = default;
-    RayPipeline(OptixDeviceContext context, int8_t device, const Primitives& model, bool enable_backward);
-    ~RayPipeline() noexcept(false);
+    /// Construct a ray pipeline with primitive data.
+    RayPipeline(const Primitives& prims, int device_index);
+
+    ~RayPipeline();
 
     // Non-copyable
     RayPipeline(const RayPipeline&) = delete;
     RayPipeline& operator=(const RayPipeline&) = delete;
 
+    /// Trace rays through the scene.
     void trace_rays(
-        OptixTraversableHandle handle,
         size_t num_rays,
         float3* ray_origins,
         float3* ray_directions,
-        float4* color_out,                         // RGBA output (num_rays, 4)
-        float* depth_out,                          // Depth output (num_rays,)
+        float4* color_out,
+        float* depth_out,
         uint sh_degree,
-        float tmin, float* tmax,                   // tmax is now per-ray
-        float4* initial_contrib,
-        Cam* camera = nullptr,
-        size_t max_iters = 10000,
-        float max_prim_size = 3.0f,
-        uint* iters = nullptr,
-        uint* last_prim = nullptr,
-        uint* prim_hits = nullptr,
-        float4* last_delta_contrib = nullptr,
-        IntegratorState* last_state = nullptr,
-        int* hit_collection = nullptr,
-        int* d_hit_count = nullptr,
-        int* d_hit_inds = nullptr
+        float tmin,
+        float* tmax,
+        size_t max_iters,
+        SavedState* saved
     );
 
-    void reset_features(const Primitives& model);
-
-    bool enable_backward = false;
-    size_t num_prims = 0;
+    size_t num_prims() const { return model_.num_prims; }
 
 private:
     void create_module(const char* ptx);
@@ -114,10 +81,11 @@ private:
     void create_pipeline();
     void create_sbt();
 
-    OptixDeviceContext context_ = nullptr;
-    int8_t device_ = -1;
-    const Primitives* model_ = nullptr;
+    DeviceContext& ctx_;
+    std::unique_ptr<AccelStructure> accel_;
+    Primitives model_ = {};
 
+    // OptiX pipeline objects
     OptixModule module_ = nullptr;
     OptixPipeline pipeline_ = nullptr;
     OptixProgramGroup raygen_pg_ = nullptr;
@@ -130,4 +98,9 @@ private:
 
     Params params_ = {};
     OptixPipelineCompileOptions pipeline_options_ = {};
+
+    // Log buffer for OptiX
+    static constexpr size_t LOG_SIZE = 2048;
+    char log_[LOG_SIZE];
+    size_t log_size_ = LOG_SIZE;
 };

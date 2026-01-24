@@ -22,9 +22,9 @@ project(primtracer
 # -----------------------------------------------------------------------------
 # Global build settings
 # -----------------------------------------------------------------------------
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -61,16 +61,16 @@ set(SLANG_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/primtracer/slang")
 pybind11_add_module(ellipsoid_tracer MODULE
   ${TRACER_DIR}/ray_pipeline.cpp
   ${TRACER_DIR}/ray_pipeline.h
+  ${TRACER_DIR}/device_context.h
   ${TRACER_DIR}/accel_structure.h
   ${TRACER_DIR}/python_bindings.cpp
-  ${TRACER_DIR}/volume_types.h
-  ${TRACER_DIR}/cuda_buffer.h
-  ${TRACER_DIR}/cuda_kernels.cu
-  ${TRACER_DIR}/cuda_kernels.h
+  ${TRACER_DIR}/types.h
+  ${TRACER_DIR}/primitive_kernels.cu
+  ${TRACER_DIR}/primitive_kernels.h
 )
 
 set_source_files_properties(
-  ${TRACER_DIR}/cuda_kernels.cu
+  ${TRACER_DIR}/primitive_kernels.cu
   PROPERTIES LANGUAGE CUDA
 )
 

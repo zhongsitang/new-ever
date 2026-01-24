@@ -12,291 +12,190 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <iostream>
-#include <memory>
 #include <pybind11/pybind11.h>
-#include <string>
 #include <torch/extension.h>
 
-#include <optix.h>
 #include <optix_function_table_definition.h>
-#include <optix_stubs.h>
 
 #include "ray_pipeline.h"
-#include "accel_structure.h"
-#include "cuda_kernels.h"
-#include "optix_error.h"
 
 namespace py = pybind11;
-using namespace pybind11::literals; // to bring in the `_a` literal
+using namespace pybind11::literals;
 
-#define CHECK_CUDA(x)                                                          \
-  TORCH_CHECK(x.device().is_cuda(), #x " must be a CUDA tensor")
-#define CHECK_DEVICE(x)                                                        \
-  TORCH_CHECK(x.device() == this->device, #x " must be on the same device")
-#define CHECK_CONTIGUOUS(x)                                                    \
-  TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
-#define CHECK_FLOAT(x)                                                         \
-  TORCH_CHECK(x.dtype() == torch::kFloat32, #x " must have float32 type")
-#define CHECK_INPUT(x)                                                         \
-  CHECK_CUDA(x);                                                               \
-  CHECK_CONTIGUOUS(x)
-#define CHECK_FLOAT_DIM3(x)                                                    \
-  CHECK_INPUT(x);                                                              \
-  CHECK_DEVICE(x);                                                             \
-  CHECK_FLOAT(x);                                                              \
-  TORCH_CHECK(x.size(-1) == 3, #x " must have last dimension with size 3")
-#define CHECK_FLOAT_DIM4(x)                                                    \
-  CHECK_INPUT(x);                                                              \
-  CHECK_DEVICE(x);                                                             \
-  CHECK_FLOAT(x);                                                              \
-  TORCH_CHECK(x.size(-1) == 4, #x " must have last dimension with size 4")
-#define CHECK_FLOAT_DIM4_CPU(x)                                                \
-  CHECK_CONTIGUOUS(x);                                                         \
-  CHECK_FLOAT(x);                                                              \
-  TORCH_CHECK(x.size(-1) == 4, #x " must have last dimension with size 4")
-#define CHECK_FLOAT_DIM3_CPU(x)                                                \
-  CHECK_CONTIGUOUS(x);                                                         \
-  CHECK_FLOAT(x);                                                              \
-  TORCH_CHECK(x.size(-1) == 3, #x " must have last dimension with size 3")
+// =============================================================================
+// Tensor validation macros
+// =============================================================================
 
-static void context_log_cb(unsigned int level, const char *tag,
-                           const char *message, void * /*cbdata */) {
+#define CHECK_CUDA(x) \
+    TORCH_CHECK(x.device().is_cuda(), #x " must be a CUDA tensor")
+#define CHECK_DEVICE(x, device) \
+    TORCH_CHECK(x.device() == device, #x " must be on the same device")
+#define CHECK_CONTIGUOUS(x) \
+    TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
+#define CHECK_FLOAT(x) \
+    TORCH_CHECK(x.dtype() == torch::kFloat32, #x " must have float32 type")
+#define CHECK_INPUT(x, device, dim) \
+    CHECK_CUDA(x); CHECK_CONTIGUOUS(x); CHECK_DEVICE(x, device); CHECK_FLOAT(x); \
+    TORCH_CHECK(x.size(-1) == dim, #x " must have last dimension " #dim)
+
+// Helper for casting tensor data pointer to custom types
+template<typename T>
+T* data_ptr(const torch::Tensor& t) { return static_cast<T*>(t.data_ptr()); }
+
+// =============================================================================
+// Main API: trace_rays
+// =============================================================================
+
+py::dict trace_rays(
+    const torch::Tensor& means,
+    const torch::Tensor& scales,
+    const torch::Tensor& quats,
+    const torch::Tensor& densities,
+    const torch::Tensor& features,
+    const torch::Tensor& ray_origins,
+    const torch::Tensor& ray_directions,
+    float tmin,
+    const torch::Tensor& tmax,
+    size_t max_iters)
+{
+    torch::AutoGradMode enable_grad(false);
+
+    // Get device
+    const auto device = means.device();
+    const int device_index = device.index();
+
+    // Validate inputs
+    CHECK_INPUT(means, device, 3);
+    CHECK_INPUT(scales, device, 3);
+    CHECK_INPUT(quats, device, 4);
+    CHECK_INPUT(features, device, 3);
+    CHECK_INPUT(ray_origins, device, 3);
+    CHECK_INPUT(ray_directions, device, 3);
+    CHECK_CUDA(densities); CHECK_CONTIGUOUS(densities);
+    CHECK_DEVICE(densities, device); CHECK_FLOAT(densities);
+    CHECK_CUDA(tmax); CHECK_CONTIGUOUS(tmax);
+    CHECK_DEVICE(tmax, device); CHECK_FLOAT(tmax);
+
+    const size_t num_prims = means.size(0);
+    const size_t num_rays = ray_origins.size(0);
+    const size_t feature_size = features.size(1);
+    const uint sh_degree = static_cast<uint>(sqrt(feature_size)) - 1;
+
+    TORCH_CHECK(scales.size(0) == (long)num_prims, "scales must match means count");
+    TORCH_CHECK(quats.size(0) == (long)num_prims, "quats must match means count");
+    TORCH_CHECK(densities.size(0) == (long)num_prims, "densities must match means count");
+    TORCH_CHECK(features.size(0) == (long)num_prims, "features must match means count");
+    TORCH_CHECK(tmax.numel() == (long)num_rays, "tmax must have one value per ray");
+
+    // Create pipeline (handles context, primitives, GAS internally)
+    Primitives prims = {
+        .means = data_ptr<float3>(means),
+        .scales = data_ptr<float3>(scales),
+        .quats = data_ptr<float4>(quats),
+        .densities = data_ptr<float>(densities),
+        .num_prims = num_prims,
+        .features = data_ptr<float>(features),
+        .feature_size = feature_size,
+    };
+    RayPipeline pipeline(prims, device_index);
+
+    // Allocate output tensors
+    auto opts_f = torch::device(device).dtype(torch::kFloat32);
+    auto opts_i = torch::device(device).dtype(torch::kInt32);
+
+    torch::Tensor color = torch::zeros({(long)num_rays, 4}, opts_f);
+    torch::Tensor depth = torch::zeros({(long)num_rays}, opts_f);
+
+    // Allocate backward state tensors
+    constexpr size_t state_floats = sizeof(IntegratorState) / sizeof(float);
+    torch::Tensor states = torch::zeros({(long)num_rays, (long)state_floats}, opts_f);
+    torch::Tensor delta_contribs = torch::zeros({(long)num_rays, 4}, opts_f);
+    torch::Tensor iters = torch::zeros({(long)num_rays}, opts_i);
+    torch::Tensor prim_hits = torch::zeros({(long)num_prims}, opts_i);
+    torch::Tensor hit_collection = torch::zeros({(long)(num_rays * max_iters)}, opts_i);
+    torch::Tensor initial_contrib = torch::zeros({(long)num_rays, 4}, opts_f);
+    torch::Tensor initial_prim_indices = torch::zeros({(long)num_prims}, opts_i);
+    torch::Tensor initial_prim_count = torch::zeros({1}, opts_i);
+
+    // Setup backward state
+    SavedState saved = {
+        .states = data_ptr<IntegratorState>(states),
+        .delta_contribs = data_ptr<float4>(delta_contribs),
+        .iters = data_ptr<uint>(iters),
+        .prim_hits = data_ptr<uint>(prim_hits),
+        .hit_collection = data_ptr<int>(hit_collection),
+        .initial_contrib = data_ptr<float4>(initial_contrib),
+        .initial_prim_indices = data_ptr<int>(initial_prim_indices),
+        .initial_prim_count = data_ptr<int>(initial_prim_count),
+    };
+
+    // Trace rays
+    pipeline.trace_rays(
+        num_rays,
+        data_ptr<float3>(ray_origins),
+        data_ptr<float3>(ray_directions),
+        data_ptr<float4>(color),
+        data_ptr<float>(depth),
+        sh_degree,
+        tmin,
+        data_ptr<float>(tmax),
+        max_iters,
+        &saved
+    );
+
+    return py::dict(
+        "color"_a = color,
+        "depth"_a = depth,
+        // Backward state
+        "states"_a = states,
+        "delta_contribs"_a = delta_contribs,
+        "iters"_a = iters,
+        "prim_hits"_a = prim_hits,
+        "hit_collection"_a = hit_collection,
+        "initial_contrib"_a = initial_contrib,
+        "initial_prim_indices"_a = initial_prim_indices,
+        "initial_prim_count"_a = initial_prim_count
+    );
 }
 
-OptixAabb *D_AABBS = 0;
-size_t NUM_AABBS = 0;
-
-struct fesOptixContext {
-public:
-  OptixDeviceContext context = nullptr;
-  uint device;
-  fesOptixContext(const torch::Device &device) : device(device.index()) {
-    CUDA_CHECK(cudaSetDevice(device.index()));
-    {
-      // Initialize CUDA
-      CUDA_CHECK(cudaFree(0));
-      // Initialize the OptiX API, loading all API entry points
-      OPTIX_CHECK(optixInit());
-      // Specify context options
-      OptixDeviceContextOptions options = {};
-      options.logCallbackFunction = &context_log_cb;
-      options.logCallbackLevel = 4;
-      // Associate a CUDA context (and therefore a specific GPU) with this
-      // device context
-      CUcontext cuCtx = 0; // zero means take the current context
-      OPTIX_CHECK(optixDeviceContextCreate(cuCtx, &options, &context));
-    }
-  }
-  ~fesOptixContext() { OPTIX_CHECK_NOTHROW(optixDeviceContextDestroy(context)); }
-};
-
-struct fesPyPrimitives {
-public:
-  Primitives model;
-  torch::Device device;
-  fesPyPrimitives(const torch::Device &device) : device(device) {}
-  void add_primitives(const torch::Tensor &means, const torch::Tensor &scales,
-                      const torch::Tensor &quats,
-                      const torch::Tensor &densities,
-                      const torch::Tensor &colors) {
-    const int64_t numPrimitives = means.size(0);
-    CHECK_FLOAT_DIM3(means);
-    CHECK_FLOAT_DIM3(scales);
-    CHECK_FLOAT_DIM4(quats);
-    CHECK_FLOAT_DIM3(colors);
-    TORCH_CHECK(scales.size(0) == numPrimitives,
-                "All inputs (scales) must have the same 0 dimension")
-    TORCH_CHECK(quats.size(0) == numPrimitives,
-                "All inputs (quats) must have the same 0 dimension")
-    TORCH_CHECK(colors.size(0) == numPrimitives,
-                "All inputs (colors) must have the same 0 dimension")
-    TORCH_CHECK(densities.size(0) == numPrimitives,
-                "All inputs (densities) must have the same 0 dimension")
-    TORCH_CHECK(colors.size(2) == 3, "Features must have 3 channels. (N, d, 3)")
-    model.feature_size = colors.size(1);
-
-    model.means = reinterpret_cast<float3 *>(means.data_ptr());
-    model.scales = reinterpret_cast<float3 *>(scales.data_ptr());
-    model.quats = reinterpret_cast<float4 *>(quats.data_ptr());
-
-    model.densities = reinterpret_cast<float *>(densities.data_ptr());
-    model.features = reinterpret_cast<float *>(colors.data_ptr());
-    model.num_prims = numPrimitives;
-    model.prev_alloc_size = NUM_AABBS;
-    model.aabbs = D_AABBS;
-    build_primitive_aabbs(model);
-    D_AABBS = model.aabbs;
-    NUM_AABBS = std::max(model.num_prims, NUM_AABBS);
-  }
-  void set_features(const torch::Tensor &colors) {
-    CHECK_FLOAT_DIM3(colors);
-    TORCH_CHECK(colors.size(0) == model.num_prims,
-                "All inputs (colors) must have the same 0 dimension");
-    model.features = reinterpret_cast<float *>(colors.data_ptr());
-  }
-};
-
-struct fesPyGas {
-public:
-  GAS gas;
-  fesPyGas(const fesOptixContext &context, const torch::Device &device,
-        const fesPyPrimitives &model, const bool enable_anyhit,
-        const bool fast_build, const bool enable_rebuild)
-      : gas(context.context, device.index(), model.model, enable_anyhit,
-            fast_build) {}
-};
-
-/// Saved state for backward pass computation
-struct fesSavedForBackward {
-public:
-  torch::Tensor states;              // Final volume state per ray
-  torch::Tensor delta_contribs;      // Last sample delta contribution
-  torch::Tensor last_prims;          // Last primitive hit per ray
-  torch::Tensor prim_hits; // Hit count per primitive
-  torch::Tensor iters;               // Iteration count per ray
-  size_t num_prims;
-  size_t num_rays;
-  size_t num_float_per_state;
-  torch::Device device;
-
-  fesSavedForBackward(torch::Device device)
-      : num_prims(0), num_rays(0), num_float_per_state(sizeof(IntegratorState) / sizeof(float)),
-        device(device) {}
-
-  fesSavedForBackward(size_t num_rays, size_t num_prims, torch::Device device)
-      : num_prims(num_prims), num_float_per_state(sizeof(IntegratorState) / sizeof(float)),
-        device(device) {
-    allocate(num_rays);
-  }
-
-  uint *iters_data_ptr() { return reinterpret_cast<uint *>(iters.data_ptr()); }
-  uint *prim_hits_data_ptr() { return reinterpret_cast<uint *>(prim_hits.data_ptr()); }
-  uint *last_prims_data_ptr() { return reinterpret_cast<uint *>(last_prims.data_ptr()); }
-  float4 *delta_contribs_data_ptr() {
-    return reinterpret_cast<float4 *>(delta_contribs.data_ptr());
-  }
-  IntegratorState *states_data_ptr() {
-    return reinterpret_cast<IntegratorState *>(states.data_ptr());
-  }
-
-  // Property accessors
-  torch::Tensor get_states() { return states; }
-  torch::Tensor get_delta_contribs() { return delta_contribs; }
-  torch::Tensor get_last_prims() { return last_prims; }
-  torch::Tensor get_iters() { return iters; }
-  torch::Tensor get_prim_hits() { return prim_hits; }
-
-  void allocate(size_t num_rays) {
-    states = torch::zeros({(long)num_rays, (long)num_float_per_state},
-                          torch::device(device).dtype(torch::kFloat32));
-    delta_contribs = torch::zeros({(long)num_rays, 4},
-                          torch::device(device).dtype(torch::kFloat32));
-    last_prims = torch::zeros({(long)num_rays},
-                         torch::device(device).dtype(torch::kInt32));
-    prim_hits = torch::zeros({(long)num_prims},
-                         torch::device(device).dtype(torch::kInt32));
-    iters = torch::zeros({(long)num_rays},
-                         torch::device(device).dtype(torch::kInt32));
-    this->num_rays = num_rays;
-  }
-};
-
-struct fesPyRayPipeline {
-public:
-  RayPipeline pipeline;
-  torch::Device device;
-  size_t num_prims;
-  uint sh_degree;
-  fesPyRayPipeline(const fesOptixContext &context, const torch::Device &device,
-            const fesPyPrimitives &model, const bool enable_backward)
-      : device(device),
-        pipeline(context.context, device.index(), model.model, enable_backward),
-        num_prims(model.model.num_prims),
-        sh_degree(sqrt(model.model.feature_size) - 1) {}
-  void update_model(const fesPyPrimitives &model) {
-    pipeline.reset_features(model.model);
-  }
-  py::dict trace_rays(const fesPyGas &gas, const torch::Tensor &ray_origins,
-                      const torch::Tensor &ray_directions, float tmin,
-                      const torch::Tensor &tmax, const size_t max_iters,
-                      const float max_prim_size) {
-    torch::AutoGradMode enable_grad(false);
-    CHECK_FLOAT_DIM3(ray_origins);
-    CHECK_FLOAT_DIM3(ray_directions);
-    CHECK_INPUT(tmax);
-    CHECK_DEVICE(tmax);
-    CHECK_FLOAT(tmax);
-    const size_t num_rays = ray_origins.numel() / 3;
-    TORCH_CHECK(tmax.numel() == (long)num_rays, "tmax must have the same number of elements as rays");
-
-    // Output: color RGBA (num_rays, 4) and depth (num_rays,)
-    torch::Tensor color = torch::zeros({(long)num_rays, 4},
-                         torch::device(device).dtype(torch::kFloat32));
-    torch::Tensor depth = torch::zeros({(long)num_rays},
-                         torch::device(device).dtype(torch::kFloat32));
-    torch::Tensor hit_collection =
-        torch::zeros({(long)(num_rays * max_iters)},
-                     torch::device(device).dtype(torch::kInt32));
-
-    torch::Tensor initial_contrib = torch::zeros(
-        {(long)num_rays, 4},
-        torch::device(device).dtype(torch::kFloat32));
-    torch::Tensor initial_hit_count = torch::zeros(
-        {1},
-        torch::device(device).dtype(torch::kInt32));
-    torch::Tensor initial_hit_inds = torch::zeros(
-        {(long)num_prims},
-        torch::device(device).dtype(torch::kInt32));
-
-    fesSavedForBackward saved_for_backward(num_rays, num_prims, device);
-    pipeline.trace_rays(gas.gas.gas_handle, num_rays,
-                       reinterpret_cast<float3 *>(ray_origins.data_ptr()),
-                       reinterpret_cast<float3 *>(ray_directions.data_ptr()),
-                       reinterpret_cast<float4 *>(color.data_ptr()),
-                       reinterpret_cast<float *>(depth.data_ptr()),
-                       sh_degree, tmin,
-                       reinterpret_cast<float *>(tmax.data_ptr()),
-                       reinterpret_cast<float4 *>(initial_contrib.data_ptr()),
-                       NULL,
-                       max_iters, max_prim_size,
-                       saved_for_backward.iters_data_ptr(),
-                       saved_for_backward.last_prims_data_ptr(),
-                       saved_for_backward.prim_hits_data_ptr(),
-                       saved_for_backward.delta_contribs_data_ptr(),
-                       saved_for_backward.states_data_ptr(),
-                       reinterpret_cast<int *>(hit_collection.data_ptr()),
-                       reinterpret_cast<int *>(initial_hit_count.data_ptr()),
-                       reinterpret_cast<int *>(initial_hit_inds.data_ptr()));
-    return py::dict("color"_a = color,
-                    "depth"_a = depth,
-                    "saved"_a = saved_for_backward,
-                    "hit_collection"_a = hit_collection,
-                    "initial_contrib"_a = initial_contrib,
-                    "initial_hit_inds"_a = initial_hit_inds,
-                    "initial_hit_count"_a = initial_hit_count);
-  }
-};
+// =============================================================================
+// Python module definition
+// =============================================================================
 
 PYBIND11_MODULE(ellipsoid_tracer, m) {
-  py::class_<fesOptixContext>(m, "OptixContext")
-      .def(py::init<const torch::Device &>());
-  py::class_<fesSavedForBackward>(m, "SavedForBackward")
-      .def_property_readonly("states", &fesSavedForBackward::get_states)
-      .def_property_readonly("delta_contribs", &fesSavedForBackward::get_delta_contribs)
-      .def_property_readonly("prim_hits", &fesSavedForBackward::get_prim_hits)
-      .def_property_readonly("iters", &fesSavedForBackward::get_iters)
-      .def_property_readonly("last_prims", &fesSavedForBackward::get_last_prims);
-  py::class_<fesPyPrimitives>(m, "Primitives")
-      .def(py::init<const torch::Device &>())
-      .def("add_primitives", &fesPyPrimitives::add_primitives)
-      .def("set_features", &fesPyPrimitives::set_features);
-  py::class_<fesPyGas>(m, "GAS").def(
-      py::init<const fesOptixContext &, const torch::Device &,
-               const fesPyPrimitives &, const bool, const bool, const bool>());
-  py::class_<fesPyRayPipeline>(m, "RayPipeline")
-      .def(py::init<const fesOptixContext &, const torch::Device &,
-                    const fesPyPrimitives &, const bool>())
-      .def("trace_rays", &fesPyRayPipeline::trace_rays)
-      .def("update_model", &fesPyRayPipeline::update_model);
+    m.doc() = "Differentiable volume rendering for ellipsoid primitives";
+
+    m.def("trace_rays", &trace_rays,
+          py::arg("means"),
+          py::arg("scales"),
+          py::arg("quats"),
+          py::arg("densities"),
+          py::arg("features"),
+          py::arg("ray_origins"),
+          py::arg("ray_directions"),
+          py::arg("tmin"),
+          py::arg("tmax"),
+          py::arg("max_iters"),
+          R"doc(
+Trace rays through ellipsoid primitives using volume rendering.
+
+Args:
+    means: Primitive centers, shape (N, 3)
+    scales: Primitive scales, shape (N, 3)
+    quats: Primitive rotations as quaternions (w,x,y,z), shape (N, 4)
+    densities: Primitive densities, shape (N,)
+    features: SH features, shape (N, C, 3) where C is number of SH coefficients
+    ray_origins: Ray origins, shape (M, 3)
+    ray_directions: Ray directions (normalized), shape (M, 3)
+    tmin: Minimum ray parameter (scalar)
+    tmax: Maximum ray parameter per ray, shape (M,)
+    max_iters: Maximum hit iterations per ray
+
+Returns:
+    Dictionary containing:
+        - color: RGBA output, shape (M, 4)
+        - depth: Expected depth, shape (M,)
+        - states, delta_contribs, iters, prim_hits: Volume integrator state
+        - hit_collection, initial_contrib, initial_prim_indices, initial_prim_count: Hit data
+)doc");
 }

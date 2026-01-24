@@ -13,193 +13,156 @@
 // limitations under the License.
 
 #pragma once
+
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include <math.h>
 #include <optix.h>
 #include <optix_stubs.h>
-#include <stdio.h>
-
-#include <chrono>
-#include <cstdint>
-#include <stdexcept>
-#include <string>
-#include <vector>
-
-#include "cuda_buffer.h"
+#include "device_context.h"
+#include "primitive_kernels.h"
 #include "optix_error.h"
-#include "volume_types.h"
 
-namespace gas_internal {
-inline CUdeviceptr D_GAS_OUTPUT_BUFFER = 0;
-inline size_t OUTPUT_BUFFER_SIZE = 0;
-inline CUdeviceptr D_TEMP_BUFFER_GAS = 0;
-inline size_t TEMP_BUFFER_SIZE = 0;
-inline CUdeviceptr D_COMPACT_GAS_BUFFER = 0;
-inline size_t COMPACT_GAS_BUFFER_SIZE = 0;
-}
+// =============================================================================
+// AccelStructure - AABB and GAS management with buffer reuse (header-only)
+// =============================================================================
 
-class GAS {
-   public:
-    OptixTraversableHandle gas_handle = 0;
-    OptixTraversableHandle compactedAccelHandle = 0;
+/// Manages acceleration structure: AABB buffer and GAS (Geometry Acceleration Structure).
+/// Supports efficient rebuilding with buffer capacity tracking to avoid repeated allocations.
+class AccelStructure {
+public:
+    /// Create an empty acceleration structure (call rebuild() to populate)
+    explicit AccelStructure(DeviceContext& ctx) : ctx_(ctx) {}
 
-    GAS() noexcept
-        : device(-1),
-          context(nullptr),
-          gas_handle(0) {}
-
-    GAS(const OptixDeviceContext &context, const uint8_t device, const bool enable_backwards, const bool fast_build)
-        : device(device), context(context), enable_backwards(enable_backwards), fast_build(fast_build) {}
-
-    GAS(const OptixDeviceContext &context,
-        const uint8_t device,
-        const Primitives &model,
-        const bool enable_backwards=false,
-        const bool fast_build=false)
-        : GAS(context, device, enable_backwards, fast_build) {
-        build(model);
+    /// Create and build acceleration structure for primitives
+    AccelStructure(DeviceContext& ctx, const Primitives& prims) : ctx_(ctx) {
+        rebuild(prims);
     }
 
-    ~GAS() noexcept(false) {
-        if (this->device != -1) {
-            release();
+    ~AccelStructure() {
+        if (gas_compact_) cudaFree(reinterpret_cast<void*>(gas_compact_));
+        if (gas_temp_) cudaFree(reinterpret_cast<void*>(gas_temp_));
+        if (gas_output_) cudaFree(reinterpret_cast<void*>(gas_output_));
+        if (aabb_buffer_) cudaFree(aabb_buffer_);
+    }
+
+    // Non-copyable
+    AccelStructure(const AccelStructure&) = delete;
+    AccelStructure& operator=(const AccelStructure&) = delete;
+
+    /// Rebuild acceleration structure for new primitives.
+    /// Reuses existing buffers when capacity is sufficient.
+    void rebuild(const Primitives& prims) {
+        CUDA_CHECK(cudaSetDevice(ctx_.device()));
+        num_prims_ = prims.num_prims;
+
+        // Ensure AABB buffer capacity and compute AABBs
+        ensure_aabb_capacity(num_prims_);
+        compute_primitive_aabbs(prims, aabb_buffer_);
+
+        // Build GAS
+        build_gas(num_prims_);
+    }
+
+    OptixTraversableHandle handle() const { return gas_handle_; }
+    OptixAabb* aabbs() const { return aabb_buffer_; }
+    size_t num_prims() const { return num_prims_; }
+
+private:
+    void ensure_aabb_capacity(size_t num_prims) {
+        if (num_prims > aabb_capacity_) {
+            if (aabb_buffer_) {
+                CUDA_CHECK(cudaFree(aabb_buffer_));
+            }
+            CUDA_CHECK(cudaMalloc(&aabb_buffer_, num_prims * sizeof(OptixAabb)));
+            aabb_capacity_ = num_prims;
         }
-        device = -1;
     }
 
-    GAS(const GAS &) = delete;
-    GAS &operator=(const GAS &) = delete;
-
-    GAS(GAS &&other) noexcept
-        : device(std::exchange(other.device, -1)),
-          context(std::exchange(other.context, nullptr)),
-          gas_handle(std::exchange(other.gas_handle, 0)) {}
-
-    GAS &operator=(GAS &&other) {
-        using std::swap;
-        if (this != &other) {
-            GAS tmp(std::move(other));
-            swap(tmp, *this);
+    void ensure_gas_capacity(size_t output_size, size_t temp_size) {
+        if (output_size > gas_output_capacity_) {
+            if (gas_output_) {
+                CUDA_CHECK(cudaFree(reinterpret_cast<void*>(gas_output_)));
+            }
+            CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&gas_output_), output_size));
+            gas_output_capacity_ = output_size;
         }
-        return *this;
+
+        if (temp_size > gas_temp_capacity_) {
+            if (gas_temp_) {
+                CUDA_CHECK(cudaFree(reinterpret_cast<void*>(gas_temp_)));
+            }
+            CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&gas_temp_), temp_size));
+            gas_temp_capacity_ = temp_size;
+        }
     }
 
-    friend void swap(GAS &first, GAS &second) {
-        using std::swap;
-        swap(first.context, second.context);
-        swap(first.device, second.device);
-        swap(first.gas_handle, second.gas_handle);
-    }
-
-    bool defined() const {
-        return gas_handle != 0;
-    }
-
-   private:
-    void release() {
-        gas_handle = 0;
-    }
-
-    void build(const Primitives &model) {
-        using namespace gas_internal;
-
-        release();
-        CUDA_CHECK(cudaSetDevice(device));
-
+    void build_gas(size_t num_prims) {
         OptixAccelBuildOptions accel_options = {};
         accel_options.buildFlags = OPTIX_BUILD_FLAG_PREFER_FAST_TRACE | OPTIX_BUILD_FLAG_ALLOW_COMPACTION;
-        accel_options.operation  = OPTIX_BUILD_OPERATION_BUILD;
+        accel_options.operation = OPTIX_BUILD_OPERATION_BUILD;
 
-        uint32_t aabb_input_flags[1];
-        aabb_input_flags[0] = OPTIX_GEOMETRY_FLAG_NONE;
+        uint32_t flags = OPTIX_GEOMETRY_FLAG_NONE;
+        CUdeviceptr d_aabbs = reinterpret_cast<CUdeviceptr>(aabb_buffer_);
 
-        CUdeviceptr d_aabbs = (CUdeviceptr)model.aabbs;
-        OptixBuildInput aabb_input = {};
-        aabb_input.type                        = OPTIX_BUILD_INPUT_TYPE_CUSTOM_PRIMITIVES;
-        aabb_input.customPrimitiveArray.aabbBuffers   = &d_aabbs;
-        aabb_input.customPrimitiveArray.numPrimitives = model.num_prims;
-        aabb_input.customPrimitiveArray.flags         = aabb_input_flags;
-        aabb_input.customPrimitiveArray.numSbtRecords = 1;
+        OptixBuildInput input = {};
+        input.type = OPTIX_BUILD_INPUT_TYPE_CUSTOM_PRIMITIVES;
+        input.customPrimitiveArray.aabbBuffers = &d_aabbs;
+        input.customPrimitiveArray.numPrimitives = num_prims;
+        input.customPrimitiveArray.flags = &flags;
+        input.customPrimitiveArray.numSbtRecords = 1;
 
-        OptixAccelBufferSizes gas_buffer_sizes;
-        OPTIX_CHECK(optixAccelComputeMemoryUsage(
-            context,
-            &accel_options,
-            &aabb_input,
-            1,
-            &gas_buffer_sizes
-        ));
+        OptixAccelBufferSizes sizes;
+        OPTIX_CHECK(optixAccelComputeMemoryUsage(ctx_.context(), &accel_options, &input, 1, &sizes));
 
-        if (OUTPUT_BUFFER_SIZE <= gas_buffer_sizes.outputSizeInBytes) {
-            if (D_GAS_OUTPUT_BUFFER != 0) {
-                CUDA_CHECK(cudaFree(reinterpret_cast<void*>(D_GAS_OUTPUT_BUFFER)));
-            }
-            OUTPUT_BUFFER_SIZE = size_t(gas_buffer_sizes.outputSizeInBytes);
-            CUDA_CHECK(cudaMalloc(
-                reinterpret_cast<void**>(&D_GAS_OUTPUT_BUFFER),
-                OUTPUT_BUFFER_SIZE
-            ));
-        }
+        // Ensure buffer capacity (reuses existing if sufficient)
+        ensure_gas_capacity(sizes.outputSizeInBytes, sizes.tempSizeInBytes);
 
-        if (TEMP_BUFFER_SIZE <= gas_buffer_sizes.tempSizeInBytes) {
-            if (D_TEMP_BUFFER_GAS != 0) {
-                CUDA_CHECK(cudaFree(reinterpret_cast<void*>(D_TEMP_BUFFER_GAS)));
-            }
-            TEMP_BUFFER_SIZE = size_t(gas_buffer_sizes.tempSizeInBytes);
-            CUDA_CHECK(cudaMalloc(
-                reinterpret_cast<void**>(&D_TEMP_BUFFER_GAS),
-                TEMP_BUFFER_SIZE
-            ));
-        }
+        // Query compacted size
+        size_t* d_compacted_size;
+        CUDA_CHECK(cudaMalloc(&d_compacted_size, sizeof(size_t)));
 
-        size_t *d_compactedSize;
-        CUDA_CHECK(cudaMalloc(
-            reinterpret_cast<void**>(&d_compactedSize),
-            sizeof(size_t)
-        ));
-
-        OptixAccelEmitDesc property = {};
-        property.type = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE;
-        property.result = (CUdeviceptr)d_compactedSize;
+        OptixAccelEmitDesc emit = {};
+        emit.type = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE;
+        emit.result = reinterpret_cast<CUdeviceptr>(d_compacted_size);
 
         OPTIX_CHECK(optixAccelBuild(
-            context,
-            0,
-            &accel_options,
-            &aabb_input,
-            1,
-            D_TEMP_BUFFER_GAS,
-            gas_buffer_sizes.tempSizeInBytes,
-            D_GAS_OUTPUT_BUFFER,
-            gas_buffer_sizes.outputSizeInBytes,
-            &gas_handle,
-            &property,
-            1
+            ctx_.context(), 0, &accel_options, &input, 1,
+            gas_temp_, sizes.tempSizeInBytes,
+            gas_output_, sizes.outputSizeInBytes,
+            &gas_handle_, &emit, 1
         ));
 
-        size_t compactedSize;
-        cudaMemcpy(&compactedSize, d_compactedSize, sizeof(size_t), cudaMemcpyDeviceToHost);
+        // Compact if beneficial
+        size_t compacted_size;
+        CUDA_CHECK(cudaMemcpy(&compacted_size, d_compacted_size, sizeof(size_t), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaFree(d_compacted_size));
 
-        if (compactedSize < gas_buffer_sizes.outputSizeInBytes) {
-            if (COMPACT_GAS_BUFFER_SIZE <= compactedSize) {
-                if (D_COMPACT_GAS_BUFFER != 0) {
-                    CUDA_CHECK(cudaFree(reinterpret_cast<void*>(D_COMPACT_GAS_BUFFER)));
+        if (compacted_size < sizes.outputSizeInBytes) {
+            // Ensure compact buffer capacity
+            if (compacted_size > gas_compact_capacity_) {
+                if (gas_compact_) {
+                    CUDA_CHECK(cudaFree(reinterpret_cast<void*>(gas_compact_)));
                 }
-                COMPACT_GAS_BUFFER_SIZE = compactedSize;
-                CUDA_CHECK(cudaMalloc(
-                    reinterpret_cast<void**>(&D_COMPACT_GAS_BUFFER),
-                    COMPACT_GAS_BUFFER_SIZE
-                ));
-                OPTIX_CHECK(optixAccelCompact(context, 0, gas_handle, D_COMPACT_GAS_BUFFER, COMPACT_GAS_BUFFER_SIZE, &gas_handle));
+                CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&gas_compact_), compacted_size));
+                gas_compact_capacity_ = compacted_size;
             }
+            OPTIX_CHECK(optixAccelCompact(ctx_.context(), 0, gas_handle_, gas_compact_, compacted_size, &gas_handle_));
         }
-
-        CUDA_CHECK(cudaFree(d_compactedSize));
     }
 
-    bool enable_backwards = false;
-    bool fast_build = false;
-    OptixDeviceContext context = nullptr;
-    int8_t device = -1;
+    DeviceContext& ctx_;
+    OptixTraversableHandle gas_handle_ = 0;
+    size_t num_prims_ = 0;
+
+    // AABB buffer with capacity tracking
+    OptixAabb* aabb_buffer_ = nullptr;
+    size_t aabb_capacity_ = 0;
+
+    // GAS buffers with capacity tracking
+    CUdeviceptr gas_output_ = 0;
+    size_t gas_output_capacity_ = 0;
+    CUdeviceptr gas_temp_ = 0;
+    size_t gas_temp_capacity_ = 0;
+    CUdeviceptr gas_compact_ = 0;
+    size_t gas_compact_capacity_ = 0;
 };
