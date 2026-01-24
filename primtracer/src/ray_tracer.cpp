@@ -242,11 +242,11 @@ void RayTracer::trace_rays(
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,
                           sizeof(Params), cudaMemcpyHostToDevice));
 
-    OPTIX_CHECK(optixLaunch(pipeline_, stream_, d_param_, sizeof(Params), &sbt_,
+    OPTIX_CHECK(optixLaunch(pipeline_, 0, d_param_, sizeof(Params), &sbt_,
                             num_rays, 1, 1));
 
     CUDA_SYNC_CHECK();
-    CUDA_CHECK(cudaStreamSynchronize(stream_));
+    CUDA_CHECK(cudaStreamSynchronize(0));
 
     // Free temporary buffer
     CUDA_CHECK(cudaFree(last_prim));
@@ -264,14 +264,7 @@ RayTracer::~RayTracer() {
         cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.missRecordBase, 0)));
     if (sbt_.hitgroupRecordBase)
         cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.hitgroupRecordBase, 0)));
-    if (sbt_.callablesRecordBase)
-        cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.callablesRecordBase, 0)));
-    if (sbt_.exceptionRecord)
-        cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.exceptionRecord, 0)));
     sbt_ = {};
-
-    if (stream_)
-        cudaStreamDestroy(std::exchange(stream_, nullptr));
     if (pipeline_)
         optixPipelineDestroy(std::exchange(pipeline_, nullptr));
     if (raygen_pg_)

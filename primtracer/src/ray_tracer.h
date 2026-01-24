@@ -354,7 +354,6 @@ private:
 
     OptixShaderBindingTable sbt_ = {};
     CUdeviceptr d_param_ = 0;
-    CUstream stream_ = nullptr;
 
     Params params_ = {};
     OptixPipelineCompileOptions pipeline_options_ = {};
