@@ -78,7 +78,7 @@ __global__ void compute_primitive_bounds_kernel(
     aabbs[i] = aabb;
 }
 
-void Primitives::compute_aabbs() const {
+void Primitives::compute_aabbs(OptixAabb* aabbs) const {
     const size_t block_size = 1024;
     compute_primitive_bounds_kernel<<<(num_prims + block_size - 1) / block_size, block_size>>>(
         (glm::vec3 *)means,

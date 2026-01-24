@@ -118,8 +118,7 @@ private:
 class AccelStructure {
 public:
     /// Build acceleration structure for primitives.
-    /// Sets prims.aabbs to point to internal buffer.
-    AccelStructure(DeviceContext& ctx, Primitives& prims);
+    AccelStructure(DeviceContext& ctx, const Primitives& prims);
 
     ~AccelStructure();
 
@@ -131,7 +130,7 @@ public:
     OptixAabb* aabbs() const { return aabb_buffer_; }
 
 private:
-    void build_aabbs(Primitives& prims);
+    void build_aabbs(const Primitives& prims);
     void build_gas(const Primitives& prims);
 
     DeviceContext& ctx_;
@@ -160,7 +159,7 @@ private:
 class RayPipeline {
 public:
     /// Construct a ray pipeline with primitive data.
-    RayPipeline(Primitives& prims, int device_index);
+    RayPipeline(const Primitives& prims, int device_index);
 
     ~RayPipeline();
 

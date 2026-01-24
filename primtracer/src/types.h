@@ -68,10 +68,8 @@ struct Primitives {
   float *features;
   size_t feature_size;
 
-  OptixAabb *aabbs;  // Set by AccelStructure
-
-  /// Compute AABBs for all primitives (aabbs buffer must be pre-allocated)
-  void compute_aabbs() const;
+  /// Compute AABBs into pre-allocated buffer
+  void compute_aabbs(OptixAabb* aabbs) const;
 };
 
 struct Cam {

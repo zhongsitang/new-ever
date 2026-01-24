@@ -69,7 +69,7 @@ DeviceContext::~DeviceContext() {
 // AccelStructure implementation
 // =============================================================================
 
-AccelStructure::AccelStructure(DeviceContext& ctx, Primitives& prims)
+AccelStructure::AccelStructure(DeviceContext& ctx, const Primitives& prims)
     : ctx_(ctx), num_prims_(prims.num_prims)
 {
     CUDA_CHECK(cudaSetDevice(ctx_.device()));
@@ -84,10 +84,9 @@ AccelStructure::~AccelStructure() {
     if (aabb_buffer_) cudaFree(aabb_buffer_);
 }
 
-void AccelStructure::build_aabbs(Primitives& prims) {
+void AccelStructure::build_aabbs(const Primitives& prims) {
     CUDA_CHECK(cudaMalloc(&aabb_buffer_, prims.num_prims * sizeof(OptixAabb)));
-    prims.aabbs = aabb_buffer_;
-    prims.compute_aabbs();
+    prims.compute_aabbs(aabb_buffer_);
 }
 
 void AccelStructure::build_gas(const Primitives& prims) {
@@ -96,7 +95,7 @@ void AccelStructure::build_gas(const Primitives& prims) {
     accel_options.operation = OPTIX_BUILD_OPERATION_BUILD;
 
     uint32_t flags = OPTIX_GEOMETRY_FLAG_NONE;
-    CUdeviceptr d_aabbs = reinterpret_cast<CUdeviceptr>(prims.aabbs);
+    CUdeviceptr d_aabbs = reinterpret_cast<CUdeviceptr>(aabb_buffer_);
 
     OptixBuildInput input = {};
     input.type = OPTIX_BUILD_INPUT_TYPE_CUSTOM_PRIMITIVES;
@@ -143,7 +142,7 @@ void AccelStructure::build_gas(const Primitives& prims) {
 // RayPipeline implementation
 // =============================================================================
 
-RayPipeline::RayPipeline(Primitives& prims, int device_index)
+RayPipeline::RayPipeline(const Primitives& prims, int device_index)
     : ctx_(DeviceContext::get(device_index))
 {
     CUDA_CHECK(cudaSetDevice(ctx_.device()));
