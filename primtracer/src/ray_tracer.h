@@ -271,19 +271,10 @@ private:
 // SBT Record Types
 // =============================================================================
 
-template <typename T>
-struct SbtRecord {
-    __align__(OPTIX_SBT_RECORD_ALIGNMENT) char header[OPTIX_SBT_RECORD_HEADER_SIZE];
-    T data;
+/// Minimal SBT record containing only the required header (no per-shader data).
+struct __align__(OPTIX_SBT_RECORD_ALIGNMENT) SbtRecord {
+    char header[OPTIX_SBT_RECORD_HEADER_SIZE];
 };
-
-struct RayGenData {};
-struct MissData {};
-struct HitGroupData {};
-
-using RayGenSbtRecord   = SbtRecord<RayGenData>;
-using MissSbtRecord     = SbtRecord<MissData>;
-using HitGroupSbtRecord = SbtRecord<HitGroupData>;
 
 // =============================================================================
 // RayTracer - Main class with reusable Pipeline and rebuildable AccelStructure

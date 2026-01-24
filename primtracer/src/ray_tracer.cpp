@@ -135,36 +135,22 @@ void RayTracer::create_pipeline() {
 }
 
 void RayTracer::create_sbt() {
-    // Raygen record
-    CUdeviceptr raygen_record;
-    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&raygen_record), sizeof(RayGenSbtRecord)));
-    RayGenSbtRecord rg_sbt;
-    OPTIX_CHECK(optixSbtRecordPackHeader(raygen_pg_, &rg_sbt));
-    CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(raygen_record), &rg_sbt,
-                          sizeof(RayGenSbtRecord), cudaMemcpyHostToDevice));
+    auto create_record = [this](OptixProgramGroup pg) {
+        CUdeviceptr record;
+        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&record), sizeof(SbtRecord)));
+        SbtRecord sbt;
+        OPTIX_CHECK(optixSbtRecordPackHeader(pg, &sbt));
+        CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(record), &sbt,
+                              sizeof(SbtRecord), cudaMemcpyHostToDevice));
+        return record;
+    };
 
-    // Miss record
-    CUdeviceptr miss_record;
-    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&miss_record), sizeof(MissSbtRecord)));
-    MissSbtRecord ms_sbt;
-    OPTIX_CHECK(optixSbtRecordPackHeader(miss_pg_, &ms_sbt));
-    CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(miss_record), &ms_sbt,
-                          sizeof(MissSbtRecord), cudaMemcpyHostToDevice));
-
-    // Hitgroup record
-    CUdeviceptr hitgroup_record;
-    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&hitgroup_record), sizeof(HitGroupSbtRecord)));
-    HitGroupSbtRecord hg_sbt;
-    OPTIX_CHECK(optixSbtRecordPackHeader(hitgroup_pg_, &hg_sbt));
-    CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(hitgroup_record), &hg_sbt,
-                          sizeof(HitGroupSbtRecord), cudaMemcpyHostToDevice));
-
-    sbt_.raygenRecord = raygen_record;
-    sbt_.missRecordBase = miss_record;
-    sbt_.missRecordStrideInBytes = sizeof(MissSbtRecord);
+    sbt_.raygenRecord = create_record(raygen_pg_);
+    sbt_.missRecordBase = create_record(miss_pg_);
+    sbt_.missRecordStrideInBytes = sizeof(SbtRecord);
     sbt_.missRecordCount = 1;
-    sbt_.hitgroupRecordBase = hitgroup_record;
-    sbt_.hitgroupRecordStrideInBytes = sizeof(HitGroupSbtRecord);
+    sbt_.hitgroupRecordBase = create_record(hitgroup_pg_);
+    sbt_.hitgroupRecordStrideInBytes = sizeof(SbtRecord);
     sbt_.hitgroupRecordCount = 1;
 }
 
