@@ -12,24 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "ray_pipeline.h"
-#include "primitive_kernels.h"
+#include "ray_tracer.h"
 
 #include <optix_stack_size.h>
-#include <cstring>
+
+// Embedded PTX code (generated header)
+#include "shaders_ptx.h"
 
 // =============================================================================
-// RayPipeline implementation
+// RayTracer Implementation
 // =============================================================================
 
-RayPipeline::RayPipeline(const Primitives& prims, int device_index)
+RayTracer::RayTracer(int device_index)
     : ctx_(DeviceContext::get(device_index))
 {
     CUDA_CHECK(cudaSetDevice(ctx_.device()));
 
-    // Build acceleration structure
-    model_ = prims;
-    accel_ = std::make_unique<AccelStructure>(ctx_, model_);
+    // Create acceleration structure (empty, will be populated by update_primitives)
+    accel_ = std::make_unique<AccelStructure>(ctx_);
 
     // Setup pipeline compile options
     pipeline_options_.usesMotionBlur = false;
@@ -40,22 +40,16 @@ RayPipeline::RayPipeline(const Primitives& prims, int device_index)
     pipeline_options_.pipelineLaunchParamsVariableName = "SLANG_globalParams";
     pipeline_options_.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_CUSTOM;
 
+    // Compile pipeline once
     create_module(shaders_ptx);
     create_program_groups();
     create_pipeline();
     create_sbt();
 
-    // Initialize params with model data
-    params_.means = {model_.means, model_.num_prims};
-    params_.scales = {model_.scales, model_.num_prims};
-    params_.quats = {model_.quats, model_.num_prims};
-    params_.densities = {model_.densities, model_.num_prims};
-    params_.features = {model_.features, model_.num_prims * model_.feature_size};
-
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_param_), sizeof(Params)));
 }
 
-void RayPipeline::create_module(const char* ptx) {
+void RayTracer::create_module(const char* ptx) {
     OptixModuleCompileOptions module_options = {};
     module_options.optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_3;
     module_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
@@ -66,12 +60,12 @@ void RayPipeline::create_module(const char* ptx) {
         &pipeline_options_,
         ptx,
         strlen(ptx),
-        log_, &log_size_,
+        log_, &log_sz_,
         &module_
     ));
 }
 
-void RayPipeline::create_program_groups() {
+void RayTracer::create_program_groups() {
     OptixProgramGroupOptions pg_options = {};
 
     // Raygen
@@ -80,7 +74,7 @@ void RayPipeline::create_program_groups() {
     raygen_desc.raygen.module = module_;
     raygen_desc.raygen.entryFunctionName = "__raygen__render_volume";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
-        ctx_.context(), &raygen_desc, 1, &pg_options, log_, &log_size_, &raygen_pg_
+        ctx_.context(), &raygen_desc, 1, &pg_options, log_, &log_sz_, &raygen_pg_
     ));
 
     // Miss
@@ -89,7 +83,7 @@ void RayPipeline::create_program_groups() {
     miss_desc.miss.module = module_;
     miss_desc.miss.entryFunctionName = "__miss__miss";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
-        ctx_.context(), &miss_desc, 1, &pg_options, log_, &log_size_, &miss_pg_
+        ctx_.context(), &miss_desc, 1, &pg_options, log_, &log_sz_, &miss_pg_
     ));
 
     // Hitgroup
@@ -100,11 +94,11 @@ void RayPipeline::create_program_groups() {
     hitgroup_desc.hitgroup.moduleIS = module_;
     hitgroup_desc.hitgroup.entryFunctionNameIS = "__intersection__intersect_ellipsoid";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
-        ctx_.context(), &hitgroup_desc, 1, &pg_options, log_, &log_size_, &hitgroup_pg_
+        ctx_.context(), &hitgroup_desc, 1, &pg_options, log_, &log_sz_, &hitgroup_pg_
     ));
 }
 
-void RayPipeline::create_pipeline() {
+void RayTracer::create_pipeline() {
     constexpr uint32_t max_trace_depth = 1;
 
     OptixProgramGroup program_groups[] = {raygen_pg_, miss_pg_, hitgroup_pg_};
@@ -118,7 +112,7 @@ void RayPipeline::create_pipeline() {
         &link_options,
         program_groups,
         std::size(program_groups),
-        log_, &log_size_,
+        log_, &log_sz_,
         &pipeline_
     ));
 
@@ -140,7 +134,7 @@ void RayPipeline::create_pipeline() {
     ));
 }
 
-void RayPipeline::create_sbt() {
+void RayTracer::create_sbt() {
     // Raygen record
     CUdeviceptr raygen_record;
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&raygen_record), sizeof(RayGenSbtRecord)));
@@ -175,23 +169,41 @@ void RayPipeline::create_sbt() {
     sbt_.hitgroupRecordCount = 1;
 }
 
-void RayPipeline::trace_rays(
+void RayTracer::update_primitives(const Primitives& prims) {
+    CUDA_CHECK(cudaSetDevice(ctx_.device()));
+
+    prims_ = prims;
+    accel_->rebuild(prims);
+
+    // Update params with model data
+    params_.means = {prims_.means, prims_.num_prims};
+    params_.scales = {prims_.scales, prims_.num_prims};
+    params_.quats = {prims_.quats, prims_.num_prims};
+    params_.densities = {prims_.densities, prims_.num_prims};
+    params_.features = {prims_.features, prims_.num_prims * prims_.feature_size};
+}
+
+void RayTracer::trace_rays(
     size_t num_rays,
     float3* ray_origins,
     float3* ray_directions,
     float4* color_out,
     float* depth_out,
-    uint sh_degree,
+    uint32_t sh_degree,
     float tmin,
     float* tmax,
     size_t max_iters,
     SavedState* saved)
 {
+    if (!has_primitives()) {
+        throw Exception("Must call update_primitives() before trace_rays()");
+    }
+
     CUDA_CHECK(cudaSetDevice(ctx_.device()));
 
-    // Allocate temporary buffer for last_prim (internal use only)
-    uint* last_prim = nullptr;
-    CUDA_CHECK(cudaMalloc(&last_prim, num_rays * sizeof(uint)));
+    // Allocate temporary buffer for last_prim
+    uint32_t* last_prim = nullptr;
+    CUDA_CHECK(cudaMalloc(&last_prim, num_rays * sizeof(uint32_t)));
 
     // Setup params
     params_.image = {color_out, num_rays};
@@ -210,7 +222,7 @@ void RayPipeline::trace_rays(
         params_.last_delta_contrib = {saved->delta_contribs, num_rays};
         params_.hit_collection = {saved->hit_collection, num_rays * max_iters};
         params_.iters = {saved->iters, num_rays};
-        params_.prim_hits = {saved->prim_hits, model_.num_prims};
+        params_.prim_hits = {saved->prim_hits, prims_.num_prims};
 
         CUDA_CHECK(cudaMemset(saved->initial_contrib, 0, num_rays * sizeof(float4)));
         params_.initial_contrib = {saved->initial_contrib, num_rays};
@@ -241,9 +253,9 @@ void RayPipeline::trace_rays(
     CUDA_CHECK(cudaFree(last_prim));
 }
 
-RayPipeline::~RayPipeline() {
+RayTracer::~RayTracer() {
     // Note: Don't use CUDA_CHECK/OPTIX_CHECK in destructor - they may throw,
-    // but destructors are implicitly noexcept. Cleanup failures are logged but ignored.
+    // but destructors are implicitly noexcept.
 
     if (d_param_)
         cudaFree(reinterpret_cast<void*>(std::exchange(d_param_, 0)));

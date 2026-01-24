@@ -12,161 +12,117 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""PrimTracer: Differentiable volume rendering for ellipsoid primitives."""
+
 from typing import Any
 
 import torch
 from torch.autograd import Function
 
-from . import ellipsoid_tracer as _tracer
-from . import backwards_kernel
-from . import sh_kernel
+from . import ellipsoid_tracer as _C
+from . import backwards_kernel as _bw
+from . import sh_kernel as _sh
+
+__all__ = ["trace_rays", "eval_sh", "RayTracer"]
+
+# Re-export RayTracer for direct access
+RayTracer = _C.RayTracer
+
+# =============================================================================
+# Internal: RayTracer cache for pipeline reuse
+# =============================================================================
+
+_tracers: dict[int, RayTracer] = {}
+
+
+def _get_tracer(device: int) -> RayTracer:
+    if device not in _tracers:
+        _tracers[device] = RayTracer(device)
+    return _tracers[device]
+
+
+def _div_up(n: int, d: int) -> int:
+    return (n + d - 1) // d
 
 
 # =============================================================================
-# PrimTracer - Volume Rendering for Primitives
+# PrimTracer: Differentiable volume rendering
 # =============================================================================
 
-class PrimTracer(Function):
-    """Differentiable volume rendering for ellipsoid primitives."""
-
+class _PrimTracerFn(Function):
     @staticmethod
-    def forward(
-        ctx: Any,
-        mean: torch.Tensor,
-        scale: torch.Tensor,
-        quat: torch.Tensor,
-        density: torch.Tensor,
-        features: torch.Tensor,
-        rayo: torch.Tensor,
-        rayd: torch.Tensor,
-        tmin: float,
-        tmax: torch.Tensor,
-        max_iters: int,
-    ):
-        # Ensure contiguous tensors
-        mean = mean.contiguous()
-        scale = scale.contiguous()
-        quat = quat.contiguous()
-        density = density.contiguous()
-        features = features.contiguous()
-        rayo = rayo.contiguous()
-        rayd = rayd.contiguous()
-        tmax = tmax.contiguous()
-
-        # Call the C++ trace_rays function
-        out = _tracer.trace_rays(
-            mean, scale, quat, density, features,
-            rayo, rayd, tmin, tmax, max_iters
+    def forward(ctx: Any, mean, scale, quat, density, features, rayo, rayd, tmin, tmax, max_iters):
+        tracer = _get_tracer(mean.device.index or 0)
+        tracer.update_primitives(
+            mean.contiguous(), scale.contiguous(), quat.contiguous(),
+            density.contiguous(), features.contiguous()
+        )
+        out = tracer.trace_rays(
+            rayo.contiguous(), rayd.contiguous(), tmin, tmax.contiguous(), max_iters
         )
 
-        # Store for backward
-        ctx.tmin = tmin
-        ctx.max_iters = max_iters
-
+        ctx.tmin, ctx.max_iters = tmin, max_iters
         ctx.save_for_backward(
             mean, scale, quat, density, features, rayo, rayd, tmax,
             out["states"], out["delta_contribs"], out["iters"],
             out["hit_collection"], out["initial_contrib"],
             out["initial_prim_indices"], out["initial_prim_count"],
         )
-
-        extras = dict(
-            hit_collection=out["hit_collection"],
-            iters=out["iters"],
-            prim_hits=out["prim_hits"],
-        )
-
-        return out["color"], out["depth"], extras
+        return out["color"], out["depth"], out["iters"], out["hit_collection"], out["prim_hits"]
 
     @staticmethod
-    def backward(ctx, grad_color: torch.Tensor, grad_depth: torch.Tensor, grad_extras: dict = None):
-        (
-            mean, scale, quat, density, features, rayo, rayd, tmax,
-            states, delta_contribs, iters,
-            hit_collection, initial_contrib,
-            initial_prim_indices, initial_prim_count,
-        ) = ctx.saved_tensors
+    def backward(ctx, dL_color, dL_depth, *_):
+        mean, scale, quat, density, features, rayo, rayd, tmax, \
+            states, delta_contribs, iters, hit_collection, \
+            initial_contrib, initial_prim_indices, initial_prim_count = ctx.saved_tensors
 
-        device = mean.device
-        num_prims = mean.shape[0]
-        num_rays = rayo.shape[0]
+        N, M = mean.shape[0], rayo.shape[0]
+        dev = mean.device
 
-        # Allocate gradient tensors
-        dL_dmeans = torch.zeros((num_prims, 3), dtype=torch.float32, device=device)
-        dL_dscales = torch.zeros((num_prims, 3), dtype=torch.float32, device=device)
-        dL_dquats = torch.zeros((num_prims, 4), dtype=torch.float32, device=device)
-        dL_ddensities = torch.zeros((num_prims), dtype=torch.float32, device=device)
-        dL_dfeatures = torch.zeros_like(features)
-        dL_drayo = torch.zeros((num_rays, 3), dtype=torch.float32, device=device)
-        dL_drayd = torch.zeros((num_rays, 3), dtype=torch.float32, device=device)
-        prim_hits = torch.zeros((num_prims), dtype=torch.int32, device=device)
-        dL_dinitial_contrib = torch.zeros((num_rays, 4), dtype=torch.float32, device=device)
+        # Allocate gradients
+        dL = {
+            "mean": torch.zeros(N, 3, device=dev),
+            "scale": torch.zeros(N, 3, device=dev),
+            "quat": torch.zeros(N, 4, device=dev),
+            "density": torch.zeros(N, device=dev),
+            "features": torch.zeros_like(features),
+            "rayo": torch.zeros(M, 3, device=dev),
+            "rayd": torch.zeros(M, 3, device=dev),
+            "initial": torch.zeros(M, 4, device=dev),
+        }
+        prim_hits = torch.zeros(N, dtype=torch.int32, device=dev)
+        grad = torch.cat([dL_color, dL_depth.view(-1, 1)], dim=1).contiguous()
 
-        # Combine color and depth gradients
-        grad_combined = torch.cat([grad_color, grad_depth.reshape(-1, 1)], dim=1)
-
-        block_size = 16
         if iters.sum() > 0:
-            dual_model = (
-                mean, scale, quat, density, features,
-                dL_dmeans, dL_dscales, dL_dquats, dL_ddensities, dL_dfeatures,
-                dL_drayo, dL_drayd,
+            dual = (mean, scale, quat, density, features,
+                    dL["mean"], dL["scale"], dL["quat"], dL["density"], dL["features"],
+                    dL["rayo"], dL["rayd"])
+
+            _bw.backwards_kernel(
+                (16, 1, 1), (_div_up(M, 16), 1, 1),
+                states, delta_contribs, iters, hit_collection, rayo, rayd,
+                dual, initial_contrib, dL["initial"], prim_hits,
+                grad, ctx.tmin, tmax, 3.0, ctx.max_iters
             )
 
-            backwards_kernel.backwards_kernel(
-                (block_size, 1, 1),
-                (num_rays // block_size + 1, 1, 1),
-                states,
-                delta_contribs,
-                iters,
-                hit_collection,
-                rayo,
-                rayd,
-                dual_model,
-                initial_contrib,
-                dL_dinitial_contrib,
-                prim_hits,
-                grad_combined.contiguous(),
-                ctx.tmin,
-                tmax,
-                3.0,  # max_prim_size
-                ctx.max_iters,
-            )
-
-            n_initial = initial_prim_count.item()
-            if n_initial > 0:
-                ray_block_size = 64
-                second_block_size = 16
-                backwards_kernel.backwards_initial_contrib_kernel(
-                    (ray_block_size, second_block_size, 1),
-                    (
-                        num_rays // ray_block_size + 1,
-                        n_initial // second_block_size + 1,
-                        1,
-                    ),
-                    rayo,
-                    rayd,
-                    dual_model,
-                    initial_contrib,
-                    initial_prim_indices[:n_initial],
-                    dL_dinitial_contrib,
-                    prim_hits,
-                    ctx.tmin,
+            n_init = initial_prim_count.item()
+            if n_init > 0:
+                _bw.backwards_initial_contrib_kernel(
+                    (64, 16, 1), (_div_up(M, 64), _div_up(n_init, 16), 1),
+                    rayo, rayd, dual, initial_contrib, initial_prim_indices[:n_init],
+                    dL["initial"], prim_hits, ctx.tmin
                 )
 
-        # Clip gradients for numerical stability
-        clip_val = 1e3
+        clip = 1e3
         return (
-            dL_dmeans.clip(min=-clip_val, max=clip_val),
-            dL_dscales.clip(min=-clip_val, max=clip_val),
-            dL_dquats.clip(min=-clip_val, max=clip_val),
-            dL_ddensities.clip(min=-clip_val, max=clip_val),
-            dL_dfeatures.clip(min=-clip_val, max=clip_val),
-            dL_drayo.clip(min=-clip_val, max=clip_val),
-            dL_drayd.clip(min=-clip_val, max=clip_val),
-            None,  # tmin
-            None,  # tmax
-            None,  # max_iters
+            dL["mean"].clamp(-clip, clip),
+            dL["scale"].clamp(-clip, clip),
+            dL["quat"].clamp(-clip, clip),
+            dL["density"].clamp(-clip, clip),
+            dL["features"].clamp(-clip, clip),
+            dL["rayo"].clamp(-clip, clip),
+            dL["rayd"].clamp(-clip, clip),
+            None, None, None  # tmin, tmax, max_iters
         )
 
 
@@ -188,126 +144,81 @@ def trace_rays(
 
     Args:
         mean: Primitive centers, shape (N, 3)
-        scale: Primitive scales (radii along each axis), shape (N, 3)
-        quat: Primitive rotations as unit quaternions (w, x, y, z), shape (N, 4)
+        scale: Primitive scales, shape (N, 3)
+        quat: Primitive rotations (w,x,y,z), shape (N, 4)
         density: Primitive densities, shape (N,)
-        features: SH color features, shape (N, C, 3) where C is the number of
-            SH coefficients. For degree-0 SH, C=1.
+        features: SH features, shape (N, C, 3)
         rayo: Ray origins, shape (M, 3)
-        rayd: Ray directions (should be normalized), shape (M, 3)
-        tmin: Minimum t value for ray marching
-        tmax: Maximum t value. Can be a scalar or per-ray tensor of shape (M,)
-        max_iters: Maximum number of hit iterations per ray
-        return_extras: If True, return additional info (hit_collection, iters, prim_hits)
+        rayd: Ray directions (normalized), shape (M, 3)
+        tmin: Minimum ray t
+        tmax: Maximum ray t (scalar or per-ray tensor)
+        max_iters: Maximum hit iterations per ray
+        return_extras: Return additional hit info
 
     Returns:
-        If return_extras=False (default):
-            Tuple of (color, depth)
-        If return_extras=True:
-            Tuple of (color, depth, extras) where extras is a dict containing:
-                - hit_collection: Primitive hit indices for each ray
-                - iters: Number of iterations per ray
-                - prim_hits: Hit count per primitive
+        (color, depth) or (color, depth, extras) if return_extras=True
     """
-    num_rays = rayo.shape[0]
+    M = rayo.shape[0]
+    density = density.view(-1)
 
-    # Normalize density to 1D
-    density = density.reshape(-1)
-
-    # Convert tmax to per-ray tensor if needed
     if isinstance(tmax, (int, float)):
-        tmax = torch.full((num_rays,), tmax, dtype=torch.float32, device=rayo.device)
-    elif isinstance(tmax, torch.Tensor):
-        if tmax.numel() == 1:
-            tmax = tmax.expand(num_rays).contiguous()
-        elif tmax.shape[0] != num_rays:
-            raise ValueError(f"tmax must have shape ({num_rays},) or be a scalar, got {tmax.shape}")
+        tmax = torch.full((M,), tmax, dtype=torch.float32, device=rayo.device)
+    else:
         tmax = tmax.to(dtype=torch.float32, device=rayo.device)
+        if tmax.numel() == 1:
+            tmax = tmax.expand(M).contiguous()
 
-    color, depth, extras = PrimTracer.apply(
-        mean, scale, quat, density, features,
-        rayo, rayd, tmin, tmax, max_iters
+    color, depth, iters, hit_collection, prim_hits = _PrimTracerFn.apply(
+        mean, scale, quat, density, features, rayo, rayd, tmin, tmax, max_iters
     )
 
     if return_extras:
-        return color, depth, extras
+        return color, depth, {"iters": iters, "hit_collection": hit_collection, "prim_hits": prim_hits}
     return color, depth
 
 
 # =============================================================================
-# EvalSH - Spherical Harmonics Evaluation
+# EvalSH: Spherical harmonics evaluation
 # =============================================================================
 
-class EvalSH(Function):
-    """Evaluate spherical harmonics for view-dependent colors."""
-
+class _EvalSHFn(Function):
     @staticmethod
-    def forward(
-        ctx: Any,
-        means: torch.Tensor,
-        features: torch.Tensor,
-        rayo: torch.Tensor,
-        sh_degree: int,
-    ):
-        block_size = 64
-        rayo = rayo.reshape(3).contiguous()
-        means = means.contiguous()
-        features = features.contiguous()
+    def forward(ctx: Any, means, features, rayo, sh_degree):
+        means, features = means.contiguous(), features.contiguous()
+        rayo = rayo.view(3).contiguous()
         color = torch.zeros_like(means)
+        N = means.shape[0]
+
+        _sh.sh_kernel((64, 1, 1), (_div_up(N, 64), 1, 1), means, features, rayo, color, sh_degree)
+
         ctx.sh_degree = sh_degree
-        num_prim = means.shape[0]
-
-        sh_kernel.sh_kernel(
-            (block_size, 1, 1),
-            (num_prim // block_size + 1, 1, 1),
-            means,
-            features,
-            rayo,
-            color,
-            sh_degree,
-        )
-
-        ctx.save_for_backward(means, features, rayo, color)
+        ctx.save_for_backward(means, features, rayo)
         return color
 
     @staticmethod
-    def backward(ctx, dL_dcolor: torch.Tensor):
-        block_size = 64
-        means, features, rayo, color = ctx.saved_tensors
-        num_prim = means.shape[0]
-        dL_dfeat = torch.zeros_like(features)
-        dL_dcolor = dL_dcolor.contiguous()
+    def backward(ctx, dL_color):
+        means, features, rayo = ctx.saved_tensors
+        dL_feat = torch.zeros_like(features)
+        N = means.shape[0]
 
-        sh_kernel.bw_sh_kernel(
-            (block_size, 1, 1),
-            ((num_prim + block_size - 1) // block_size, 1, 1),
-            means,
-            features,
-            dL_dfeat,
-            rayo,
-            dL_dcolor,
-            ctx.sh_degree,
+        _sh.bw_sh_kernel(
+            (64, 1, 1), (_div_up(N, 64), 1, 1),
+            means, features, dL_feat, rayo, dL_color.contiguous(), ctx.sh_degree
         )
+        return None, dL_feat, None, None
 
-        return None, dL_dfeat, None, None
 
-
-def eval_sh(
-    means: torch.Tensor,
-    features: torch.Tensor,
-    rayo: torch.Tensor,
-    sh_degree: int,
-) -> torch.Tensor:
+def eval_sh(means: torch.Tensor, features: torch.Tensor, rayo: torch.Tensor, sh_degree: int) -> torch.Tensor:
     """
     Evaluate spherical harmonics for primitives.
 
     Args:
         means: Primitive centers, shape (N, 3)
         features: SH coefficients, shape (N, C, 3)
-        rayo: Ray origin (camera position), shape (3,) or (1, 3)
-        sh_degree: Degree of spherical harmonics
+        rayo: Camera position, shape (3,)
+        sh_degree: SH degree
 
     Returns:
-        Evaluated colors, shape (N, 3)
+        Colors, shape (N, 3)
     """
-    return EvalSH.apply(means, features, rayo, sh_degree)
+    return _EvalSHFn.apply(means, features, rayo, sh_degree)

@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "primitive_kernels.h"
-#include "optix_error.h"
+#include "ray_tracer.h"
 #include "glm/glm.hpp"
 
 // =============================================================================
