@@ -38,20 +38,16 @@ struct HitData {
 };
 
 /// Volume rendering state - must match slang IntegratorState layout exactly
+///
+/// Memory layout (12 floats, 48 bytes, 16-byte aligned):
+///   [0-3]:  accumulated_contrib (float4)
+///   [4-7]:  C_logT (float4) - C.xyz, logT
+///   [8-11]: scalars (float4) - depth_accum, t, pad, pad
 struct IntegratorState
 {
-  // Depth accumulator
-  float depth_accum;
-
-  // Current ray parameter t
-  float t;
-
-  // Accumulated density-weighted contributions: (density, r*density, g*density, b*density)
   float4 accumulated_contrib;
-
-  // Volume rendering state
-  float logT;   // Log of accumulated optical depth (negative log transmittance)
-  float3 C;     // Accumulated color
+  float4 C_logT;    // C (xyz), logT (w)
+  float4 scalars;   // depth_accum (x), t (y), unused (z, w)
 };
 
 // Always on GPU

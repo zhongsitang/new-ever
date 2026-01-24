@@ -36,34 +36,38 @@ import safe_math;
 ///
 /// This tracks both the integration state (accumulated density-weighted values)
 /// and the volume rendering state (transmittance and accumulated color).
+///
+/// Memory layout (12 floats, 48 bytes, 16-byte aligned):
+///   [0-3]:  accumulated_contrib (float4) - density, r*density, g*density, b*density
+///   [4-7]:  C_logT (float4) - C.x, C.y, C.z, logT
+///   [8-11]: scalars (float4) - depth_accum, t, pad, pad
 struct IntegratorState : IDifferentiable
 {
-    // Depth accumulator
-    float depth_accum;
-
-    // Current ray parameter t
-    float t;
-
     // Accumulated density-weighted contributions: (density, r*density, g*density, b*density)
     // This accumulates the "delta" contributions from ellipsoid boundaries.
-    // Between boundaries, this represents the current density field value.
     float4 accumulated_contrib;
 
-    // Volume rendering state
-    float logT; // Log of accumulated optical depth (negative log transmittance)
-    float3 C;   // Accumulated color
+    // Combined: accumulated color (xyz) + log transmittance (w)
+    float4 C_logT;
+
+    // Scalars packed into float4: depth_accum (x), t (y), unused (z, w)
+    float4 scalars;
+
+    // Accessor properties
+    property float3 C { get { return C_logT.xyz; } set { C_logT.xyz = newValue; } }
+    property float logT { get { return C_logT.w; } set { C_logT.w = newValue; } }
+    property float depth_accum { get { return scalars.x; } set { scalars.x = newValue; } }
+    property float t { get { return scalars.y; } set { scalars.y = newValue; } }
 };
 
 /// Create initial volume state for a new ray.
 IntegratorState make_initial_state()
 {
-    return {
-        0.f,
-        0.f,
-        float4(0.0f),
-        0.0,
-        float3(0.0f),
-    };
+    IntegratorState state;
+    state.accumulated_contrib = float4(0.0f);
+    state.C_logT = float4(0.0f);
+    state.scalars = float4(0.0f);
+    return state;
 }
 
 /// Sample point along a ray, representing an ellipsoid boundary crossing.
@@ -117,7 +121,7 @@ IntegratorState inverse_update_dual(
     const float t = sample.t;
     const float dt = max(new_state.t - t, 0.f);
 
-    IntegratorState state = {};
+    IntegratorState state = new_state;  // Copy all fields first
     state.accumulated_contrib = new_state.accumulated_contrib - new_sample.delta_contrib;
 
     state.t = t;
@@ -168,7 +172,7 @@ IntegratorState update(
     const float t = sample.t;
     const float dt = max(t - state.t, 0.f);
 
-    IntegratorState new_state;
+    IntegratorState new_state = state;  // Copy all fields first
     new_state.accumulated_contrib = state.accumulated_contrib + sample.delta_contrib;
     new_state.t = t;
 
