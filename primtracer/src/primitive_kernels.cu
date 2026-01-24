@@ -15,295 +15,205 @@
 #include "primitive_kernels.h"
 #include "optix_error.h"
 #include "glm/glm.hpp"
-#include "types.h"
-#include <cuda.h>
-#include <cuda_runtime.h>
-#include <iostream>
-#include <sstream>
-#include <stdexcept>
 
 // =============================================================================
-// Primitive Bounding Box Construction
+// Device Utilities
+// =============================================================================
+
+namespace {
+
+constexpr size_t BLOCK_SIZE = 1024;
+
+/// Spherical harmonics constant for DC term
+__device__ constexpr float SH_C0 = 0.28209479177387814f;
+
+/// Compute rotation matrix from quaternion (wxyz format).
+/// Returns transposed rotation matrix for efficient column-major access.
+__device__ glm::mat3 quat_to_rotation_matrix_t(const glm::vec4& quat) {
+    const glm::vec4 q = glm::normalize(quat);
+    const float w = q.x, x = q.y, y = q.z, z = q.w;
+
+    return glm::mat3{
+        1.0f - 2.0f * (y * y + z * z), 2.0f * (x * y - w * z), 2.0f * (x * z + w * y),
+        2.0f * (x * y + w * z), 1.0f - 2.0f * (x * x + z * z), 2.0f * (y * z - w * x),
+        2.0f * (x * z - w * y), 2.0f * (y * z + w * x), 1.0f - 2.0f * (x * x + y * y)
+    };
+}
+
+/// Transform point from world space to ellipsoid-local space.
+/// Returns normalized coordinates where unit sphere = ellipsoid surface.
+__device__ glm::vec3 world_to_ellipsoid(
+    const glm::vec3& point,
+    const glm::vec3& center,
+    const glm::vec4& quat,
+    const glm::vec3& scale)
+{
+    const glm::mat3 Rt = quat_to_rotation_matrix_t(quat);
+    return (Rt * (point - center)) / scale;
+}
+
+/// Squared distance from origin (for point-in-ellipsoid test)
+__device__ float squared_norm(const glm::vec3& v) {
+    return v.x * v.x + v.y * v.y + v.z * v.z;
+}
+
+}  // namespace
+
+// =============================================================================
+// AABB Computation
 // =============================================================================
 
 __global__ void compute_primitive_bounds_kernel(
-    const glm::vec3 *means,
-    const glm::vec3 *scales,
-    const glm::vec4 *quats,
-    const float *densities,
+    const glm::vec3* __restrict__ means,
+    const glm::vec3* __restrict__ scales,
+    const glm::vec4* __restrict__ quats,
     const size_t num_prims,
-    OptixAabb *aabbs)
+    OptixAabb* __restrict__ aabbs)
 {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < 0 || i >= num_prims)
-        return;
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= num_prims) return;
 
-    const glm::vec4 quat = glm::normalize(quats[i]);
     const glm::vec3 center = means[i];
     const glm::vec3 size = scales[i];
+    const glm::mat3 Rt = quat_to_rotation_matrix_t(quats[i]);
 
-    const float r = quat.x;
-    const float x = quat.y;
-    const float y = quat.z;
-    const float z = quat.w;
+    // Compute transformation matrix M = S * R^T
+    const glm::mat3 S = glm::mat3(
+        size.x, 0.0f, 0.0f,
+        0.0f, size.y, 0.0f,
+        0.0f, 0.0f, size.z
+    );
+    const glm::mat3 M = S * Rt;
 
-    const glm::mat3 Rt = {
-        1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - r * z), 2.0 * (x * z + r * y),
-        2.0 * (x * y + r * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - r * x),
-        2.0 * (x * z - r * y), 2.0 * (y * z + r * x), 1.0 - 2.0 * (x * x + y * y)
+    // AABB extent = row norms of M (maximum extent along each axis)
+    const float extent_x = sqrt(M[0][0]*M[0][0] + M[0][1]*M[0][1] + M[0][2]*M[0][2]);
+    const float extent_y = sqrt(M[1][0]*M[1][0] + M[1][1]*M[1][1] + M[1][2]*M[1][2]);
+    const float extent_z = sqrt(M[2][0]*M[2][0] + M[2][1]*M[2][1] + M[2][2]*M[2][2]);
+
+    aabbs[i] = OptixAabb{
+        center.x - extent_x, center.y - extent_y, center.z - extent_z,
+        center.x + extent_x, center.y + extent_y, center.z + extent_z
     };
-
-    float s = 1.0;
-    glm::mat3 S = glm::mat3(1.0);
-    S[0][0] = s * size.x;
-    S[1][1] = s * size.y;
-    S[2][2] = s * size.z;
-
-    glm::mat4 M = glm::mat4(S * Rt);
-    M[0][3] = center.x;
-    M[1][3] = center.y;
-    M[2][3] = center.z;
-
-    float row0_norm = sqrt(M[0][0]*M[0][0] + M[0][1]*M[0][1] + M[0][2]*M[0][2]);
-    float row1_norm = sqrt(M[1][0]*M[1][0] + M[1][1]*M[1][1] + M[1][2]*M[1][2]);
-    float row2_norm = sqrt(M[2][0]*M[2][0] + M[2][1]*M[2][1] + M[2][2]*M[2][2]);
-
-    OptixAabb aabb;
-    aabb.minX = center.x - row0_norm;
-    aabb.minY = center.y - row1_norm;
-    aabb.minZ = center.z - row2_norm;
-    aabb.maxX = center.x + row0_norm;
-    aabb.maxY = center.y + row1_norm;
-    aabb.maxZ = center.z + row2_norm;
-    aabbs[i] = aabb;
 }
 
 void compute_primitive_aabbs(const Primitives& prims, OptixAabb* aabbs) {
-    const size_t block_size = 1024;
-    compute_primitive_bounds_kernel<<<(prims.num_prims + block_size - 1) / block_size, block_size>>>(
-        (glm::vec3 *)prims.means,
-        (glm::vec3 *)prims.scales,
-        (glm::vec4 *)prims.quats,
-        prims.densities,
+    const size_t grid_size = (prims.num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    compute_primitive_bounds_kernel<<<grid_size, BLOCK_SIZE>>>(
+        reinterpret_cast<const glm::vec3*>(prims.means),
+        reinterpret_cast<const glm::vec3*>(prims.scales),
+        reinterpret_cast<const glm::vec4*>(prims.quats),
         prims.num_prims,
         aabbs);
     CUDA_SYNC_CHECK();
 }
 
 // =============================================================================
-// Initial Ray Sample Accumulation
+// Initial Sample Accumulation (rays starting inside primitives)
 // =============================================================================
 
-#define SQR(x) (x)*(x)
+namespace {
 
-__device__ static const float SH_C0 = 0.28209479177387814f;
-
-__device__ glm::vec3 transform_to_ellipsoid_space(
-    const glm::vec3 center,
-    const glm::vec4 quat,
-    const glm::vec3 size,
-    const glm::vec3 rayo)
-{
-    const float r = quat.x;
-    const float x = quat.y;
-    const float y = quat.z;
-    const float z = quat.w;
-
-    const glm::mat3 Rt = {
-        1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - r * z), 2.0 * (x * z + r * y),
-        2.0 * (x * y + r * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - r * x),
-        2.0 * (x * z - r * y), 2.0 * (y * z + r * x), 1.0 - 2.0 * (x * x + y * y)
-    };
-
-    const glm::vec3 Trayo = (Rt * (rayo - center)) / size;
-    return Trayo;
-}
-
+/// Find primitives whose AABB contains the ray origin (within tmin distance).
 __global__ void find_enclosing_primitives_kernel(
-    const OptixAabb *aabbs,
+    const OptixAabb* __restrict__ aabbs,
     const size_t num_prims,
     const float tmin,
-    const glm::vec3 *rayos,
-    int *hit_indices,
-    int *hit_count)
+    const glm::vec3* __restrict__ ray_origins,
+    int* __restrict__ hit_indices,
+    int* __restrict__ hit_count)
 {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < 0 || i >= num_prims)
-        return;
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= num_prims) return;
 
-    OptixAabb aabb = aabbs[i];
-    const glm::vec3 rayo = rayos[0];
+    const OptixAabb aabb = aabbs[i];
+    const glm::vec3 rayo = ray_origins[0];
+    const float tmin_sq = tmin * tmin;
 
-    // Jim Arvo, Graphics Gems.
-    float dmin = 0;
-    if (rayo.x < aabb.minX)
-        dmin += SQR(rayo.x - aabb.minX);
-    else if (rayo.x > aabb.maxX)
-        dmin += SQR(rayo.x - aabb.maxX);
+    // Squared distance from point to AABB (Jim Arvo, Graphics Gems)
+    float dist_sq = 0.0f;
+    if (rayo.x < aabb.minX) dist_sq += (rayo.x - aabb.minX) * (rayo.x - aabb.minX);
+    else if (rayo.x > aabb.maxX) dist_sq += (rayo.x - aabb.maxX) * (rayo.x - aabb.maxX);
 
-    if (rayo.y < aabb.minY)
-        dmin += SQR(rayo.y - aabb.minY);
-    else if (rayo.y > aabb.maxY)
-        dmin += SQR(rayo.y - aabb.maxY);
+    if (rayo.y < aabb.minY) dist_sq += (rayo.y - aabb.minY) * (rayo.y - aabb.minY);
+    else if (rayo.y > aabb.maxY) dist_sq += (rayo.y - aabb.maxY) * (rayo.y - aabb.maxY);
 
-    if (rayo.z < aabb.minZ)
-        dmin += SQR(rayo.z - aabb.minZ);
-    else if (rayo.z > aabb.maxZ)
-        dmin += SQR(rayo.z - aabb.maxZ);
+    if (rayo.z < aabb.minZ) dist_sq += (rayo.z - aabb.minZ) * (rayo.z - aabb.minZ);
+    else if (rayo.z > aabb.maxZ) dist_sq += (rayo.z - aabb.maxZ) * (rayo.z - aabb.maxZ);
 
-    if (dmin <= tmin * tmin) {
-        int pos = atomicAdd(hit_count, 1);
+    if (dist_sq <= tmin_sq) {
+        const int pos = atomicAdd(hit_count, 1);
         hit_indices[pos] = i;
     }
 }
 
+/// Accumulate density/color contributions for rays inside primitives.
 __global__ void accumulate_initial_samples_kernel(
-    const glm::vec3 *means,
-    const glm::vec3 *scales,
-    const glm::vec4 *quats,
-    const float *densities,
-    const float *features,
-    const size_t num_prims,
+    const glm::vec3* __restrict__ means,
+    const glm::vec3* __restrict__ scales,
+    const glm::vec4* __restrict__ quats,
+    const float* __restrict__ densities,
+    const float* __restrict__ features,
     const size_t num_rays,
     const float tmin,
-    const glm::vec3 *rayos,
-    const glm::vec3 *rayds,
-    float *initial_contrib,
-    int *hit_indices,
-    int *hit_count)
+    const glm::vec3* __restrict__ ray_origins,
+    const glm::vec3* __restrict__ ray_directions,
+    float* __restrict__ initial_contrib,
+    const int* __restrict__ hit_indices,
+    const int* __restrict__ hit_count)
 {
-    int j = blockIdx.x * blockDim.x + threadIdx.x;
-    int i = blockIdx.y * blockDim.y + threadIdx.y;
+    const int ray_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int hit_idx = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (i >= *hit_count) return;
-    if (j >= num_rays) return;
+    if (hit_idx >= *hit_count || ray_idx >= num_rays) return;
 
-    glm::vec3 rayo = rayos[j] + tmin * glm::normalize(rayds[j]);
+    // Get ray start point (offset by tmin along direction)
+    const glm::vec3 ray_start = ray_origins[ray_idx] + tmin * glm::normalize(ray_directions[ray_idx]);
 
-    const int prim_ind = hit_indices[i];
-    const glm::vec4 quat = glm::normalize(quats[prim_ind]);
-    const glm::vec3 center = means[prim_ind];
-    const glm::vec3 size = scales[prim_ind];
+    // Get primitive data
+    const int prim_idx = hit_indices[hit_idx];
+    const glm::vec3 local_pos = world_to_ellipsoid(ray_start, means[prim_idx], quats[prim_idx], scales[prim_idx]);
 
-    const glm::vec3 Trayo = transform_to_ellipsoid_space(center, quat, size, rayo);
-    const float dist = Trayo.x*Trayo.x + Trayo.y*Trayo.y + Trayo.z*Trayo.z;
-
-    if (dist <= 1) {
-        const float density = densities[prim_ind];
+    // Check if point is inside ellipsoid (|local_pos| <= 1)
+    if (squared_norm(local_pos) <= 1.0f) {
+        const float density = densities[prim_idx];
         const glm::vec3 color = {
-            features[prim_ind * 3 + 0] * SH_C0 + 0.5,
-            features[prim_ind * 3 + 1] * SH_C0 + 0.5,
-            features[prim_ind * 3 + 2] * SH_C0 + 0.5,
+            features[prim_idx * 3 + 0] * SH_C0 + 0.5f,
+            features[prim_idx * 3 + 1] * SH_C0 + 0.5f,
+            features[prim_idx * 3 + 2] * SH_C0 + 0.5f,
         };
-        atomicAdd(initial_contrib + 4 * j + 0, density);
-        atomicAdd(initial_contrib + 4 * j + 1, density * color.x);
-        atomicAdd(initial_contrib + 4 * j + 2, density * color.y);
-        atomicAdd(initial_contrib + 4 * j + 3, density * color.z);
+
+        // Accumulate: (density, density*r, density*g, density*b)
+        atomicAdd(initial_contrib + 4 * ray_idx + 0, density);
+        atomicAdd(initial_contrib + 4 * ray_idx + 1, density * color.x);
+        atomicAdd(initial_contrib + 4 * ray_idx + 2, density * color.y);
+        atomicAdd(initial_contrib + 4 * ray_idx + 3, density * color.z);
     }
 }
 
-void init_ray_start_samples(Params *params, OptixAabb *aabbs, int *d_hit_count, int *d_hit_inds) {
-    const size_t block_size = 1024;
-    const size_t ray_block_size = 64;
-    const size_t second_block_size = 16;
-    int num_prims = params->means.size;
-    int num_rays = params->initial_contrib.size;
-
-    dim3 grid_dim(
-        (num_prims + block_size - 1) / block_size,
-        (num_rays + ray_block_size - 1) / ray_block_size
-    );
-    dim3 block_dim(block_size, ray_block_size);
-
-    bool initialize_tensors = d_hit_count == NULL;
-    if (initialize_tensors) {
-        cudaMalloc((void**)&d_hit_inds, num_prims * sizeof(int));
-        cudaMalloc((void**)&d_hit_count, sizeof(int));
-    }
-    cudaMemset(d_hit_count, 0, sizeof(int));
-
-    find_enclosing_primitives_kernel<<<grid_dim.x, block_dim.x>>>(
-        aabbs,
-        num_prims,
-        params->tmin,
-        (glm::vec3 *)(params->ray_origins.data),
-        d_hit_inds,
-        d_hit_count);
-
-    int hit_count;
-    cudaMemcpy(&hit_count, d_hit_count, sizeof(int), cudaMemcpyDeviceToHost);
-
-    if (hit_count > 0) {
-        dim3 init_grid_dim(
-            (num_rays + ray_block_size - 1) / ray_block_size,
-            (hit_count + second_block_size - 1) / second_block_size,
-            1
-        );
-        dim3 init_block_dim(ray_block_size, second_block_size, 1);
-
-        accumulate_initial_samples_kernel<<<init_grid_dim, init_block_dim>>>(
-            (glm::vec3 *)(params->means.data),
-            (glm::vec3 *)(params->scales.data),
-            (glm::vec4 *)(params->quats.data),
-            (float *)(params->densities.data),
-            (float *)(params->features.data),
-            num_prims,
-            num_rays,
-            params->tmin,
-            (glm::vec3 *)(params->ray_origins.data),
-            (glm::vec3 *)(params->ray_directions.data),
-            (float *)(params->initial_contrib.data),
-            d_hit_inds,
-            d_hit_count);
-
-        CUDA_SYNC_CHECK();
-    }
-
-    if (initialize_tensors) {
-        cudaFree(d_hit_inds);
-        cudaFree(d_hit_count);
-    }
-}
-
+/// Single-ray version: check all primitives directly
 __global__ void accumulate_initial_samples_single_kernel(
-    const glm::vec3 *means,
-    const glm::vec3 *scales,
-    const glm::vec4 *quats,
-    const float *densities,
-    const float *features,
+    const glm::vec3* __restrict__ means,
+    const glm::vec3* __restrict__ scales,
+    const glm::vec4* __restrict__ quats,
+    const float* __restrict__ densities,
+    const float* __restrict__ features,
     const size_t num_prims,
-    const glm::vec3 *rayo,
-    float *initial_contrib)
+    const glm::vec3* __restrict__ ray_origin,
+    float* __restrict__ initial_contrib)
 {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < 0 || i >= num_prims)
-        return;
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= num_prims) return;
 
-    const glm::vec4 quat = glm::normalize(quats[i]);
-    const float density = densities[i];
-    const glm::vec3 center = means[i];
-    const glm::vec3 size = scales[i];
+    const glm::vec3 local_pos = world_to_ellipsoid(*ray_origin, means[i], quats[i], scales[i]);
 
-    const float r = quat.x;
-    const float x = quat.y;
-    const float y = quat.z;
-    const float z = quat.w;
-
-    const glm::mat3 Rt = {
-        1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - r * z), 2.0 * (x * z + r * y),
-        2.0 * (x * y + r * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - r * x),
-        2.0 * (x * z - r * y), 2.0 * (y * z + r * x), 1.0 - 2.0 * (x * x + y * y)
-    };
-
-    const glm::vec3 Trayo = (Rt * (rayo[0] - center)) / size;
-    float dist = Trayo.x*Trayo.x + Trayo.y*Trayo.y + Trayo.z*Trayo.z;
-
-    if (dist <= 1) {
-        glm::vec3 color = {
-            features[i * 3 + 0] * SH_C0 + 0.5,
-            features[i * 3 + 1] * SH_C0 + 0.5,
-            features[i * 3 + 2] * SH_C0 + 0.5,
+    if (squared_norm(local_pos) <= 1.0f) {
+        const float density = densities[i];
+        const glm::vec3 color = {
+            features[i * 3 + 0] * SH_C0 + 0.5f,
+            features[i * 3 + 1] * SH_C0 + 0.5f,
+            features[i * 3 + 2] * SH_C0 + 0.5f,
         };
+
         atomicAdd(initial_contrib + 0, density);
         atomicAdd(initial_contrib + 1, density * color.x);
         atomicAdd(initial_contrib + 2, density * color.y);
@@ -311,23 +221,78 @@ __global__ void accumulate_initial_samples_single_kernel(
     }
 }
 
-void init_ray_start_samples_single(Params *params) {
-    const size_t block_size = 1024;
-    int num_prims = params->means.size;
+}  // namespace
 
-    accumulate_initial_samples_single_kernel<<<(num_prims + block_size - 1) / block_size, block_size>>>(
-        (glm::vec3 *)(params->means.data),
-        (glm::vec3 *)(params->scales.data),
-        (glm::vec4 *)(params->quats.data),
-        (float *)(params->densities.data),
-        (float *)(params->features.data),
+// =============================================================================
+// Public API
+// =============================================================================
+
+void init_ray_start_samples(Params* params, OptixAabb* aabbs, int* d_hit_count, int* d_hit_inds) {
+    const int num_prims = params->means.size;
+    const int num_rays = params->initial_contrib.size;
+
+    // Allocate temporary buffers if not provided
+    const bool alloc_temp = (d_hit_count == nullptr);
+    if (alloc_temp) {
+        cudaMalloc(&d_hit_inds, num_prims * sizeof(int));
+        cudaMalloc(&d_hit_count, sizeof(int));
+    }
+    cudaMemset(d_hit_count, 0, sizeof(int));
+
+    // Phase 1: Find primitives near ray origins
+    const size_t grid_size = (num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    find_enclosing_primitives_kernel<<<grid_size, BLOCK_SIZE>>>(
+        aabbs, num_prims, params->tmin,
+        reinterpret_cast<const glm::vec3*>(params->ray_origins.data),
+        d_hit_inds, d_hit_count);
+
+    // Get hit count
+    int hit_count;
+    cudaMemcpy(&hit_count, d_hit_count, sizeof(int), cudaMemcpyDeviceToHost);
+
+    // Phase 2: Accumulate contributions
+    if (hit_count > 0) {
+        constexpr size_t RAY_BLOCK = 64;
+        constexpr size_t HIT_BLOCK = 16;
+        dim3 grid((num_rays + RAY_BLOCK - 1) / RAY_BLOCK, (hit_count + HIT_BLOCK - 1) / HIT_BLOCK);
+        dim3 block(RAY_BLOCK, HIT_BLOCK);
+
+        accumulate_initial_samples_kernel<<<grid, block>>>(
+            reinterpret_cast<const glm::vec3*>(params->means.data),
+            reinterpret_cast<const glm::vec3*>(params->scales.data),
+            reinterpret_cast<const glm::vec4*>(params->quats.data),
+            params->densities.data,
+            params->features.data,
+            num_rays, params->tmin,
+            reinterpret_cast<const glm::vec3*>(params->ray_origins.data),
+            reinterpret_cast<const glm::vec3*>(params->ray_directions.data),
+            reinterpret_cast<float*>(params->initial_contrib.data),
+            d_hit_inds, d_hit_count);
+        CUDA_SYNC_CHECK();
+    }
+
+    if (alloc_temp) {
+        cudaFree(d_hit_inds);
+        cudaFree(d_hit_count);
+    }
+}
+
+void init_ray_start_samples_single(Params* params) {
+    const int num_prims = params->means.size;
+    const size_t grid_size = (num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
+
+    accumulate_initial_samples_single_kernel<<<grid_size, BLOCK_SIZE>>>(
+        reinterpret_cast<const glm::vec3*>(params->means.data),
+        reinterpret_cast<const glm::vec3*>(params->scales.data),
+        reinterpret_cast<const glm::vec4*>(params->quats.data),
+        params->densities.data,
+        params->features.data,
         num_prims,
-        (glm::vec3 *)(params->ray_origins.data),
-        (float *)(params->initial_contrib.data));
-
+        reinterpret_cast<const glm::vec3*>(params->ray_origins.data),
+        reinterpret_cast<float*>(params->initial_contrib.data));
     CUDA_SYNC_CHECK();
 }
 
-void init_ray_start_samples_zero(Params *params) {
-    // No-op: used when no initial samples needed
+void init_ray_start_samples_zero(Params* params) {
+    // No-op: placeholder when initial samples are not needed
 }

@@ -18,16 +18,9 @@
 #include <cuda_runtime.h>
 #include <optix.h>
 #include <optix_stubs.h>
-#include "types.h"
 #include "device_context.h"
+#include "primitive_kernels.h"
 #include "optix_error.h"
-
-// =============================================================================
-// Free function for AABB computation (implemented in primitive_kernels.cu)
-// =============================================================================
-
-/// Compute AABBs for primitives into pre-allocated buffer
-void compute_primitive_aabbs(const Primitives& prims, OptixAabb* aabbs);
 
 // =============================================================================
 // AccelStructure - AABB and GAS management with buffer reuse (header-only)

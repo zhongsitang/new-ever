@@ -25,10 +25,7 @@
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
-#include "types.h"
 #include "accel_structure.h"
-
-using uint = uint32_t;
 
 // Embedded PTX code (generated header)
 #include "shaders_ptx.h"
@@ -41,48 +38,6 @@ struct HitGroupData {};
 using RayGenSbtRecord   = SbtRecord<RayGenData>;
 using MissSbtRecord     = SbtRecord<MissData>;
 using HitGroupSbtRecord = SbtRecord<HitGroupData>;
-
-// Launch parameters - must match slang layout exactly
-// Note: StructuredBuffer<T> = {T* data, size_t size} (16 bytes with padding)
-struct Params {
-    StructuredBuffer<float4> image;                    // Rendered RGBA output
-    StructuredBuffer<float> depth_out;                 // Rendered depth output
-    StructuredBuffer<uint> iters;                      // Iteration count per ray
-    StructuredBuffer<uint> last_prim;                  // Last primitive hit
-    StructuredBuffer<uint> prim_hits;                  // Hit count per primitive
-    StructuredBuffer<float4> last_delta_contrib;       // Last sample delta contribution
-    StructuredBuffer<IntegratorState> last_state;      // Final volume state per ray
-    StructuredBuffer<int> hit_collection;              // Collected hit IDs for backward pass
-    StructuredBuffer<float3> ray_origins;
-    StructuredBuffer<float3> ray_directions;
-    Cam camera;
-
-    StructuredBuffer<float3> means;                    // Ellipsoid centers
-    StructuredBuffer<float3> scales;                   // Ellipsoid radii
-    StructuredBuffer<float4> quats;                    // Ellipsoid rotations (quaternion wxyz)
-    StructuredBuffer<float> densities;                 // Ellipsoid densities
-    StructuredBuffer<float> features;                  // SH coefficients for color
-
-    size_t sh_degree;                                  // Spherical harmonics degree
-    size_t max_iters;                                  // Maximum iterations per ray
-    float tmin;                                        // Minimum ray t
-    StructuredBuffer<float> tmax;                      // Maximum ray t (per-ray)
-    StructuredBuffer<float4> initial_contrib;          // Initial accumulated contribution
-    float max_prim_size;                               // Maximum primitive size
-    OptixTraversableHandle handle;                     // BVH acceleration structure
-};
-
-/// State saved during forward pass for backward gradient computation.
-struct SavedState {
-    IntegratorState* states;        // (M, 12) volume integrator state per ray
-    float4* delta_contribs;         // (M, 4) last delta contribution
-    uint* iters;                    // (M,) iteration count per ray
-    uint* prim_hits;                // (N,) hit count per primitive
-    int* hit_collection;            // (M * max_iters,) hit primitive indices
-    float4* initial_contrib;        // (M, 4) contribution for rays starting inside
-    int* initial_prim_indices;      // (N,) primitives containing ray origins
-    int* initial_prim_count;        // (1,) count of initial_prim_indices
-};
 
 // =============================================================================
 // RayPipeline - OptiX ray tracing pipeline for volume rendering
