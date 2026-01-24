@@ -42,22 +42,34 @@ using namespace pybind11::literals;
 // SavedState: Tensors needed for backward pass
 // =============================================================================
 
+/// State saved during forward pass for backward computation.
 struct SavedState {
+    // Volume integrator state per ray
     torch::Tensor states;
     torch::Tensor delta_contribs;
     torch::Tensor iters;
     torch::Tensor prim_hits;
 
-    SavedState(size_t num_rays, size_t num_prims, torch::Device device) {
+    // Hit information for backward traversal
+    torch::Tensor hit_collection;
+    torch::Tensor initial_contrib;
+    torch::Tensor initial_prim_indices;
+    int initial_prim_count;
+
+    SavedState(size_t num_rays, size_t num_prims, size_t max_iters, torch::Device device) {
+        auto opts_f = torch::device(device).dtype(torch::kFloat32);
+        auto opts_i = torch::device(device).dtype(torch::kInt32);
+
         constexpr size_t state_floats = sizeof(IntegratorState) / sizeof(float);
-        states = torch::zeros({(long)num_rays, (long)state_floats},
-                              torch::device(device).dtype(torch::kFloat32));
-        delta_contribs = torch::zeros({(long)num_rays, 4},
-                                      torch::device(device).dtype(torch::kFloat32));
-        iters = torch::zeros({(long)num_rays},
-                             torch::device(device).dtype(torch::kInt32));
-        prim_hits = torch::zeros({(long)num_prims},
-                                 torch::device(device).dtype(torch::kInt32));
+        states = torch::zeros({(long)num_rays, (long)state_floats}, opts_f);
+        delta_contribs = torch::zeros({(long)num_rays, 4}, opts_f);
+        iters = torch::zeros({(long)num_rays}, opts_i);
+        prim_hits = torch::zeros({(long)num_prims}, opts_i);
+
+        hit_collection = torch::zeros({(long)(num_rays * max_iters)}, opts_i);
+        initial_contrib = torch::zeros({(long)num_rays, 4}, opts_f);
+        initial_prim_indices = torch::zeros({(long)num_prims}, opts_i);
+        initial_prim_count = 0;
     }
 
     IntegratorState* states_ptr() {
@@ -68,6 +80,9 @@ struct SavedState {
     }
     uint* iters_ptr() { return reinterpret_cast<uint*>(iters.data_ptr()); }
     uint* prim_hits_ptr() { return reinterpret_cast<uint*>(prim_hits.data_ptr()); }
+    int* hit_collection_ptr() { return reinterpret_cast<int*>(hit_collection.data_ptr()); }
+    float4* initial_contrib_ptr() { return reinterpret_cast<float4*>(initial_contrib.data_ptr()); }
+    int* initial_prim_indices_ptr() { return reinterpret_cast<int*>(initial_prim_indices.data_ptr()); }
 };
 
 // =============================================================================
@@ -133,14 +148,13 @@ py::dict trace_rays(
 
     torch::Tensor color = torch::zeros({(long)num_rays, 4}, opts);
     torch::Tensor depth = torch::zeros({(long)num_rays}, opts);
-    torch::Tensor hit_collection = torch::zeros({(long)(num_rays * max_iters)}, opts_int);
-    torch::Tensor initial_contrib = torch::zeros({(long)num_rays, 4}, opts);
-    torch::Tensor initial_prim_count = torch::zeros({1}, opts_int);
-    torch::Tensor initial_prim_indices = torch::zeros({(long)num_prims}, opts_int);
-    torch::Tensor last_prim = torch::zeros({(long)num_rays}, opts_int);
 
-    // Allocate backward state
-    SavedState saved(num_rays, num_prims, device);
+    // Allocate backward state (includes hit_collection, initial_contrib, etc.)
+    SavedState saved(num_rays, num_prims, max_iters, device);
+
+    // Temporary buffer for last_prim (internal use only)
+    torch::Tensor last_prim = torch::zeros({(long)num_rays}, opts_int);
+    torch::Tensor initial_prim_count_tensor = torch::zeros({1}, opts_int);
 
     // Trace rays
     pipeline.trace_rays(
@@ -152,7 +166,7 @@ py::dict trace_rays(
         sh_degree,
         tmin,
         reinterpret_cast<float*>(tmax.data_ptr()),
-        reinterpret_cast<float4*>(initial_contrib.data_ptr()),
+        saved.initial_contrib_ptr(),
         nullptr,  // camera
         max_iters,
         3.0f,     // max_prim_size
@@ -161,18 +175,17 @@ py::dict trace_rays(
         saved.prim_hits_ptr(),
         saved.delta_contribs_ptr(),
         saved.states_ptr(),
-        reinterpret_cast<int*>(hit_collection.data_ptr()),
-        reinterpret_cast<int*>(initial_prim_count.data_ptr()),
-        reinterpret_cast<int*>(initial_prim_indices.data_ptr())
+        saved.hit_collection_ptr(),
+        reinterpret_cast<int*>(initial_prim_count_tensor.data_ptr()),
+        saved.initial_prim_indices_ptr()
     );
+
+    // Store initial_prim_count as scalar
+    saved.initial_prim_count = initial_prim_count_tensor.item<int>();
 
     return py::dict(
         "color"_a = color,
         "depth"_a = depth,
-        "hit_collection"_a = hit_collection,
-        "initial_contrib"_a = initial_contrib,
-        "initial_prim_indices"_a = initial_prim_indices,
-        "initial_prim_count"_a = initial_prim_count,
         "saved"_a = saved
     );
 }
@@ -189,7 +202,11 @@ PYBIND11_MODULE(ellipsoid_tracer, m) {
         .def_readonly("states", &SavedState::states)
         .def_readonly("delta_contribs", &SavedState::delta_contribs)
         .def_readonly("iters", &SavedState::iters)
-        .def_readonly("prim_hits", &SavedState::prim_hits);
+        .def_readonly("prim_hits", &SavedState::prim_hits)
+        .def_readonly("hit_collection", &SavedState::hit_collection)
+        .def_readonly("initial_contrib", &SavedState::initial_contrib)
+        .def_readonly("initial_prim_indices", &SavedState::initial_prim_indices)
+        .def_readonly("initial_prim_count", &SavedState::initial_prim_count);
 
     // Main API
     m.def("trace_rays", &trace_rays,

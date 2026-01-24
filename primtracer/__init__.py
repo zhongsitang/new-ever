@@ -63,23 +63,16 @@ class PrimTracer(Function):
         color_rgba = out["color"]
         depth = out["depth"]
         saved = out["saved"]
-        hit_collection = out["hit_collection"]
-        initial_contrib = out["initial_contrib"]
-        initial_prim_indices = out["initial_prim_indices"][:out["initial_prim_count"][0]]
 
         # Store for backward
         ctx.tmin = tmin
-        ctx.tmax = tmax
         ctx.max_iters = max_iters
         ctx.saved = saved
 
-        ctx.save_for_backward(
-            mean, scale, quat, density, features, rayo, rayd, tmax,
-            hit_collection, initial_contrib, initial_prim_indices
-        )
+        ctx.save_for_backward(mean, scale, quat, density, features, rayo, rayd, tmax)
 
         extras = dict(
-            hit_collection=hit_collection,
+            hit_collection=saved.hit_collection,
             iters=saved.iters,
             prim_hits=saved.prim_hits,
         )
@@ -88,10 +81,8 @@ class PrimTracer(Function):
 
     @staticmethod
     def backward(ctx, grad_color: torch.Tensor, grad_depth: torch.Tensor, grad_extras: dict = None):
-        (
-            mean, scale, quat, density, features, rayo, rayd, tmax,
-            hit_collection, initial_contrib, initial_prim_indices,
-        ) = ctx.saved_tensors
+        mean, scale, quat, density, features, rayo, rayd, tmax = ctx.saved_tensors
+        saved = ctx.saved
 
         device = mean.device
         num_prims = mean.shape[0]
@@ -112,7 +103,7 @@ class PrimTracer(Function):
         grad_combined = torch.cat([grad_color, grad_depth.reshape(-1, 1)], dim=1)
 
         block_size = 16
-        if ctx.saved.iters.sum() > 0:
+        if saved.iters.sum() > 0:
             dual_model = (
                 mean, scale, quat, density, features,
                 dL_dmeans, dL_dscales, dL_dquats, dL_ddensities, dL_dfeatures,
@@ -122,14 +113,14 @@ class PrimTracer(Function):
             backwards_kernel.backwards_kernel(
                 (block_size, 1, 1),
                 (num_rays // block_size + 1, 1, 1),
-                ctx.saved.states,
-                ctx.saved.delta_contribs,
-                ctx.saved.iters,
-                hit_collection,
+                saved.states,
+                saved.delta_contribs,
+                saved.iters,
+                saved.hit_collection,
                 rayo,
                 rayd,
                 dual_model,
-                initial_contrib,
+                saved.initial_contrib,
                 dL_dinitial_contrib,
                 prim_hits,
                 grad_combined.contiguous(),
@@ -139,20 +130,21 @@ class PrimTracer(Function):
                 ctx.max_iters,
             )
 
-            if initial_prim_indices.shape[0] > 0:
+            if saved.initial_prim_count > 0:
+                initial_prim_indices = saved.initial_prim_indices[:saved.initial_prim_count]
                 ray_block_size = 64
                 second_block_size = 16
                 backwards_kernel.backwards_initial_contrib_kernel(
                     (ray_block_size, second_block_size, 1),
                     (
-                        rayo.shape[0] // ray_block_size + 1,
-                        initial_prim_indices.shape[0] // second_block_size + 1,
+                        num_rays // ray_block_size + 1,
+                        saved.initial_prim_count // second_block_size + 1,
                         1,
                     ),
                     rayo,
                     rayd,
                     dual_model,
-                    initial_contrib,
+                    saved.initial_contrib,
                     initial_prim_indices,
                     dL_dinitial_contrib,
                     prim_hits,
