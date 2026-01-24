@@ -345,6 +345,7 @@ private:
 
     OptixShaderBindingTable sbt_ = {};
     CUdeviceptr d_param_ = 0;
+    uint32_t* d_debug_flag_ = nullptr;  // Debug self-check buffer
 
     Params params_ = {};
     OptixPipelineCompileOptions pipeline_options_ = {};

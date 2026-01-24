@@ -21,11 +21,13 @@
 // Basic Types
 // =============================================================================
 
-/// Slang StructuredBuffer layout: {T* data, size_t size}
+/// Slang StructuredBuffer layout: {T* data, uint32_t size}
+/// Note: size_t is forbidden in Host↔Shader interface (64-bit on host, undefined in Slang)
 template <typename T>
 struct StructuredBuffer {
     T* data;
-    size_t size;
+    uint32_t size;
+    uint32_t _pad;  // Explicit padding for 8-byte alignment
 };
 
 // =============================================================================
@@ -76,13 +78,22 @@ struct SavedState {
 // OptiX Launch Parameters (must match slang layout)
 // =============================================================================
 
+/// Camera parameters (must match Slang Camera in optix_shaders.slang)
+/// Note: float3 is forbidden in shared structs (12-byte vs 16-byte alignment risk)
 struct Camera {
     float fx, fy;
     int height, width;
-    float3 U, V, W;
-    float3 eye;
+    float4 U;    // Camera basis U (w unused)
+    float4 V;    // Camera basis V (w unused)
+    float4 W;    // Camera basis W (w unused)
+    float4 eye;  // Camera origin (w unused)
 };
 
+/// OptiX launch parameters (binary-compatible with Slang SLANG_globalParams)
+/// Layout rules enforced:
+/// - No size_t (use uint32_t)
+/// - No float3 in struct fields (use float4)
+/// - Explicit padding before 64-bit types after float
 struct Params {
     // Output buffers
     StructuredBuffer<float4> image;
@@ -106,12 +117,37 @@ struct Params {
     StructuredBuffer<float> densities;
     StructuredBuffer<float> features;
 
-    // Render settings
-    size_t sh_degree;
-    size_t max_iters;
+    // Render settings (no size_t - use uint32_t for shader compatibility)
+    uint32_t sh_degree;
+    uint32_t max_iters;
     float tmin;
+    uint32_t _pad0;  // Padding for alignment
     StructuredBuffer<float> tmax;
     StructuredBuffer<float4> initial_contrib;
+
+    // Debug self-check buffer (always enabled, ~zero cost)
+    StructuredBuffer<uint32_t> debug_flag;
+
+    // Layout validation sentinel (host writes known pattern, shader verifies)
+    uint32_t layout_sentinel;  // Must be 0xDEADBEEF if layout matches
+
     float max_prim_size;
-    OptixTraversableHandle handle;
+    uint32_t _pad1;  // Explicit padding before 64-bit handle
+    OptixTraversableHandle handle;  // 64-bit, must be 8-byte aligned
 };
+
+// =============================================================================
+// Layout Safety Checks (compile-time)
+// =============================================================================
+
+static_assert(sizeof(StructuredBuffer<float>) == 16,
+    "StructuredBuffer must be 16 bytes (ptr + size + pad)");
+
+static_assert(sizeof(Camera) == 80,
+    "Camera layout mismatch with Slang");
+
+static_assert(sizeof(Params) % 16 == 0,
+    "Params must be 16-byte aligned for OptiX");
+
+static_assert(offsetof(Params, handle) % 8 == 0,
+    "OptixTraversableHandle must be 8-byte aligned");

@@ -51,12 +51,16 @@ import spherical_harmonics;
 // Data Structures
 // =============================================================================
 
+/// Camera parameters (must match C++ Camera in types.h)
+/// Note: float3 → float4 to avoid 12-byte vs 16-byte alignment mismatch
 struct Camera {
     float fx, fy;
     int height;
     int width;
-    float3 U, V, W;
-    float3 eye;
+    float4 U;    // Camera basis U (w unused)
+    float4 V;    // Camera basis V (w unused)
+    float4 W;    // Camera basis W (w unused)
+    float4 eye;  // Camera origin (w unused)
 };
 
 /// Buffer for collecting and sorting ray-primitive intersections.
@@ -72,17 +76,21 @@ struct HitAttr {
 };
 
 // =============================================================================
-// Launch Parameters (set by host)
+// Launch Parameters (set by host, must match C++ Params in types.h)
 // =============================================================================
+// Layout rules:
+// - No size_t (use uint)
+// - No float3 in struct fields (use float4)
+// - Explicit padding before 64-bit types after float
 
 // Output buffers
 RWStructuredBuffer<float4>      image;              // Rendered RGBA output
 RWStructuredBuffer<float>       depth_out;          // Rendered depth output
 RWStructuredBuffer<uint>        iters;              // Iteration count per ray
 RWStructuredBuffer<uint>        last_prim;          // Last primitive hit (for debugging)
-RWStructuredBuffer<uint>        prim_hits; // Hit count per primitive
+RWStructuredBuffer<uint>        prim_hits;          // Hit count per primitive
 RWStructuredBuffer<float4>      last_delta_contrib; // Last sample delta contribution
-RWStructuredBuffer<IntegratorState> last_state;         // Final volume state per ray
+RWStructuredBuffer<IntegratorState> last_state;     // Final volume state per ray
 RWStructuredBuffer<int>         hit_collection;     // Collected hit IDs for backward pass
 
 // Input buffers
@@ -97,13 +105,22 @@ RWStructuredBuffer<float4>      quats;      // Ellipsoid rotations (quaternion w
 RWStructuredBuffer<float>       densities;  // Ellipsoid densities
 RWStructuredBuffer<float>       features;   // SH coefficients for color
 
-// Rendering parameters
-size_t sh_degree;                           // Spherical harmonics degree
-size_t max_iters;                           // Maximum iterations per ray
+// Rendering parameters (no size_t - use uint for shader compatibility)
+uint sh_degree;                             // Spherical harmonics degree
+uint max_iters;                             // Maximum iterations per ray
 float tmin;                                 // Minimum ray t
+uint _pad0;                                 // Padding for alignment
 StructuredBuffer<float>         tmax;       // Maximum ray t (per-ray)
 RWStructuredBuffer<float4>      initial_contrib;  // Initial accumulated contribution
+
+// Debug self-check buffer (always enabled, ~zero cost)
+RWStructuredBuffer<uint>        debug_flag;
+
+// Layout validation sentinel (host writes 0xDEADBEEF, shader verifies)
+uint layout_sentinel;
+
 float max_prim_size;                        // Maximum primitive size (for acceleration)
+uint _pad1;                                 // Padding before 64-bit handle
 RaytracingAccelerationStructure traversable; // BVH acceleration structure
 
 // =============================================================================
@@ -250,6 +267,44 @@ void miss(inout HitBuffer buf)
 {
 }
 
+// =============================================================================
+// Zero-cost Layout Self-Check (runs once per launch, ~zero overhead)
+// =============================================================================
+// Validates Params struct layout matches between Host and Shader.
+// Host writes 0xDEADBEEF to layout_sentinel; shader verifies.
+// If struct offsets mismatch, sentinel will be at wrong location.
+
+static const uint LAYOUT_SENTINEL_EXPECTED = 0xDEADBEEFu;
+
+void validate_layout_once() {
+    // Only thread 0 performs validation (once per launch)
+    if (DispatchRaysIndex().x != 0) return;
+
+    // Verify layout sentinel (detects Params struct offset mismatch)
+    if (layout_sentinel != LAYOUT_SENTINEL_EXPECTED) {
+        debug_flag[0] = 1u;  // Signal layout mismatch to host
+        return;
+    }
+
+    // Verify StructuredBuffer<float3> stride by checking adjacent elements
+    // If stride != 12 bytes, means[1] will read wrong data
+    if (means.getCount() >= 2) {
+        float3 m0 = means[0];
+        float3 m1 = means[1];
+        // Simple sanity check: both should be finite floats
+        // (NaN or Inf indicates stride mismatch reading garbage)
+        bool m0_ok = !isinf(m0.x) && !isnan(m0.x) &&
+                     !isinf(m0.y) && !isnan(m0.y) &&
+                     !isinf(m0.z) && !isnan(m0.z);
+        bool m1_ok = !isinf(m1.x) && !isnan(m1.x) &&
+                     !isinf(m1.y) && !isnan(m1.y) &&
+                     !isinf(m1.z) && !isnan(m1.z);
+        if (!m0_ok || !m1_ok) {
+            debug_flag[0] = 2u;  // Signal stride mismatch
+        }
+    }
+}
+
 /// Ray generation shader: main entry point for rendering.
 ///
 /// For each pixel/ray:
@@ -263,6 +318,9 @@ void render_volume()
     const uint3 idx = DispatchRaysIndex();
     const uint3 dim = DispatchRaysDimensions();
 
+    // Zero-cost layout validation (only thread 0, once per launch)
+    validate_layout_once();
+
     // Initialize ray
     float3 direction = l2_normalize(ray_directions[idx.x]);
     float3 origin = ray_origins[idx.x] + tmin * ray_directions[idx.x];
@@ -274,7 +332,7 @@ void render_volume()
     state.accumulated_contrib = initial_contrib[idx.x];
 
     SamplePoint sample = {};
-    uint last_hit_id = -1;
+    uint last_hit_id = 0xFFFFFFFF;  // Invalid sentinel
 
     uint hit_id;
 
@@ -318,6 +376,7 @@ void render_volume()
             // Record hit for backward pass
             prim_hits[hit_id / HITS_PER_PRIMITIVE]++;
             hit_collection[idx.x + iter * dim.x] = hit_id;
+            last_hit_id = hit_id;  // Track last processed hit
             iter++;
 
             if (!(state.logT < LOG_CUTOFF && iter < max_iters)) break;

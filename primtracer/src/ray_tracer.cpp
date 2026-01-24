@@ -47,6 +47,9 @@ RayTracer::RayTracer(int device_index)
     create_sbt();
 
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_param_), sizeof(Params)));
+
+    // Allocate debug_flag buffer (always enabled, ~zero cost self-check)
+    CUDA_CHECK(cudaMalloc(&d_debug_flag_, sizeof(uint32_t)));
 }
 
 void RayTracer::create_module(const char* ptx) {
@@ -160,12 +163,12 @@ void RayTracer::update_primitives(const Primitives& prims) {
     prims_ = prims;
     accel_->rebuild(prims);
 
-    // Update params with model data
-    params_.means = {prims_.means, prims_.num_prims};
-    params_.scales = {prims_.scales, prims_.num_prims};
-    params_.quats = {prims_.quats, prims_.num_prims};
-    params_.densities = {prims_.densities, prims_.num_prims};
-    params_.features = {prims_.features, prims_.num_prims * prims_.feature_size};
+    // Update params with model data (explicit uint32_t cast for StructuredBuffer::size)
+    params_.means = {prims_.means, static_cast<uint32_t>(prims_.num_prims), 0};
+    params_.scales = {prims_.scales, static_cast<uint32_t>(prims_.num_prims), 0};
+    params_.quats = {prims_.quats, static_cast<uint32_t>(prims_.num_prims), 0};
+    params_.densities = {prims_.densities, static_cast<uint32_t>(prims_.num_prims), 0};
+    params_.features = {prims_.features, static_cast<uint32_t>(prims_.num_prims * prims_.feature_size), 0};
 }
 
 void RayTracer::trace_rays(
@@ -190,41 +193,51 @@ void RayTracer::trace_rays(
     uint32_t* last_prim = nullptr;
     CUDA_CHECK(cudaMalloc(&last_prim, num_rays * sizeof(uint32_t)));
 
-    // Setup params
-    params_.image = {color_out, num_rays};
-    params_.depth_out = {depth_out, num_rays};
+    // Setup params (explicit uint32_t casts for StructuredBuffer::size)
+    const auto n = static_cast<uint32_t>(num_rays);
+    params_.image = {color_out, n, 0};
+    params_.depth_out = {depth_out, n, 0};
     params_.sh_degree = sh_degree;
     params_.max_prim_size = 3.0f;
-    params_.max_iters = max_iters;
-    params_.ray_origins = {ray_origins, num_rays};
-    params_.ray_directions = {ray_directions, num_rays};
+    params_.max_iters = static_cast<uint32_t>(max_iters);
+    params_.ray_origins = {ray_origins, n, 0};
+    params_.ray_directions = {ray_directions, n, 0};
     params_.tmin = tmin;
-    params_.tmax = {tmax, num_rays};
-    params_.last_prim = {last_prim, num_rays};
+    params_.tmax = {tmax, n, 0};
+    params_.last_prim = {last_prim, n, 0};
 
     if (saved) {
-        params_.last_state = {saved->states, num_rays};
-        params_.last_delta_contrib = {saved->delta_contribs, num_rays};
-        params_.hit_collection = {saved->hit_collection, num_rays * max_iters};
-        params_.iters = {saved->iters, num_rays};
-        params_.prim_hits = {saved->prim_hits, prims_.num_prims};
+        const auto np = static_cast<uint32_t>(prims_.num_prims);
+        params_.last_state = {saved->states, n, 0};
+        params_.last_delta_contrib = {saved->delta_contribs, n, 0};
+        params_.hit_collection = {saved->hit_collection, n * static_cast<uint32_t>(max_iters), 0};
+        params_.iters = {saved->iters, n, 0};
+        params_.prim_hits = {saved->prim_hits, np, 0};
 
         CUDA_CHECK(cudaMemset(saved->initial_contrib, 0, num_rays * sizeof(float4)));
-        params_.initial_contrib = {saved->initial_contrib, num_rays};
+        params_.initial_contrib = {saved->initial_contrib, n, 0};
 
         init_ray_start_samples(&params_, accel_->aabbs(),
                                saved->initial_prim_count,
                                saved->initial_prim_indices);
     } else {
-        params_.last_state = {nullptr, 0};
-        params_.last_delta_contrib = {nullptr, 0};
-        params_.hit_collection = {nullptr, 0};
-        params_.iters = {nullptr, 0};
-        params_.prim_hits = {nullptr, 0};
-        params_.initial_contrib = {nullptr, 0};
+        params_.last_state = {nullptr, 0, 0};
+        params_.last_delta_contrib = {nullptr, 0, 0};
+        params_.hit_collection = {nullptr, 0, 0};
+        params_.iters = {nullptr, 0, 0};
+        params_.prim_hits = {nullptr, 0, 0};
+        params_.initial_contrib = {nullptr, 0, 0};
     }
 
     params_.handle = accel_->handle();
+
+    // Setup debug_flag for zero-cost layout self-check (always enabled)
+    CUDA_CHECK(cudaMemset(d_debug_flag_, 0, sizeof(uint32_t)));
+    params_.debug_flag = {d_debug_flag_, 1, 0};
+
+    // Set layout sentinel (shader verifies this value to detect struct mismatch)
+    params_.layout_sentinel = 0xDEADBEEFu;
+
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,
                           sizeof(Params), cudaMemcpyHostToDevice));
 
@@ -234,6 +247,16 @@ void RayTracer::trace_rays(
     CUDA_SYNC_CHECK();
     CUDA_CHECK(cudaStreamSynchronize(0));
 
+    // Check debug_flag for layout/stride mismatch (fail fast on first frame)
+    uint32_t debug_result = 0;
+    CUDA_CHECK(cudaMemcpy(&debug_result, d_debug_flag_, sizeof(uint32_t),
+                          cudaMemcpyDeviceToHost));
+    if (debug_result != 0) {
+        throw Exception("Layout/stride mismatch between host and shader! "
+                        "Check StructuredBuffer<float3> stride or Params layout. "
+                        "Error code: " + std::to_string(debug_result));
+    }
+
     // Free temporary buffer
     CUDA_CHECK(cudaFree(last_prim));
 }
@@ -242,6 +265,8 @@ RayTracer::~RayTracer() {
     // Note: Don't use CUDA_CHECK/OPTIX_CHECK in destructor - they may throw,
     // but destructors are implicitly noexcept.
 
+    if (d_debug_flag_)
+        cudaFree(std::exchange(d_debug_flag_, nullptr));
     if (d_param_)
         cudaFree(reinterpret_cast<void*>(std::exchange(d_param_, 0)));
     if (sbt_.raygenRecord)
