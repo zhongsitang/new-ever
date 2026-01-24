@@ -36,16 +36,25 @@ void context_log_cb(unsigned int level, const char* tag,
 
 struct DeviceResources {
     OptixDeviceContext context = nullptr;
+
+    // AABB buffer for primitives
     OptixAabb* aabb_buffer = nullptr;
     size_t aabb_capacity = 0;
 
+    // GAS build buffers
+    CUdeviceptr gas_output_buffer = 0;
+    size_t gas_output_size = 0;
+    CUdeviceptr gas_temp_buffer = 0;
+    size_t gas_temp_size = 0;
+    CUdeviceptr gas_compact_buffer = 0;
+    size_t gas_compact_size = 0;
+
     ~DeviceResources() {
-        if (aabb_buffer) {
-            cudaFree(aabb_buffer);
-        }
-        if (context) {
-            optixDeviceContextDestroy(context);
-        }
+        if (gas_compact_buffer) cudaFree(reinterpret_cast<void*>(gas_compact_buffer));
+        if (gas_temp_buffer) cudaFree(reinterpret_cast<void*>(gas_temp_buffer));
+        if (gas_output_buffer) cudaFree(reinterpret_cast<void*>(gas_output_buffer));
+        if (aabb_buffer) cudaFree(aabb_buffer);
+        if (context) optixDeviceContextDestroy(context);
     }
 
     // Non-copyable
@@ -60,6 +69,33 @@ struct DeviceResources {
             }
             CUDA_CHECK(cudaMalloc(&aabb_buffer, num_prims * sizeof(OptixAabb)));
             aabb_capacity = num_prims;
+        }
+    }
+
+    void ensure_gas_buffers(size_t output_size, size_t temp_size) {
+        if (gas_output_size < output_size) {
+            if (gas_output_buffer) {
+                CUDA_CHECK(cudaFree(reinterpret_cast<void*>(gas_output_buffer)));
+            }
+            CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&gas_output_buffer), output_size));
+            gas_output_size = output_size;
+        }
+        if (gas_temp_size < temp_size) {
+            if (gas_temp_buffer) {
+                CUDA_CHECK(cudaFree(reinterpret_cast<void*>(gas_temp_buffer)));
+            }
+            CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&gas_temp_buffer), temp_size));
+            gas_temp_size = temp_size;
+        }
+    }
+
+    void ensure_gas_compact_buffer(size_t size) {
+        if (gas_compact_size < size) {
+            if (gas_compact_buffer) {
+                CUDA_CHECK(cudaFree(reinterpret_cast<void*>(gas_compact_buffer)));
+            }
+            CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&gas_compact_buffer), size));
+            gas_compact_size = size;
         }
     }
 };
@@ -112,7 +148,12 @@ RayPipeline::RayPipeline(const Primitives& prims, int device_index)
     model_.compute_aabbs();
 
     // Build acceleration structure
-    gas_ = std::make_unique<GAS>(context_, device_, model_, /*enable_anyhit=*/true, /*fast_build=*/false);
+    GASBuffers gas_buffers {
+        resources.gas_output_buffer, resources.gas_output_size,
+        resources.gas_temp_buffer, resources.gas_temp_size,
+        resources.gas_compact_buffer, resources.gas_compact_size,
+    };
+    gas_ = std::make_unique<GAS>(context_, device_, model_, gas_buffers);
 
     // Setup pipeline compile options
     pipeline_options_.usesMotionBlur = false;
