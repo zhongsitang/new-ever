@@ -68,8 +68,7 @@ struct Primitives {
   float *features;
   size_t feature_size;
 
-  OptixAabb *aabbs;
-  size_t prev_alloc_size;
+  OptixAabb *aabbs;  // Set by RayPipeline, managed by DeviceResources
 };
 
 struct Cam {

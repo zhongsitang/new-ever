@@ -78,15 +78,8 @@ __global__ void compute_primitive_bounds_kernel(
     aabbs[i] = aabb;
 }
 
-void build_primitive_aabbs(Primitives &prims) {
+void compute_primitive_aabbs(const Primitives& prims) {
     const size_t block_size = 1024;
-    if (prims.prev_alloc_size < prims.num_prims) {
-        if (prims.prev_alloc_size > 0) {
-            CUDA_CHECK(cudaFree(reinterpret_cast<void *>(prims.aabbs)));
-        }
-        CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&prims.aabbs),
-                              prims.num_prims * sizeof(OptixAabb)));
-    }
     compute_primitive_bounds_kernel<<<(prims.num_prims + block_size - 1) / block_size, block_size>>>(
         (glm::vec3 *)prims.means,
         (glm::vec3 *)prims.scales,

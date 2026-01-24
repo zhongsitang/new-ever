@@ -24,7 +24,7 @@
 #include <unordered_map>
 
 // =============================================================================
-// Global OptiX context and AABB buffer management
+// Per-device resource management
 // =============================================================================
 
 namespace {
@@ -34,30 +34,60 @@ void context_log_cb(unsigned int level, const char* tag,
     // Silently ignore OptiX log messages
 }
 
-std::unordered_map<int, OptixDeviceContext> g_optix_contexts;
-OptixAabb* g_aabbs = nullptr;
-size_t g_num_aabbs = 0;
+struct DeviceResources {
+    OptixDeviceContext context = nullptr;
+    OptixAabb* aabb_buffer = nullptr;
+    size_t aabb_capacity = 0;
 
-OptixDeviceContext get_or_create_context(int device_index) {
-    auto it = g_optix_contexts.find(device_index);
-    if (it != g_optix_contexts.end()) {
-        return it->second;
+    ~DeviceResources() {
+        if (aabb_buffer) {
+            cudaFree(aabb_buffer);
+        }
+        if (context) {
+            optixDeviceContextDestroy(context);
+        }
+    }
+
+    // Non-copyable
+    DeviceResources() = default;
+    DeviceResources(const DeviceResources&) = delete;
+    DeviceResources& operator=(const DeviceResources&) = delete;
+
+    void ensure_aabb_capacity(size_t num_prims) {
+        if (aabb_capacity < num_prims) {
+            if (aabb_buffer) {
+                CUDA_CHECK(cudaFree(aabb_buffer));
+            }
+            CUDA_CHECK(cudaMalloc(&aabb_buffer, num_prims * sizeof(OptixAabb)));
+            aabb_capacity = num_prims;
+        }
+    }
+};
+
+std::unordered_map<int, std::unique_ptr<DeviceResources>> g_device_resources;
+
+DeviceResources& get_device_resources(int device_index) {
+    auto it = g_device_resources.find(device_index);
+    if (it != g_device_resources.end()) {
+        return *it->second;
     }
 
     CUDA_CHECK(cudaSetDevice(device_index));
     CUDA_CHECK(cudaFree(0));  // Initialize CUDA context
     OPTIX_CHECK(optixInit());
 
+    auto resources = std::make_unique<DeviceResources>();
+
     OptixDeviceContextOptions options = {};
     options.logCallbackFunction = &context_log_cb;
     options.logCallbackLevel = 4;
 
     CUcontext cuCtx = 0;
-    OptixDeviceContext context;
-    OPTIX_CHECK(optixDeviceContextCreate(cuCtx, &options, &context));
+    OPTIX_CHECK(optixDeviceContextCreate(cuCtx, &options, &resources->context));
 
-    g_optix_contexts[device_index] = context;
-    return context;
+    auto& ref = *resources;
+    g_device_resources[device_index] = std::move(resources);
+    return ref;
 }
 
 }  // namespace
@@ -71,18 +101,15 @@ RayPipeline::RayPipeline(int device_index, const Primitives& prims)
 {
     CUDA_CHECK(cudaSetDevice(device_));
 
-    // Get or create OptiX context
-    context_ = get_or_create_context(device_index);
+    // Get or create per-device resources
+    auto& resources = get_device_resources(device_index);
+    context_ = resources.context;
 
-    // Copy primitive data and set internal fields
+    // Ensure AABB buffer capacity and compute AABBs
+    resources.ensure_aabb_capacity(prims.num_prims);
     model_ = prims;
-    model_.prev_alloc_size = g_num_aabbs;
-    model_.aabbs = g_aabbs;
-
-    // Compute AABBs for primitives
-    build_primitive_aabbs(model_);
-    g_aabbs = model_.aabbs;
-    g_num_aabbs = std::max(num_prims, g_num_aabbs);
+    model_.aabbs = resources.aabb_buffer;
+    compute_primitive_aabbs(model_);
 
     // Build acceleration structure
     gas_ = std::make_unique<GAS>(context_, device_, model_, /*enable_anyhit=*/true, /*fast_build=*/false);
