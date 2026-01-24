@@ -23,6 +23,20 @@ from . import sh_kernel
 
 
 # =============================================================================
+# RayTracer Cache - Reuse compiled pipelines across calls
+# =============================================================================
+
+_tracer_cache: dict[int, _tracer.RayTracer] = {}
+
+
+def _get_tracer(device_index: int) -> _tracer.RayTracer:
+    """Get or create a RayTracer for the given device."""
+    if device_index not in _tracer_cache:
+        _tracer_cache[device_index] = _tracer.RayTracer(device_index)
+    return _tracer_cache[device_index]
+
+
+# =============================================================================
 # PrimTracer - Volume Rendering for Primitives
 # =============================================================================
 
@@ -53,11 +67,12 @@ class PrimTracer(Function):
         rayd = rayd.contiguous()
         tmax = tmax.contiguous()
 
-        # Call the C++ trace_rays function
-        out = _tracer.trace_rays(
-            mean, scale, quat, density, features,
-            rayo, rayd, tmin, tmax, max_iters
-        )
+        # Get tracer for this device and update primitives
+        tracer = _get_tracer(mean.device.index or 0)
+        tracer.update_primitives(mean, scale, quat, density, features)
+
+        # Trace rays
+        out = tracer.trace_rays(rayo, rayd, tmin, tmax, max_iters)
 
         # Store for backward
         ctx.tmin = tmin
