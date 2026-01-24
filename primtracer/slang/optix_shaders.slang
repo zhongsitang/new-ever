@@ -51,12 +51,15 @@ import spherical_harmonics;
 // Data Structures
 // =============================================================================
 
+/// Camera parameters for ray generation (80 bytes)
+/// Memory layout must match C++ Camera in types.h
+/// Using float4 instead of float3 for cross-platform memory layout compatibility
 struct Camera {
     float fx, fy;
     int height;
     int width;
-    float3 U, V, W;
-    float3 eye;
+    float4 U, V, W;  // camera basis vectors (w unused)
+    float4 eye;      // camera position (w unused)
 };
 
 /// Buffer for collecting and sorting ray-primitive intersections.
@@ -98,12 +101,14 @@ RWStructuredBuffer<float>       densities;  // Ellipsoid densities
 RWStructuredBuffer<float>       features;   // SH coefficients for color
 
 // Rendering parameters
-size_t sh_degree;                           // Spherical harmonics degree
-size_t max_iters;                           // Maximum iterations per ray
+uint64_t sh_degree;                         // Spherical harmonics degree
+uint64_t max_iters;                         // Maximum iterations per ray
 float tmin;                                 // Minimum ray t
+uint32_t _pad_tmin;                         // Align tmax to 8 bytes
 StructuredBuffer<float>         tmax;       // Maximum ray t (per-ray)
 RWStructuredBuffer<float4>      initial_contrib;  // Initial accumulated contribution
 float max_prim_size;                        // Maximum primitive size (for acceleration)
+uint32_t _pad_handle;                       // Align traversable to 8 bytes
 RaytracingAccelerationStructure traversable; // BVH acceleration structure
 
 // =============================================================================
