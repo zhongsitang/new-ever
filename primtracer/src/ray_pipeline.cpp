@@ -242,32 +242,35 @@ void RayPipeline::trace_rays(
 }
 
 RayPipeline::~RayPipeline() {
+    // Note: Don't use CUDA_CHECK/OPTIX_CHECK in destructor - they may throw,
+    // but destructors are implicitly noexcept. Cleanup failures are logged but ignored.
+
     if (d_param_)
-        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(std::exchange(d_param_, 0))));
+        cudaFree(reinterpret_cast<void*>(std::exchange(d_param_, 0)));
     if (sbt_.raygenRecord)
-        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.raygenRecord, 0))));
+        cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.raygenRecord, 0)));
     if (sbt_.missRecordBase)
-        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.missRecordBase, 0))));
+        cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.missRecordBase, 0)));
     if (sbt_.hitgroupRecordBase)
-        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.hitgroupRecordBase, 0))));
+        cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.hitgroupRecordBase, 0)));
     if (sbt_.callablesRecordBase)
-        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.callablesRecordBase, 0))));
+        cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.callablesRecordBase, 0)));
     if (sbt_.exceptionRecord)
-        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.exceptionRecord, 0))));
+        cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.exceptionRecord, 0)));
     sbt_ = {};
 
     if (stream_)
-        CUDA_CHECK(cudaStreamDestroy(std::exchange(stream_, nullptr)));
+        cudaStreamDestroy(std::exchange(stream_, nullptr));
     if (pipeline_)
-        OPTIX_CHECK(optixPipelineDestroy(std::exchange(pipeline_, nullptr)));
+        optixPipelineDestroy(std::exchange(pipeline_, nullptr));
     if (raygen_pg_)
-        OPTIX_CHECK(optixProgramGroupDestroy(std::exchange(raygen_pg_, nullptr)));
+        optixProgramGroupDestroy(std::exchange(raygen_pg_, nullptr));
     if (miss_pg_)
-        OPTIX_CHECK(optixProgramGroupDestroy(std::exchange(miss_pg_, nullptr)));
+        optixProgramGroupDestroy(std::exchange(miss_pg_, nullptr));
     if (hitgroup_pg_)
-        OPTIX_CHECK(optixProgramGroupDestroy(std::exchange(hitgroup_pg_, nullptr)));
+        optixProgramGroupDestroy(std::exchange(hitgroup_pg_, nullptr));
     if (module_)
-        OPTIX_CHECK(optixModuleDestroy(std::exchange(module_, nullptr)));
+        optixModuleDestroy(std::exchange(module_, nullptr));
 
     // Note: DeviceContext is globally cached, not destroyed here
     // AccelStructure is destroyed automatically via unique_ptr
