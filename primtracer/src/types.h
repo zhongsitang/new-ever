@@ -13,114 +13,105 @@
 // limitations under the License.
 
 #pragma once
-#include "glm/glm.hpp"
+
+#include <cstdint>
 #include <optix.h>
-#include <optix_types.h>
 
+// =============================================================================
+// Basic Types
+// =============================================================================
+
+/// Slang StructuredBuffer layout: {T* data, size_t size}
 template <typename T>
-struct SbtRecord
-{
-    __align__( OPTIX_SBT_RECORD_ALIGNMENT ) char header[OPTIX_SBT_RECORD_HEADER_SIZE];
-    T data;
+struct StructuredBuffer {
+    T* data;
+    size_t size;
 };
 
-template <typename T> struct StructuredBuffer {
-  T *data;
-  size_t size;
-};
+// =============================================================================
+// Primitive Data
+// =============================================================================
 
-
-struct HitData {
-    float3 scales;
-    float3 mean;
-    float4 quat;
-    float density;
-};
-
-/// Volume rendering state per ray
-///
-/// Memory layout (12 floats = 48 bytes, 16-byte aligned):
-///   accumulated_contrib: density-weighted contributions
-///   C: accumulated color RGB
-///   logT: log transmittance (for numerical stability)
-///   depth_accum: accumulated depth
-///   t: current ray parameter
-struct IntegratorState
-{
-  float4 accumulated_contrib;  // density, r*d, g*d, b*d
-  float3 C;                    // accumulated color
-  float logT;                  // log transmittance
-  float depth_accum;           // accumulated depth
-  float t;                     // current t
-  float _pad[2];               // padding to 48 bytes
-};
-
-static_assert(sizeof(IntegratorState) == 48, "IntegratorState must be 48 bytes");
-static_assert(alignof(IntegratorState) == 16, "IntegratorState must be 16-byte aligned");
-
-/// Primitive geometry data (GPU pointers)
+/// Ellipsoid primitive geometry (GPU pointers)
 struct Primitives {
-  float3 *means;
-  float3 *scales;
-  float4 *quats;
-  float *densities;
-  size_t num_prims;
-  float *features;
-  size_t feature_size;
+    float3* means;
+    float3* scales;
+    float4* quats;        // quaternion (w,x,y,z)
+    float* densities;
+    size_t num_prims;
+    float* features;      // SH coefficients
+    size_t feature_size;
 };
 
-struct Cam {
+// =============================================================================
+// Volume Rendering State
+// =============================================================================
+
+/// Per-ray volume integrator state (48 bytes, 16-byte aligned)
+struct IntegratorState {
+    float4 accumulated_contrib;  // (density, r*d, g*d, b*d)
+    float3 C;                    // accumulated color RGB
+    float logT;                  // log transmittance
+    float depth_accum;           // accumulated depth
+    float t;                     // current ray parameter
+    float _pad[2];
+};
+
+static_assert(sizeof(IntegratorState) == 48);
+static_assert(alignof(IntegratorState) == 16);
+
+/// State saved for backward gradient computation
+struct SavedState {
+    IntegratorState* states;     // (M,) per-ray integrator state
+    float4* delta_contribs;      // (M,) last delta contribution
+    uint32_t* iters;             // (M,) iteration count per ray
+    uint32_t* prim_hits;         // (N,) hit count per primitive
+    int32_t* hit_collection;     // (M * max_iters,) hit primitive indices
+    float4* initial_contrib;     // (M,) contribution for rays starting inside
+    int32_t* initial_prim_indices; // (N,) primitives containing ray origins
+    int32_t* initial_prim_count; // (1,) count of initial_prim_indices
+};
+
+// =============================================================================
+// OptiX Launch Parameters (must match slang layout)
+// =============================================================================
+
+struct Camera {
     float fx, fy;
-    int height;
-    int width;
+    int height, width;
     float3 U, V, W;
     float3 eye;
 };
 
-using uint = uint32_t;
-
-// =============================================================================
-// Launch Parameters for OptiX ray tracing
-// =============================================================================
-
-/// Launch parameters - must match slang layout exactly.
-/// Note: StructuredBuffer<T> = {T* data, size_t size} (16 bytes with padding)
 struct Params {
-    StructuredBuffer<float4> image;                    // Rendered RGBA output
-    StructuredBuffer<float> depth_out;                 // Rendered depth output
-    StructuredBuffer<uint> iters;                      // Iteration count per ray
-    StructuredBuffer<uint> last_prim;                  // Last primitive hit
-    StructuredBuffer<uint> prim_hits;                  // Hit count per primitive
-    StructuredBuffer<float4> last_delta_contrib;       // Last sample delta contribution
-    StructuredBuffer<IntegratorState> last_state;      // Final volume state per ray
-    StructuredBuffer<int> hit_collection;              // Collected hit IDs for backward pass
+    // Output buffers
+    StructuredBuffer<float4> image;
+    StructuredBuffer<float> depth_out;
+    StructuredBuffer<uint32_t> iters;
+    StructuredBuffer<uint32_t> last_prim;
+    StructuredBuffer<uint32_t> prim_hits;
+    StructuredBuffer<float4> last_delta_contrib;
+    StructuredBuffer<IntegratorState> last_state;
+    StructuredBuffer<int32_t> hit_collection;
+
+    // Ray data
     StructuredBuffer<float3> ray_origins;
     StructuredBuffer<float3> ray_directions;
-    Cam camera;
+    Camera camera;
 
-    StructuredBuffer<float3> means;                    // Ellipsoid centers
-    StructuredBuffer<float3> scales;                   // Ellipsoid radii
-    StructuredBuffer<float4> quats;                    // Ellipsoid rotations (quaternion wxyz)
-    StructuredBuffer<float> densities;                 // Ellipsoid densities
-    StructuredBuffer<float> features;                  // SH coefficients for color
+    // Primitive data
+    StructuredBuffer<float3> means;
+    StructuredBuffer<float3> scales;
+    StructuredBuffer<float4> quats;
+    StructuredBuffer<float> densities;
+    StructuredBuffer<float> features;
 
-    size_t sh_degree;                                  // Spherical harmonics degree
-    size_t max_iters;                                  // Maximum iterations per ray
-    float tmin;                                        // Minimum ray t
-    StructuredBuffer<float> tmax;                      // Maximum ray t (per-ray)
-    StructuredBuffer<float4> initial_contrib;          // Initial accumulated contribution
-    float max_prim_size;                               // Maximum primitive size
-    OptixTraversableHandle handle;                     // BVH acceleration structure
-};
-
-/// State saved during forward pass for backward gradient computation.
-struct SavedState {
-    IntegratorState* states;        // (M, 12) volume integrator state per ray
-    float4* delta_contribs;         // (M, 4) last delta contribution
-    uint* iters;                    // (M,) iteration count per ray
-    uint* prim_hits;                // (N,) hit count per primitive
-    int* hit_collection;            // (M * max_iters,) hit primitive indices
-    float4* initial_contrib;        // (M, 4) contribution for rays starting inside
-    int* initial_prim_indices;      // (N,) primitives containing ray origins
-    int* initial_prim_count;        // (1,) count of initial_prim_indices
+    // Render settings
+    size_t sh_degree;
+    size_t max_iters;
+    float tmin;
+    StructuredBuffer<float> tmax;
+    StructuredBuffer<float4> initial_contrib;
+    float max_prim_size;
+    OptixTraversableHandle handle;
 };

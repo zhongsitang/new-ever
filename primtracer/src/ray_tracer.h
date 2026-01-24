@@ -24,6 +24,7 @@
 #include <optix.h>
 #include <optix_stubs.h>
 
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
@@ -270,6 +271,12 @@ private:
 // SBT Record Types
 // =============================================================================
 
+template <typename T>
+struct SbtRecord {
+    __align__(OPTIX_SBT_RECORD_ALIGNMENT) char header[OPTIX_SBT_RECORD_HEADER_SIZE];
+    T data;
+};
+
 struct RayGenData {};
 struct MissData { float3 bg_color; };
 struct HitGroupData {};
@@ -317,7 +324,7 @@ public:
         float3* ray_directions,
         float4* color_out,
         float* depth_out,
-        uint sh_degree,
+        uint32_t sh_degree,
         float tmin,
         float* tmax,
         size_t max_iters,

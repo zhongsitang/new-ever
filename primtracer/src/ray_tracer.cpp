@@ -189,7 +189,7 @@ void RayTracer::trace_rays(
     float3* ray_directions,
     float4* color_out,
     float* depth_out,
-    uint sh_degree,
+    uint32_t sh_degree,
     float tmin,
     float* tmax,
     size_t max_iters,
@@ -202,8 +202,8 @@ void RayTracer::trace_rays(
     CUDA_CHECK(cudaSetDevice(ctx_.device()));
 
     // Allocate temporary buffer for last_prim
-    uint* last_prim = nullptr;
-    CUDA_CHECK(cudaMalloc(&last_prim, num_rays * sizeof(uint)));
+    uint32_t* last_prim = nullptr;
+    CUDA_CHECK(cudaMalloc(&last_prim, num_rays * sizeof(uint32_t)));
 
     // Setup params
     params_.image = {color_out, num_rays};

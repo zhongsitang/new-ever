@@ -118,7 +118,7 @@ public:
         const size_t num_rays = ray_origins.size(0);
         const size_t num_prims = tracer_->num_prims();
         const size_t feature_size = features_.size(1);
-        const uint sh_degree = static_cast<uint>(sqrt(feature_size)) - 1;
+        const auto sh_degree = static_cast<uint32_t>(sqrt(feature_size)) - 1;
 
         TORCH_CHECK(ray_directions.size(0) == (long)num_rays, "ray_directions must match ray_origins count");
         TORCH_CHECK(tmax.numel() == (long)num_rays, "tmax must have one value per ray");
@@ -145,8 +145,8 @@ public:
         SavedState saved = {
             .states = data_ptr<IntegratorState>(states),
             .delta_contribs = data_ptr<float4>(delta_contribs),
-            .iters = data_ptr<uint>(iters),
-            .prim_hits = data_ptr<uint>(prim_hits),
+            .iters = data_ptr<uint32_t>(iters),
+            .prim_hits = data_ptr<uint32_t>(prim_hits),
             .hit_collection = data_ptr<int>(hit_collection),
             .initial_contrib = data_ptr<float4>(initial_contrib),
             .initial_prim_indices = data_ptr<int>(initial_prim_indices),
