@@ -27,51 +27,35 @@
 
 #define EPS 1e-18
 import safe_math;
-#define PRE_MULTI 1000
-#define LADDER_P -0.1
 
 // =============================================================================
 // Core Data Structures
 // =============================================================================
 
-/// State for volume rendering integration along a ray.
+/// Volume rendering state per ray (48 bytes, 16-byte aligned)
 ///
-/// This tracks both the integration state (accumulated density-weighted values)
-/// and the volume rendering state (transmittance and accumulated color).
+/// Memory layout must match C++ IntegratorState in volume_types.h
 struct IntegratorState : IDifferentiable
 {
-    // Distortion loss components (for regularization)
-    float2 distortion_parts;
-    float2 cum_sum;
-
-    // Depth accumulator ([0] used, [1-2] reserved for memory layout compatibility)
-    float3 depth_accum;
-
-    // Current ray parameter t
-    float t;
-
-    // Accumulated density-weighted contributions: (density, r*density, g*density, b*density)
-    // This accumulates the "delta" contributions from ellipsoid boundaries.
-    // Between boundaries, this represents the current density field value.
-    float4 accumulated_contrib;
-
-    // Volume rendering state
-    float logT; // Log of accumulated optical depth (negative log transmittance)
-    float3 C;   // Accumulated color
+    float4 accumulated_contrib;  // density, r*d, g*d, b*d
+    float3 C;                    // accumulated color
+    float logT;                  // log transmittance
+    float depth_accum;           // accumulated depth
+    float t;                     // current t
+    float2 _pad;                 // padding to 48 bytes
 };
 
 /// Create initial volume state for a new ray.
 IntegratorState make_initial_state()
 {
-    return {
-        float2(0.f),
-        float2(0.f),
-        float3(0.f),
-        0.f,
-        float4(0.0f),
-        0.0,
-        float3(0.0f),
-    };
+    IntegratorState state;
+    state.accumulated_contrib = float4(0.0f);
+    state.C = float3(0.0f);
+    state.logT = 0.0f;
+    state.depth_accum = 0.0f;
+    state.t = 0.0f;
+    state._pad = float2(0.0f);
+    return state;
 }
 
 /// Sample point along a ray, representing an ellipsoid boundary crossing.
@@ -125,7 +109,7 @@ IntegratorState inverse_update_dual(
     const float t = sample.t;
     const float dt = max(new_state.t - t, 0.f);
 
-    IntegratorState state = {};
+    IntegratorState state = new_state;  // Copy all fields first
     state.accumulated_contrib = new_state.accumulated_contrib - new_sample.delta_contrib;
 
     state.t = t;
@@ -154,14 +138,7 @@ IntegratorState inverse_update_dual(
     }
 
     const float segment_depth = max(segment_depth_val, 0.f);
-    new_state.depth_accum[0] = state.depth_accum[0] - safe_exp(-state.logT) * segment_depth;
-
-    // Distortion Loss computation
-    let m = tukey_power_ladder((new_state.t + state.t) / 2 * PRE_MULTI, LADDER_P);
-    state.cum_sum.x = new_state.cum_sum.x - weight;
-    state.cum_sum.y = new_state.cum_sum.y - weight * m;
-    state.distortion_parts.x = new_state.distortion_parts.x - 2 * weight * m * state.cum_sum.x;
-    state.distortion_parts.y = new_state.distortion_parts.y - 2 * weight * state.cum_sum.y;
+    new_state.depth_accum = state.depth_accum - safe_exp(-state.logT) * segment_depth;
 
     return state;
 }
@@ -183,7 +160,7 @@ IntegratorState update(
     const float t = sample.t;
     const float dt = max(t - state.t, 0.f);
 
-    IntegratorState new_state;
+    IntegratorState new_state = state;  // Copy all fields first
     new_state.accumulated_contrib = state.accumulated_contrib + sample.delta_contrib;
     new_state.t = t;
 
@@ -211,14 +188,7 @@ IntegratorState update(
     }
 
     const float segment_depth = max(segment_depth_val, 0.f);
-    new_state.depth_accum[0] = state.depth_accum[0] + safe_exp(-state.logT) * segment_depth;
-
-    // Distortion Loss computation
-    let m = tukey_power_ladder((new_state.t + state.t) / 2 * PRE_MULTI, LADDER_P);
-    new_state.distortion_parts.x = state.distortion_parts.x + 2 * weight * m * state.cum_sum.x;
-    new_state.distortion_parts.y = state.distortion_parts.y + 2 * weight * state.cum_sum.y;
-    new_state.cum_sum.x = state.cum_sum.x + weight;
-    new_state.cum_sum.y = state.cum_sum.y + weight * m;
+    new_state.depth_accum = state.depth_accum + safe_exp(-state.logT) * segment_depth;
 
     return new_state;
 }
@@ -230,10 +200,9 @@ IntegratorState update(
 /// Final rendered output for a ray.
 struct RenderOutput : IDifferentiable
 {
-    float3 C;              // Accumulated color
-    float alpha;           // Opacity (1 - transmittance)
-    float depth;           // Expected depth
-    float distortion_loss; // Distortion regularization loss (moved to extras in Python)
+    float3 C;    // Accumulated color
+    float alpha; // Opacity (1 - transmittance)
+    float depth; // Expected depth
 };
 
 /// Extract final color and depth from volume state.
@@ -243,7 +212,6 @@ RenderOutput extract_color(in IntegratorState state, in float tmin)
     return {
         state.C,
         -safe_expm1(-state.logT),  // alpha = 1 - exp(-logT)
-        state.depth_accum[0],
-        state.distortion_parts.x - state.distortion_parts.y
+        state.depth_accum
     };
 }

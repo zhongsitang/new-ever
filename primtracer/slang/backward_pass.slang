@@ -111,18 +111,16 @@ void atomic_add_float4(TensorView<float> view, uint ind, float4 val) {
     view.InterlockedAdd(uint2(ind, 3u), val.w, temp);
 }
 
-/// Load IntegratorState from tensor.
+/// Load IntegratorState from tensor (48 bytes = 12 floats).
+/// Layout: [0-3] accumulated_contrib, [4-6] C, [7] logT, [8] depth_accum, [9] t, [10-11] pad
 IntegratorState get_state(TensorView<float> view, uint ind) {
-    return {
-        float2(view[ind, 0], view[ind, 1]),
-        float2(view[ind, 2], view[ind, 3]),
-        float3(view[ind, 4], view[ind, 5], view[ind, 6]),
-        view[ind, 7],
-        float4(view[ind, 8], view[ind, 9], view[ind, 10], view[ind, 11]),
-
-        view[ind, 12],
-        float3(view[ind, 13], view[ind, 14], view[ind, 15]),
-    };
+    IntegratorState state;
+    state.accumulated_contrib = float4(view[ind, 0], view[ind, 1], view[ind, 2], view[ind, 3]);
+    state.C = float3(view[ind, 4], view[ind, 5], view[ind, 6]);
+    state.logT = view[ind, 7];
+    state.depth_accum = view[ind, 8];
+    state.t = view[ind, 9];
+    return state;
 }
 
 // =============================================================================
@@ -273,7 +271,7 @@ void backwards_kernel(
     TensorView<float> dL_dinitial_contrib,
     TensorView<int32_t> prim_hits,
 
-    TensorView<float> dL_doutputs,  // (R, G, B, A, depth, distortion_loss)
+    TensorView<float> dL_doutputs,  // (R, G, B, A, depth)
 
     float tmin,
     TensorView<float> tmax,  // Per-ray tmax
@@ -295,12 +293,11 @@ void backwards_kernel(
     float start_t = dual_state.t;
     let bw_origin = origin + dual_state.t * direction;
 
-    // dL_doutputs format: (R, G, B, A, depth, distortion_loss)
+    // dL_doutputs format: (R, G, B, A, depth)
     RenderOutput.Differential dL_doutput;
     dL_doutput.C = {dL_doutputs[ray_ind, 0], dL_doutputs[ray_ind, 1], dL_doutputs[ray_ind, 2]};
     dL_doutput.alpha = dL_doutputs[ray_ind, 3];
     dL_doutput.depth = dL_doutputs[ray_ind, 4];
-    dL_doutput.distortion_loss = dL_doutputs[ray_ind, 5];
 
     uint num_iters = max(min(iters[ray_ind], max_iters), 0);
     if (iters[ray_ind] >= max_iters-1 || iters[ray_ind] <= 0) return;

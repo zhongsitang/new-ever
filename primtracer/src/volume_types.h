@@ -37,26 +37,26 @@ struct HitData {
     float density;
 };
 
-/// Volume rendering state - must match slang IntegratorState layout exactly
+/// Volume rendering state per ray
+///
+/// Memory layout (12 floats = 48 bytes, 16-byte aligned):
+///   accumulated_contrib: density-weighted contributions
+///   C: accumulated color RGB
+///   logT: log transmittance (for numerical stability)
+///   depth_accum: accumulated depth
+///   t: current ray parameter
 struct IntegratorState
 {
-  // Distortion loss components (for regularization)
-  float2 distortion_parts;
-  float2 cum_sum;
-
-  // Depth accumulator ([0] used, [1-2] reserved for memory layout compatibility)
-  float3 depth_accum;
-
-  // Current ray parameter t
-  float t;
-
-  // Accumulated density-weighted contributions: (density, r*density, g*density, b*density)
-  float4 accumulated_contrib;
-
-  // Volume rendering state
-  float logT;   // Log of accumulated optical depth (negative log transmittance)
-  float3 C;     // Accumulated color
+  float4 accumulated_contrib;  // density, r*d, g*d, b*d
+  float3 C;                    // accumulated color
+  float logT;                  // log transmittance
+  float depth_accum;           // accumulated depth
+  float t;                     // current t
+  float _pad[2];               // padding to 48 bytes
 };
+
+static_assert(sizeof(IntegratorState) == 48, "IntegratorState must be 48 bytes");
+static_assert(alignof(IntegratorState) == 16, "IntegratorState must be 16-byte aligned");
 
 // Always on GPU
 struct Primitives {
