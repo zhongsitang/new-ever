@@ -331,8 +331,8 @@ public:
         SavedState* saved
     );
 
-    bool has_primitives() const { return model_.num_prims > 0; }
-    size_t num_prims() const { return model_.num_prims; }
+    bool has_primitives() const { return prims_.num_prims > 0; }
+    size_t num_prims() const { return prims_.num_prims; }
     int device_index() const { return ctx_.device(); }
 
 private:
@@ -343,7 +343,7 @@ private:
 
     DeviceContext& ctx_;
     std::unique_ptr<AccelStructure> accel_;
-    Primitives model_ = {};
+    Primitives prims_ = {};
 
     // OptiX pipeline objects (created once)
     OptixModule module_ = nullptr;

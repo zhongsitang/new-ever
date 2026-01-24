@@ -172,15 +172,15 @@ void RayTracer::create_sbt() {
 void RayTracer::update_primitives(const Primitives& prims) {
     CUDA_CHECK(cudaSetDevice(ctx_.device()));
 
-    model_ = prims;
+    prims_ = prims;
     accel_->rebuild(prims);
 
     // Update params with model data
-    params_.means = {model_.means, model_.num_prims};
-    params_.scales = {model_.scales, model_.num_prims};
-    params_.quats = {model_.quats, model_.num_prims};
-    params_.densities = {model_.densities, model_.num_prims};
-    params_.features = {model_.features, model_.num_prims * model_.feature_size};
+    params_.means = {prims_.means, prims_.num_prims};
+    params_.scales = {prims_.scales, prims_.num_prims};
+    params_.quats = {prims_.quats, prims_.num_prims};
+    params_.densities = {prims_.densities, prims_.num_prims};
+    params_.features = {prims_.features, prims_.num_prims * prims_.feature_size};
 }
 
 void RayTracer::trace_rays(
@@ -222,7 +222,7 @@ void RayTracer::trace_rays(
         params_.last_delta_contrib = {saved->delta_contribs, num_rays};
         params_.hit_collection = {saved->hit_collection, num_rays * max_iters};
         params_.iters = {saved->iters, num_rays};
-        params_.prim_hits = {saved->prim_hits, model_.num_prims};
+        params_.prim_hits = {saved->prim_hits, prims_.num_prims};
 
         CUDA_CHECK(cudaMemset(saved->initial_contrib, 0, num_rays * sizeof(float4)));
         params_.initial_contrib = {saved->initial_contrib, num_rays};
