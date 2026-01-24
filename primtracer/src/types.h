@@ -52,13 +52,14 @@ struct Primitives {
 /// NOTE: We use explicit float scalars instead of float3 for C to ensure
 /// consistent memory layout across C++ and Slang. Slang may add padding
 /// after float3 types, causing layout mismatch with C++.
+/// Tail padding (8 bytes) is implicit due to float4's 16-byte alignment.
 struct IntegratorState {
     float4 accumulated_contrib;  // (density, r*d, g*d, b*d) - offset 0, 16 bytes
     float C_r, C_g, C_b;         // accumulated color RGB    - offset 16, 12 bytes
     float logT;                  // log transmittance        - offset 28, 4 bytes
     float depth_accum;           // accumulated depth        - offset 32, 4 bytes
     float t;                     // current ray parameter    - offset 36, 4 bytes
-    float _pad[2];               // padding to 48 bytes      - offset 40, 8 bytes
+    // implicit 8-byte tail padding to align float4 in arrays
 };
 
 static_assert(sizeof(IntegratorState) == 48);

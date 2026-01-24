@@ -37,6 +37,7 @@ import safe_math;
 /// Memory layout must match C++ IntegratorState in types.h
 /// NOTE: We use explicit float scalars instead of float3 for C to ensure
 /// consistent memory layout. Slang may add padding after float3 types.
+/// Tail padding (8 bytes) is implicit due to float4's 16-byte alignment.
 struct IntegratorState : IDifferentiable
 {
     float4 accumulated_contrib;  // density, r*d, g*d, b*d  - offset 0, 16 bytes
@@ -44,7 +45,7 @@ struct IntegratorState : IDifferentiable
     float logT;                  // log transmittance       - offset 28, 4 bytes
     float depth_accum;           // accumulated depth       - offset 32, 4 bytes
     float t;                     // current t               - offset 36, 4 bytes
-    float _pad0, _pad1;          // padding to 48 bytes     - offset 40, 8 bytes
+    // implicit 8-byte tail padding to align float4 in arrays
 };
 
 /// Create initial volume state for a new ray.
@@ -58,8 +59,6 @@ IntegratorState make_initial_state()
     state.logT = 0.0f;
     state.depth_accum = 0.0f;
     state.t = 0.0f;
-    state._pad0 = 0.0f;
-    state._pad1 = 0.0f;
     return state;
 }
 
