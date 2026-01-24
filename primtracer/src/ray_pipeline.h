@@ -96,16 +96,8 @@ struct SavedState {
 class RayPipeline {
 public:
     /// Construct a ray pipeline with primitive data.
-    RayPipeline(
-        int device_index,
-        float3* means,
-        float3* scales,
-        float4* quats,
-        float* densities,
-        float* features,
-        size_t num_prims,
-        size_t feature_size
-    );
+    /// Note: aabbs and prev_alloc_size in the Primitives struct are set internally.
+    RayPipeline(int device_index, const Primitives& prims);
 
     ~RayPipeline() noexcept(false);
 

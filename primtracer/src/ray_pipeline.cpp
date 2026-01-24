@@ -66,15 +66,7 @@ OptixDeviceContext get_or_create_context(int device_index) {
 // RayPipeline implementation
 // =============================================================================
 
-RayPipeline::RayPipeline(
-    int device_index,
-    float3* means,
-    float3* scales,
-    float4* quats,
-    float* densities,
-    float* features,
-    size_t num_prims,
-    size_t feature_size)
+RayPipeline::RayPipeline(int device_index, const Primitives& prims)
     : device_(device_index)
 {
     CUDA_CHECK(cudaSetDevice(device_));
@@ -82,14 +74,8 @@ RayPipeline::RayPipeline(
     // Get or create OptiX context
     context_ = get_or_create_context(device_index);
 
-    // Build primitives structure
-    model_.means = means;
-    model_.scales = scales;
-    model_.quats = quats;
-    model_.densities = densities;
-    model_.features = features;
-    model_.num_prims = num_prims;
-    model_.feature_size = feature_size;
+    // Copy primitive data and set internal fields
+    model_ = prims;
     model_.prev_alloc_size = g_num_aabbs;
     model_.aabbs = g_aabbs;
 

@@ -88,16 +88,16 @@ py::dict trace_rays(
     TORCH_CHECK(tmax.numel() == (long)num_rays, "tmax must have one value per ray");
 
     // Create pipeline (handles context, primitives, GAS internally)
-    RayPipeline pipeline(
-        device_index,
-        data_ptr<float3>(means),
-        data_ptr<float3>(scales),
-        data_ptr<float4>(quats),
-        data_ptr<float>(densities),
-        data_ptr<float>(features),
-        num_prims,
-        feature_size
-    );
+    Primitives prims = {
+        .means = data_ptr<float3>(means),
+        .scales = data_ptr<float3>(scales),
+        .quats = data_ptr<float4>(quats),
+        .densities = data_ptr<float>(densities),
+        .num_prims = num_prims,
+        .features = data_ptr<float>(features),
+        .feature_size = feature_size,
+    };
+    RayPipeline pipeline(device_index, prims);
 
     // Allocate output tensors
     auto opts_f = torch::device(device).dtype(torch::kFloat32);
