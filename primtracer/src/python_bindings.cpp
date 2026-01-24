@@ -97,7 +97,7 @@ py::dict trace_rays(
         .features = data_ptr<float>(features),
         .feature_size = feature_size,
     };
-    RayPipeline pipeline(device_index, prims);
+    RayPipeline pipeline(prims, device_index);
 
     // Allocate output tensors
     auto opts_f = torch::device(device).dtype(torch::kFloat32);

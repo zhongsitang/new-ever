@@ -96,8 +96,8 @@ struct SavedState {
 class RayPipeline {
 public:
     /// Construct a ray pipeline with primitive data.
-    /// Note: aabbs and prev_alloc_size in the Primitives struct are set internally.
-    RayPipeline(int device_index, const Primitives& prims);
+    /// Note: aabbs in the Primitives struct is set internally.
+    RayPipeline(const Primitives& prims, int device_index);
 
     ~RayPipeline() noexcept(false);
 

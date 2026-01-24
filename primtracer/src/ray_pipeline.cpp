@@ -96,7 +96,7 @@ DeviceResources& get_device_resources(int device_index) {
 // RayPipeline implementation
 // =============================================================================
 
-RayPipeline::RayPipeline(int device_index, const Primitives& prims)
+RayPipeline::RayPipeline(const Primitives& prims, int device_index)
     : device_(device_index)
 {
     CUDA_CHECK(cudaSetDevice(device_));
