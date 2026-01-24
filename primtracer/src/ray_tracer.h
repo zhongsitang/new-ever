@@ -271,19 +271,10 @@ private:
 // SBT Record Types
 // =============================================================================
 
-template <typename T>
-struct SbtRecord {
-    __align__(OPTIX_SBT_RECORD_ALIGNMENT) char header[OPTIX_SBT_RECORD_HEADER_SIZE];
-    T data;
+/// Minimal SBT record containing only the required header (no per-shader data).
+struct __align__(OPTIX_SBT_RECORD_ALIGNMENT) SbtRecord {
+    char header[OPTIX_SBT_RECORD_HEADER_SIZE];
 };
-
-struct RayGenData {};
-struct MissData { float3 bg_color; };
-struct HitGroupData {};
-
-using RayGenSbtRecord   = SbtRecord<RayGenData>;
-using MissSbtRecord     = SbtRecord<MissData>;
-using HitGroupSbtRecord = SbtRecord<HitGroupData>;
 
 // =============================================================================
 // RayTracer - Main class with reusable Pipeline and rebuildable AccelStructure
@@ -354,7 +345,6 @@ private:
 
     OptixShaderBindingTable sbt_ = {};
     CUdeviceptr d_param_ = 0;
-    CUstream stream_ = nullptr;
 
     Params params_ = {};
     OptixPipelineCompileOptions pipeline_options_ = {};

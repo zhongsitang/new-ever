@@ -135,37 +135,22 @@ void RayTracer::create_pipeline() {
 }
 
 void RayTracer::create_sbt() {
-    // Raygen record
-    CUdeviceptr raygen_record;
-    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&raygen_record), sizeof(RayGenSbtRecord)));
-    RayGenSbtRecord rg_sbt;
-    OPTIX_CHECK(optixSbtRecordPackHeader(raygen_pg_, &rg_sbt));
-    CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(raygen_record), &rg_sbt,
-                          sizeof(RayGenSbtRecord), cudaMemcpyHostToDevice));
+    auto create_record = [this](OptixProgramGroup pg) {
+        CUdeviceptr record;
+        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&record), sizeof(SbtRecord)));
+        SbtRecord sbt;
+        OPTIX_CHECK(optixSbtRecordPackHeader(pg, &sbt));
+        CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(record), &sbt,
+                              sizeof(SbtRecord), cudaMemcpyHostToDevice));
+        return record;
+    };
 
-    // Miss record
-    CUdeviceptr miss_record;
-    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&miss_record), sizeof(MissSbtRecord)));
-    MissSbtRecord ms_sbt;
-    ms_sbt.data = {0.3f, 0.1f, 0.2f}; // Background color
-    OPTIX_CHECK(optixSbtRecordPackHeader(miss_pg_, &ms_sbt));
-    CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(miss_record), &ms_sbt,
-                          sizeof(MissSbtRecord), cudaMemcpyHostToDevice));
-
-    // Hitgroup record
-    CUdeviceptr hitgroup_record;
-    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&hitgroup_record), sizeof(HitGroupSbtRecord)));
-    HitGroupSbtRecord hg_sbt;
-    OPTIX_CHECK(optixSbtRecordPackHeader(hitgroup_pg_, &hg_sbt));
-    CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(hitgroup_record), &hg_sbt,
-                          sizeof(HitGroupSbtRecord), cudaMemcpyHostToDevice));
-
-    sbt_.raygenRecord = raygen_record;
-    sbt_.missRecordBase = miss_record;
-    sbt_.missRecordStrideInBytes = sizeof(MissSbtRecord);
+    sbt_.raygenRecord = create_record(raygen_pg_);
+    sbt_.missRecordBase = create_record(miss_pg_);
+    sbt_.missRecordStrideInBytes = sizeof(SbtRecord);
     sbt_.missRecordCount = 1;
-    sbt_.hitgroupRecordBase = hitgroup_record;
-    sbt_.hitgroupRecordStrideInBytes = sizeof(HitGroupSbtRecord);
+    sbt_.hitgroupRecordBase = create_record(hitgroup_pg_);
+    sbt_.hitgroupRecordStrideInBytes = sizeof(SbtRecord);
     sbt_.hitgroupRecordCount = 1;
 }
 
@@ -243,11 +228,11 @@ void RayTracer::trace_rays(
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,
                           sizeof(Params), cudaMemcpyHostToDevice));
 
-    OPTIX_CHECK(optixLaunch(pipeline_, stream_, d_param_, sizeof(Params), &sbt_,
+    OPTIX_CHECK(optixLaunch(pipeline_, 0, d_param_, sizeof(Params), &sbt_,
                             num_rays, 1, 1));
 
     CUDA_SYNC_CHECK();
-    CUDA_CHECK(cudaStreamSynchronize(stream_));
+    CUDA_CHECK(cudaStreamSynchronize(0));
 
     // Free temporary buffer
     CUDA_CHECK(cudaFree(last_prim));
@@ -265,14 +250,7 @@ RayTracer::~RayTracer() {
         cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.missRecordBase, 0)));
     if (sbt_.hitgroupRecordBase)
         cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.hitgroupRecordBase, 0)));
-    if (sbt_.callablesRecordBase)
-        cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.callablesRecordBase, 0)));
-    if (sbt_.exceptionRecord)
-        cudaFree(reinterpret_cast<void*>(std::exchange(sbt_.exceptionRecord, 0)));
     sbt_ = {};
-
-    if (stream_)
-        cudaStreamDestroy(std::exchange(stream_, nullptr));
     if (pipeline_)
         optixPipelineDestroy(std::exchange(pipeline_, nullptr));
     if (raygen_pg_)
