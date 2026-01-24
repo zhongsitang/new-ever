@@ -278,7 +278,7 @@ struct SbtRecord {
 };
 
 struct RayGenData {};
-struct MissData { float3 bg_color; };
+struct MissData {};
 struct HitGroupData {};
 
 using RayGenSbtRecord   = SbtRecord<RayGenData>;

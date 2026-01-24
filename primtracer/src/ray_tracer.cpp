@@ -147,7 +147,6 @@ void RayTracer::create_sbt() {
     CUdeviceptr miss_record;
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&miss_record), sizeof(MissSbtRecord)));
     MissSbtRecord ms_sbt;
-    ms_sbt.data = {0.3f, 0.1f, 0.2f}; // Background color
     OPTIX_CHECK(optixSbtRecordPackHeader(miss_pg_, &ms_sbt));
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(miss_record), &ms_sbt,
                           sizeof(MissSbtRecord), cudaMemcpyHostToDevice));
