@@ -55,8 +55,8 @@ struct Camera {
     float fx, fy;
     int height;
     int width;
-    float3 U, V, W;
-    float3 eye;
+    float4 U, V, W;  // xyz = direction, w = padding
+    float4 eye;      // xyz = position, w = padding
 };
 
 /// Buffer for collecting and sorting ray-primitive intersections.
@@ -72,39 +72,45 @@ struct HitAttr {
 };
 
 // =============================================================================
-// Launch Parameters (set by host)
+// Launch Parameters (set by host via cudaMemcpy, must match C++ Params layout)
 // =============================================================================
 
-// Output buffers
-RWStructuredBuffer<float4>      image;              // Rendered RGBA output
-RWStructuredBuffer<float>       depth_out;          // Rendered depth output
-RWStructuredBuffer<uint>        iters;              // Iteration count per ray
-RWStructuredBuffer<uint>        last_prim;          // Last primitive hit (for debugging)
-RWStructuredBuffer<uint>        prim_hits; // Hit count per primitive
-RWStructuredBuffer<float4>      last_delta_contrib; // Last sample delta contribution
-RWStructuredBuffer<IntegratorState> last_state;         // Final volume state per ray
-RWStructuredBuffer<int>         hit_collection;     // Collected hit IDs for backward pass
+struct Params {
+    // Output buffers
+    RWStructuredBuffer<float4>          image;
+    RWStructuredBuffer<float>           depth_out;
+    RWStructuredBuffer<uint>            iters;
+    RWStructuredBuffer<uint>            last_prim;
+    RWStructuredBuffer<uint>            prim_hits;
+    RWStructuredBuffer<float4>          last_delta_contrib;
+    RWStructuredBuffer<IntegratorState> last_state;
+    RWStructuredBuffer<int>             hit_collection;
 
-// Input buffers
-StructuredBuffer<float3>        ray_origins;
-StructuredBuffer<float3>        ray_directions;
-Camera                          camera;
+    // Ray data
+    StructuredBuffer<float3>            ray_origins;
+    StructuredBuffer<float3>            ray_directions;
+    Camera                              camera;
 
-// Primitive data
-RWStructuredBuffer<float3>      means;      // Ellipsoid centers
-RWStructuredBuffer<float3>      scales;     // Ellipsoid radii
-RWStructuredBuffer<float4>      quats;      // Ellipsoid rotations (quaternion wxyz)
-RWStructuredBuffer<float>       densities;  // Ellipsoid densities
-RWStructuredBuffer<float>       features;   // SH coefficients for color
+    // Primitive data
+    RWStructuredBuffer<float3>          means;
+    RWStructuredBuffer<float3>          scales;
+    RWStructuredBuffer<float4>          quats;
+    RWStructuredBuffer<float>           densities;
+    RWStructuredBuffer<float>           features;
 
-// Rendering parameters
-size_t sh_degree;                           // Spherical harmonics degree
-size_t max_iters;                           // Maximum iterations per ray
-float tmin;                                 // Minimum ray t
-StructuredBuffer<float>         tmax;       // Maximum ray t (per-ray)
-RWStructuredBuffer<float4>      initial_contrib;  // Initial accumulated contribution
-float max_prim_size;                        // Maximum primitive size (for acceleration)
-RaytracingAccelerationStructure traversable; // BVH acceleration structure
+    // Render settings
+    uint                                sh_degree;
+    uint                                max_iters;
+    float                               tmin;
+    StructuredBuffer<float>             tmax;
+    RWStructuredBuffer<float4>          initial_contrib;
+    float                               max_prim_size;
+    uint                                _pad_traversable;
+    RaytracingAccelerationStructure     traversable;
+};
+
+// Global launch parameters (name must match pipelineLaunchParamsVariableName)
+Params SLANG_globalParams;
 
 // =============================================================================
 // Helper Functions
@@ -120,12 +126,12 @@ SamplePoint create_sample(uint hit_id, float t) {
     let hit_type = hit_id % HITS_PER_PRIMITIVE;
 
     // Get density and compute signed contribution
-    let density = densities[prim_index];
+    let density = SLANG_globalParams.densities[prim_index];
     let signed_density = density * ((hit_type == HIT_TYPE_ENTRY) ? 1.0f : -1.0f);
 
     // Evaluate base color from SH degree 0
     Features feat;
-    SHFeatures sh_feats = {prim_index, sh_degree, features};
+    SHFeatures sh_feats = {prim_index, SLANG_globalParams.sh_degree, SLANG_globalParams.features};
     feat.f0 = get_sh(sh_feats, 0);
     float3 rayd = {0, 0, 1};  // Default direction for SH evaluation
     let color = eval_sh_col0(rayd, feat);
@@ -155,9 +161,9 @@ void intersect_ellipsoid() {
     float3 rayd = WorldRayDirection();
     float3 rayo = WorldRayOrigin();
 
-    let mean = means[prim_index];
-    let scale = scales[prim_index];
-    let quat = quats[prim_index];
+    let mean = SLANG_globalParams.means[prim_index];
+    let scale = SLANG_globalParams.scales[prim_index];
+    let quat = SLANG_globalParams.quats[prim_index];
     float2 t_entry_exit = ray_intersect_ellipsoid(rayo - mean, rayd, scale, quat);
 
     float cur_t = RayTMin();
@@ -264,14 +270,14 @@ void render_volume()
     const uint3 dim = DispatchRaysDimensions();
 
     // Initialize ray
-    float3 direction = l2_normalize(ray_directions[idx.x]);
-    float3 origin = ray_origins[idx.x] + tmin * ray_directions[idx.x];
-    float ray_tmax = tmax[idx.x];  // Per-ray tmax
+    float3 direction = l2_normalize(SLANG_globalParams.ray_directions[idx.x]);
+    float3 origin = SLANG_globalParams.ray_origins[idx.x] + SLANG_globalParams.tmin * SLANG_globalParams.ray_directions[idx.x];
+    float ray_tmax = SLANG_globalParams.tmax[idx.x];  // Per-ray tmax
 
     // Initialize volume rendering state
     IntegratorState state = make_initial_state();
     state.t = 0;
-    state.accumulated_contrib = initial_contrib[idx.x];
+    state.accumulated_contrib = SLANG_globalParams.initial_contrib[idx.x];
 
     SamplePoint sample = {};
     uint last_hit_id = -1;
@@ -279,7 +285,7 @@ void render_volume()
     uint hit_id;
 
     int iter = 0;
-    while (state.logT < LOG_CUTOFF && iter < max_iters)
+    while (state.logT < LOG_CUTOFF && iter < SLANG_globalParams.max_iters)
     {
         let start_t = abs(state.t);
 
@@ -297,7 +303,7 @@ void render_volume()
         ray.TMin = start_t;
         ray.TMax = ray_tmax;
 
-        TraceRay(traversable, RAY_FLAG_NONE, 0xff, 0, 0, 0, ray, buf);
+        TraceRay(SLANG_globalParams.traversable, RAY_FLAG_NONE, 0xff, 0, 0, 0, ray, buf);
 
         // Process collected hits front-to-back
         bool end = false;
@@ -313,27 +319,27 @@ void render_volume()
 
             // Create sample and update volume state
             sample = create_sample(hit_id, sample.t);
-            state = update(state, sample, tmin, ray_tmax, max_prim_size);
+            state = update(state, sample, SLANG_globalParams.tmin, ray_tmax, SLANG_globalParams.max_prim_size);
 
             // Record hit for backward pass
-            prim_hits[hit_id / HITS_PER_PRIMITIVE]++;
-            hit_collection[idx.x + iter * dim.x] = hit_id;
+            SLANG_globalParams.prim_hits[hit_id / HITS_PER_PRIMITIVE]++;
+            SLANG_globalParams.hit_collection[idx.x + iter * dim.x] = hit_id;
             iter++;
 
-            if (!(state.logT < LOG_CUTOFF && iter < max_iters)) break;
+            if (!(state.logT < LOG_CUTOFF && iter < SLANG_globalParams.max_iters)) break;
         }
         if (end) break;
     }
 
     // Extract and output final color (RGBA) and depth
-    let output = extract_color(state, tmin);
-    image[idx.x] = {output.C.x, output.C.y, output.C.z, output.alpha};
-    depth_out[idx.x] = output.depth;
+    let output = extract_color(state, SLANG_globalParams.tmin);
+    SLANG_globalParams.image[idx.x] = {output.C.x, output.C.y, output.C.z, output.alpha};
+    SLANG_globalParams.depth_out[idx.x] = output.depth;
 
     // Save state for backward pass
     let dual_state = to_dual(state, sample);
-    last_state[idx.x] = dual_state;
-    last_delta_contrib[idx.x] = sample.delta_contrib;
-    last_prim[idx.x] = last_hit_id;
-    iters[idx.x] = iter;
+    SLANG_globalParams.last_state[idx.x] = dual_state;
+    SLANG_globalParams.last_delta_contrib[idx.x] = sample.delta_contrib;
+    SLANG_globalParams.last_prim[idx.x] = last_hit_id;
+    SLANG_globalParams.iters[idx.x] = iter;
 }

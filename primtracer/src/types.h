@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optix.h>
 
@@ -76,11 +77,11 @@ struct SavedState {
 // OptiX Launch Parameters (must match slang layout)
 // =============================================================================
 
-struct Camera {
+struct alignas(16) Camera {
     float fx, fy;
     int height, width;
-    float3 U, V, W;
-    float3 eye;
+    float4 U, V, W;  // xyz = direction, w = padding
+    float4 eye;      // xyz = position, w = padding
 };
 
 struct Params {
@@ -107,11 +108,17 @@ struct Params {
     StructuredBuffer<float> features;
 
     // Render settings
-    size_t sh_degree;
-    size_t max_iters;
+    uint32_t sh_degree;
+    uint32_t max_iters;
     float tmin;
     StructuredBuffer<float> tmax;
     StructuredBuffer<float4> initial_contrib;
     float max_prim_size;
-    OptixTraversableHandle handle;
+    uint32_t _pad_traversable;  // padding for 8-byte alignment of traversable
+    OptixTraversableHandle traversable;
 };
+
+// Layout consistency checks (fail-fast if Host↔Shader layout diverges)
+static_assert(sizeof(StructuredBuffer<int>) == 16, "StructuredBuffer must be 16 bytes");
+static_assert(offsetof(Params, traversable) % 8 == 0, "traversable must be 8-byte aligned");
+static_assert(sizeof(Params) % 16 == 0, "Params size must be 16-byte aligned");

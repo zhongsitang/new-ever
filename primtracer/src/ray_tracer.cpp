@@ -195,7 +195,7 @@ void RayTracer::trace_rays(
     params_.depth_out = {depth_out, num_rays};
     params_.sh_degree = sh_degree;
     params_.max_prim_size = 3.0f;
-    params_.max_iters = max_iters;
+    params_.max_iters = static_cast<uint32_t>(max_iters);
     params_.ray_origins = {ray_origins, num_rays};
     params_.ray_directions = {ray_directions, num_rays};
     params_.tmin = tmin;
@@ -224,7 +224,7 @@ void RayTracer::trace_rays(
         params_.initial_contrib = {nullptr, 0};
     }
 
-    params_.handle = accel_->handle();
+    params_.traversable = accel_->handle();
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,
                           sizeof(Params), cudaMemcpyHostToDevice));
 
