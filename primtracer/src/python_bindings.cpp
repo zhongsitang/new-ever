@@ -39,7 +39,7 @@ using namespace pybind11::literals;
     TORCH_CHECK(x.size(-1) == dim, #x " must have last dimension " #dim)
 
 template<typename T>
-T* ptr(const torch::Tensor& t) { return reinterpret_cast<T*>(t.data_ptr()); }
+T* data_ptr(const torch::Tensor& t) { return reinterpret_cast<T*>(t.data_ptr()); }
 
 // =============================================================================
 // Main API: trace_rays
@@ -89,11 +89,11 @@ py::dict trace_rays(
     // Create pipeline (handles context, primitives, GAS internally)
     RayPipeline pipeline(
         device_index,
-        ptr<float>(means),
-        ptr<float>(scales),
-        ptr<float>(quats),
-        ptr<float>(densities),
-        ptr<float>(features),
+        data_ptr<float>(means),
+        data_ptr<float>(scales),
+        data_ptr<float>(quats),
+        data_ptr<float>(densities),
+        data_ptr<float>(features),
         num_prims,
         feature_size
     );
@@ -118,26 +118,26 @@ py::dict trace_rays(
 
     // Setup backward state
     SavedState saved = {
-        .states = ptr<IntegratorState>(states),
-        .delta_contribs = ptr<float4>(delta_contribs),
-        .iters = ptr<uint>(iters),
-        .prim_hits = ptr<uint>(prim_hits),
-        .hit_collection = ptr<int>(hit_collection),
-        .initial_contrib = ptr<float4>(initial_contrib),
-        .initial_prim_indices = ptr<int>(initial_prim_indices),
-        .initial_prim_count = ptr<int>(initial_prim_count),
+        .states = data_ptr<IntegratorState>(states),
+        .delta_contribs = data_ptr<float4>(delta_contribs),
+        .iters = data_ptr<uint>(iters),
+        .prim_hits = data_ptr<uint>(prim_hits),
+        .hit_collection = data_ptr<int>(hit_collection),
+        .initial_contrib = data_ptr<float4>(initial_contrib),
+        .initial_prim_indices = data_ptr<int>(initial_prim_indices),
+        .initial_prim_count = data_ptr<int>(initial_prim_count),
     };
 
     // Trace rays
     pipeline.trace_rays(
         num_rays,
-        ptr<float3>(ray_origins),
-        ptr<float3>(ray_directions),
-        ptr<float4>(color),
-        ptr<float>(depth),
+        data_ptr<float3>(ray_origins),
+        data_ptr<float3>(ray_directions),
+        data_ptr<float4>(color),
+        data_ptr<float>(depth),
         sh_degree,
         tmin,
-        ptr<float>(tmax),
+        data_ptr<float>(tmax),
         max_iters,
         &saved
     );
