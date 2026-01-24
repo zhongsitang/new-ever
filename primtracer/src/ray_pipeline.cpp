@@ -13,57 +13,10 @@
 // limitations under the License.
 
 #include "ray_pipeline.h"
-#include "optix_error.h"
 #include "primitive_kernels.h"
 
-#include <optix_stubs.h>
 #include <optix_stack_size.h>
 #include <cstring>
-#include <unordered_map>
-
-// =============================================================================
-// DeviceContext implementation
-// =============================================================================
-
-namespace {
-
-void context_log_cb(unsigned int level, const char* tag,
-                    const char* message, void* /*cbdata*/) {
-    // Silently ignore OptiX log messages
-}
-
-std::unordered_map<int, std::unique_ptr<DeviceContext>> g_contexts;
-
-}  // namespace
-
-DeviceContext& DeviceContext::get(int device_index) {
-    auto it = g_contexts.find(device_index);
-    if (it != g_contexts.end()) {
-        return *it->second;
-    }
-
-    auto ctx = std::unique_ptr<DeviceContext>(new DeviceContext(device_index));
-    auto& ref = *ctx;
-    g_contexts[device_index] = std::move(ctx);
-    return ref;
-}
-
-DeviceContext::DeviceContext(int device_index) : device_(device_index) {
-    CUDA_CHECK(cudaSetDevice(device_));
-    CUDA_CHECK(cudaFree(0));  // Initialize CUDA context
-    OPTIX_CHECK(optixInit());
-
-    OptixDeviceContextOptions options = {};
-    options.logCallbackFunction = &context_log_cb;
-    options.logCallbackLevel = 4;
-
-    CUcontext cuCtx = 0;
-    OPTIX_CHECK(optixDeviceContextCreate(cuCtx, &options, &context_));
-}
-
-DeviceContext::~DeviceContext() {
-    if (context_) optixDeviceContextDestroy(context_);
-}
 
 // =============================================================================
 // RayPipeline implementation

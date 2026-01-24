@@ -61,7 +61,7 @@ set(SLANG_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/primtracer/slang")
 pybind11_add_module(ellipsoid_tracer MODULE
   ${TRACER_DIR}/ray_pipeline.cpp
   ${TRACER_DIR}/ray_pipeline.h
-  ${TRACER_DIR}/accel_structure.cpp
+  ${TRACER_DIR}/device_context.h
   ${TRACER_DIR}/accel_structure.h
   ${TRACER_DIR}/python_bindings.cpp
   ${TRACER_DIR}/types.h

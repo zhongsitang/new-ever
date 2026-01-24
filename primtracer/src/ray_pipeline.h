@@ -85,32 +85,6 @@ struct SavedState {
 };
 
 // =============================================================================
-// DeviceContext - Per-device OptiX context (cached globally)
-// =============================================================================
-
-/// Manages per-device OptiX context. Cached globally and shared.
-class DeviceContext {
-public:
-    /// Get or create context for a specific device (cached globally)
-    static DeviceContext& get(int device_index);
-
-    OptixDeviceContext context() const { return context_; }
-    int device() const { return device_; }
-
-    // Non-copyable
-    DeviceContext(const DeviceContext&) = delete;
-    DeviceContext& operator=(const DeviceContext&) = delete;
-
-    ~DeviceContext();
-
-private:
-    explicit DeviceContext(int device_index);
-
-    int device_ = -1;
-    OptixDeviceContext context_ = nullptr;
-};
-
-// =============================================================================
 // RayPipeline - OptiX ray tracing pipeline for volume rendering
 // =============================================================================
 
