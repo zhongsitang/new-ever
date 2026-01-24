@@ -21,13 +21,12 @@
 // Basic Types
 // =============================================================================
 
-/// Slang StructuredBuffer layout: {T* data, uint32_t size}
-/// Note: size_t is forbidden in Host↔Shader interface (64-bit on host, undefined in Slang)
+/// Slang StructuredBuffer layout: {T* data, uint64_t size}
+/// Uses uint64_t to match pointer alignment and avoid padding/conversion overhead
 template <typename T>
 struct StructuredBuffer {
     T* data;
-    uint32_t size;
-    uint32_t _pad;  // Explicit padding for 8-byte alignment
+    uint64_t size;
 };
 
 // =============================================================================
@@ -90,8 +89,8 @@ struct Camera {
 };
 
 /// OptiX launch parameters (binary-compatible with Slang SLANG_globalParams)
-/// Layout rules enforced:
-/// - No size_t (use uint32_t)
+/// Layout rules:
+/// - Use uint64_t for sizes (matches pointer alignment, no conversion needed)
 /// - No float3 in struct fields (use float4)
 /// - Explicit padding before 64-bit types after float
 struct Params {
@@ -117,11 +116,11 @@ struct Params {
     StructuredBuffer<float> densities;
     StructuredBuffer<float> features;
 
-    // Render settings (no size_t - use uint32_t for shader compatibility)
-    uint32_t sh_degree;
-    uint32_t max_iters;
+    // Render settings (use uint64_t to match pointer alignment)
+    uint64_t sh_degree;
+    uint64_t max_iters;
     float tmin;
-    uint32_t _pad0;  // Padding for alignment
+    uint32_t _pad0;  // Padding for 8-byte alignment before tmax
     StructuredBuffer<float> tmax;
     StructuredBuffer<float4> initial_contrib;
 
@@ -129,7 +128,7 @@ struct Params {
     StructuredBuffer<uint32_t> debug_flag;
 
     // Layout validation sentinel (host writes known pattern, shader verifies)
-    uint32_t layout_sentinel;  // Must be 0xDEADBEEF if layout matches
+    uint64_t layout_sentinel;  // Must be 0xDEADBEEFCAFEBABE if layout matches
 
     float max_prim_size;
     uint32_t _pad1;  // Explicit padding before 64-bit handle
@@ -141,7 +140,7 @@ struct Params {
 // =============================================================================
 
 static_assert(sizeof(StructuredBuffer<float>) == 16,
-    "StructuredBuffer must be 16 bytes (ptr + size + pad)");
+    "StructuredBuffer must be 16 bytes (ptr + uint64_t size)");
 
 static_assert(sizeof(Camera) == 80,
     "Camera layout mismatch with Slang");

@@ -79,7 +79,7 @@ struct HitAttr {
 // Launch Parameters (set by host, must match C++ Params in types.h)
 // =============================================================================
 // Layout rules:
-// - No size_t (use uint)
+// - Use uint64_t for sizes (matches pointer alignment)
 // - No float3 in struct fields (use float4)
 // - Explicit padding before 64-bit types after float
 
@@ -105,19 +105,19 @@ RWStructuredBuffer<float4>      quats;      // Ellipsoid rotations (quaternion w
 RWStructuredBuffer<float>       densities;  // Ellipsoid densities
 RWStructuredBuffer<float>       features;   // SH coefficients for color
 
-// Rendering parameters (no size_t - use uint for shader compatibility)
-uint sh_degree;                             // Spherical harmonics degree
-uint max_iters;                             // Maximum iterations per ray
+// Rendering parameters (use uint64_t to match pointer alignment)
+uint64_t sh_degree;                         // Spherical harmonics degree
+uint64_t max_iters;                         // Maximum iterations per ray
 float tmin;                                 // Minimum ray t
-uint _pad0;                                 // Padding for alignment
+uint _pad0;                                 // Padding for 8-byte alignment before tmax
 StructuredBuffer<float>         tmax;       // Maximum ray t (per-ray)
 RWStructuredBuffer<float4>      initial_contrib;  // Initial accumulated contribution
 
 // Debug self-check buffer (always enabled, ~zero cost)
 RWStructuredBuffer<uint>        debug_flag;
 
-// Layout validation sentinel (host writes 0xDEADBEEF, shader verifies)
-uint layout_sentinel;
+// Layout validation sentinel (host writes 0xDEADBEEFCAFEBABE, shader verifies)
+uint64_t layout_sentinel;
 
 float max_prim_size;                        // Maximum primitive size (for acceleration)
 uint _pad1;                                 // Padding before 64-bit handle
@@ -274,7 +274,7 @@ void miss(inout HitBuffer buf)
 // Host writes 0xDEADBEEF to layout_sentinel; shader verifies.
 // If struct offsets mismatch, sentinel will be at wrong location.
 
-static const uint LAYOUT_SENTINEL_EXPECTED = 0xDEADBEEFu;
+static const uint64_t LAYOUT_SENTINEL_EXPECTED = 0xDEADBEEFCAFEBABEull;
 
 void validate_layout_once() {
     // Only thread 0 performs validation (once per launch)
