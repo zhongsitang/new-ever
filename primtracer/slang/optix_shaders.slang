@@ -121,17 +121,18 @@ Params SLANG_globalParams;
 /// Decodes the hit_id to get primitive index and hit type, then evaluates
 /// the color and computes the delta contribution.
 SamplePoint create_sample(uint hit_id, float t) {
+    let params = SLANG_globalParams;
     SamplePoint sample;
     let prim_index = hit_id / HITS_PER_PRIMITIVE;
     let hit_type = hit_id % HITS_PER_PRIMITIVE;
 
     // Get density and compute signed contribution
-    let density = SLANG_globalParams.densities[prim_index];
+    let density = params.densities[prim_index];
     let signed_density = density * ((hit_type == HIT_TYPE_ENTRY) ? 1.0f : -1.0f);
 
     // Evaluate base color from SH degree 0
     Features feat;
-    SHFeatures sh_feats = {prim_index, SLANG_globalParams.sh_degree, SLANG_globalParams.features};
+    SHFeatures sh_feats = {prim_index, params.sh_degree, params.features};
     feat.f0 = get_sh(sh_feats, 0);
     float3 rayd = {0, 0, 1};  // Default direction for SH evaluation
     let color = eval_sh_col0(rayd, feat);
@@ -156,14 +157,15 @@ SamplePoint create_sample(uint hit_id, float t) {
 /// Reports the appropriate hit based on current ray t minimum.
 [shader("intersection")]
 void intersect_ellipsoid() {
+    let params = SLANG_globalParams;
     uint prim_index = PrimitiveIndex();
 
     float3 rayd = WorldRayDirection();
     float3 rayo = WorldRayOrigin();
 
-    let mean = SLANG_globalParams.means[prim_index];
-    let scale = SLANG_globalParams.scales[prim_index];
-    let quat = SLANG_globalParams.quats[prim_index];
+    let mean = params.means[prim_index];
+    let scale = params.scales[prim_index];
+    let quat = params.quats[prim_index];
     float2 t_entry_exit = ray_intersect_ellipsoid(rayo - mean, rayd, scale, quat);
 
     float cur_t = RayTMin();
@@ -266,18 +268,19 @@ void miss(inout HitBuffer buf)
 [shader("raygeneration")]
 void render_volume()
 {
+    let params = SLANG_globalParams;
     const uint3 idx = DispatchRaysIndex();
     const uint3 dim = DispatchRaysDimensions();
 
     // Initialize ray
-    float3 direction = l2_normalize(SLANG_globalParams.ray_directions[idx.x]);
-    float3 origin = SLANG_globalParams.ray_origins[idx.x] + SLANG_globalParams.tmin * SLANG_globalParams.ray_directions[idx.x];
-    float ray_tmax = SLANG_globalParams.tmax[idx.x];  // Per-ray tmax
+    float3 direction = l2_normalize(params.ray_directions[idx.x]);
+    float3 origin = params.ray_origins[idx.x] + params.tmin * params.ray_directions[idx.x];
+    float ray_tmax = params.tmax[idx.x];  // Per-ray tmax
 
     // Initialize volume rendering state
     IntegratorState state = make_initial_state();
     state.t = 0;
-    state.accumulated_contrib = SLANG_globalParams.initial_contrib[idx.x];
+    state.accumulated_contrib = params.initial_contrib[idx.x];
 
     SamplePoint sample = {};
     uint last_hit_id = -1;
@@ -285,7 +288,7 @@ void render_volume()
     uint hit_id;
 
     int iter = 0;
-    while (state.logT < LOG_CUTOFF && iter < SLANG_globalParams.max_iters)
+    while (state.logT < LOG_CUTOFF && iter < params.max_iters)
     {
         let start_t = abs(state.t);
 
@@ -303,7 +306,7 @@ void render_volume()
         ray.TMin = start_t;
         ray.TMax = ray_tmax;
 
-        TraceRay(SLANG_globalParams.traversable, RAY_FLAG_NONE, 0xff, 0, 0, 0, ray, buf);
+        TraceRay(params.traversable, RAY_FLAG_NONE, 0xff, 0, 0, 0, ray, buf);
 
         // Process collected hits front-to-back
         bool end = false;
@@ -319,27 +322,27 @@ void render_volume()
 
             // Create sample and update volume state
             sample = create_sample(hit_id, sample.t);
-            state = update(state, sample, SLANG_globalParams.tmin, ray_tmax, SLANG_globalParams.max_prim_size);
+            state = update(state, sample, params.tmin, ray_tmax, params.max_prim_size);
 
             // Record hit for backward pass
-            SLANG_globalParams.prim_hits[hit_id / HITS_PER_PRIMITIVE]++;
-            SLANG_globalParams.hit_collection[idx.x + iter * dim.x] = hit_id;
+            params.prim_hits[hit_id / HITS_PER_PRIMITIVE]++;
+            params.hit_collection[idx.x + iter * dim.x] = hit_id;
             iter++;
 
-            if (!(state.logT < LOG_CUTOFF && iter < SLANG_globalParams.max_iters)) break;
+            if (!(state.logT < LOG_CUTOFF && iter < params.max_iters)) break;
         }
         if (end) break;
     }
 
     // Extract and output final color (RGBA) and depth
-    let output = extract_color(state, SLANG_globalParams.tmin);
-    SLANG_globalParams.image[idx.x] = {output.C.x, output.C.y, output.C.z, output.alpha};
-    SLANG_globalParams.depth_out[idx.x] = output.depth;
+    let output = extract_color(state, params.tmin);
+    params.image[idx.x] = {output.C.x, output.C.y, output.C.z, output.alpha};
+    params.depth_out[idx.x] = output.depth;
 
     // Save state for backward pass
     let dual_state = to_dual(state, sample);
-    SLANG_globalParams.last_state[idx.x] = dual_state;
-    SLANG_globalParams.last_delta_contrib[idx.x] = sample.delta_contrib;
-    SLANG_globalParams.last_prim[idx.x] = last_hit_id;
-    SLANG_globalParams.iters[idx.x] = iter;
+    params.last_state[idx.x] = dual_state;
+    params.last_delta_contrib[idx.x] = sample.delta_contrib;
+    params.last_prim[idx.x] = last_hit_id;
+    params.iters[idx.x] = iter;
 }
