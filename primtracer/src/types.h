@@ -18,29 +18,39 @@
 #include <optix.h>
 
 // =============================================================================
-// Basic Types
+// Basic Types (ABI-stable: fixed-width integers, explicit padding)
 // =============================================================================
 
-/// Slang StructuredBuffer layout: {T* data, size_t size}
+/// Slang StructuredBuffer layout: {T* data, uint64_t count}
+/// Uses uint64_t instead of size_t for ABI stability across platforms.
 template <typename T>
 struct StructuredBuffer {
     T* data;
-    size_t size;
+    uint64_t count;
 };
+static_assert(sizeof(StructuredBuffer<float>) == 16);
+
+/// GPU self-check sentinel values for early ABI mismatch detection.
+/// These magic values are written by host and verified by GPU on first thread.
+constexpr float GPU_CHECK_SENTINEL_0 = 1.2345678f;
+constexpr float GPU_CHECK_SENTINEL_1 = 8.7654321f;
+constexpr uint32_t GPU_CHECK_PASS = 0;
+constexpr uint32_t GPU_CHECK_FAIL = 0xDEADBEEF;
 
 // =============================================================================
 // Primitive Data
 // =============================================================================
 
 /// Ellipsoid primitive geometry (GPU pointers)
+/// Note: This is a host-side helper struct, not shared with GPU.
 struct Primitives {
     float3* means;
     float3* scales;
     float4* quats;        // quaternion (w,x,y,z)
     float* densities;
-    size_t num_prims;
+    uint64_t num_prims;
     float* features;      // SH coefficients
-    size_t feature_size;
+    uint64_t feature_size;
 };
 
 // =============================================================================
@@ -76,15 +86,26 @@ struct SavedState {
 // OptiX Launch Parameters (must match slang layout)
 // =============================================================================
 
+/// Camera parameters (64 bytes, 16-byte aligned)
+/// Uses float4 instead of float3 for ABI-stable 16-byte stride.
+/// The .w component is unused (set to 0).
 struct Camera {
     float fx, fy;
-    int height, width;
-    float3 U, V, W;
-    float3 eye;
+    int32_t height, width;
+    float4 U, V, W;   // float4 for stable 16-byte stride (.w unused)
+    float4 eye;       // float4 for stable 16-byte stride (.w unused)
 };
+static_assert(sizeof(Camera) == 80);
+static_assert(alignof(Camera) == 16);
 
+/// OptiX launch parameters (must match Slang Params struct exactly).
+/// Layout rules:
+/// - All pointers/handles are 8-byte aligned
+/// - Use uint32_t for small integers (not size_t)
+/// - Use float4 for vectors (not float3) for stable 16-byte stride
+/// - Explicit padding before 8-byte aligned fields after 4-byte fields
 struct Params {
-    // Output buffers
+    // ===== Output buffers =====
     StructuredBuffer<float4> image;
     StructuredBuffer<float> depth_out;
     StructuredBuffer<uint32_t> iters;
@@ -94,24 +115,39 @@ struct Params {
     StructuredBuffer<IntegratorState> last_state;
     StructuredBuffer<int32_t> hit_collection;
 
-    // Ray data
-    StructuredBuffer<float3> ray_origins;
-    StructuredBuffer<float3> ray_directions;
+    // ===== Ray data =====
+    // Using float4 buffers for ABI stability (stride = 16 bytes).
+    // The .w component is unused. float3 has stride = 12 which may
+    // differ between CUDA and Slang StructuredBuffer implementations.
+    StructuredBuffer<float4> ray_origins;
+    StructuredBuffer<float4> ray_directions;
     Camera camera;
 
-    // Primitive data
-    StructuredBuffer<float3> means;
-    StructuredBuffer<float3> scales;
+    // ===== Primitive data =====
+    StructuredBuffer<float4> means;    // .w unused
+    StructuredBuffer<float4> scales;   // .w unused
     StructuredBuffer<float4> quats;
     StructuredBuffer<float> densities;
     StructuredBuffer<float> features;
 
-    // Render settings
-    size_t sh_degree;
-    size_t max_iters;
+    // ===== Render settings =====
+    uint32_t sh_degree;
+    uint32_t max_iters;
     float tmin;
+    float _pad0;  // explicit padding before 8-byte aligned tmax
     StructuredBuffer<float> tmax;
     StructuredBuffer<float4> initial_contrib;
     float max_prim_size;
-    OptixTraversableHandle handle;
+    float _pad1;  // explicit padding before 8-byte aligned handle
+    uint64_t handle;  // OptixTraversableHandle (use uint64_t for Slang compat)
+
+    // ===== GPU self-check =====
+    // First thread validates these sentinels and writes result to debug_flag.
+    float check_sentinel0;  // should be GPU_CHECK_SENTINEL_0
+    float check_sentinel1;  // should be GPU_CHECK_SENTINEL_1
+    uint32_t* debug_flag;   // GPU writes GPU_CHECK_FAIL if mismatch
+    uint32_t _pad2;         // padding to maintain 8-byte alignment at end
 };
+static_assert(sizeof(Params) % 8 == 0, "Params must be 8-byte aligned");
+static_assert(offsetof(Params, handle) % 8 == 0, "handle must be 8-byte aligned");
+static_assert(offsetof(Params, debug_flag) % 8 == 0, "debug_flag must be 8-byte aligned");

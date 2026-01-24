@@ -171,10 +171,10 @@ public:
 
     OptixTraversableHandle handle() const { return gas_handle_; }
     OptixAabb* aabbs() const { return aabb_buffer_; }
-    size_t num_prims() const { return num_prims_; }
+    uint64_t num_prims() const { return num_prims_; }
 
 private:
-    void ensure_aabb_capacity(size_t num_prims) {
+    void ensure_aabb_capacity(uint64_t num_prims) {
         if (num_prims > aabb_capacity_) {
             if (aabb_buffer_) {
                 CUDA_CHECK(cudaFree(aabb_buffer_));
@@ -184,7 +184,7 @@ private:
         }
     }
 
-    void ensure_gas_capacity(size_t output_size, size_t temp_size) {
+    void ensure_gas_capacity(uint64_t output_size, uint64_t temp_size) {
         if (output_size > gas_output_capacity_) {
             if (gas_output_) {
                 CUDA_CHECK(cudaFree(reinterpret_cast<void*>(gas_output_)));
@@ -202,7 +202,7 @@ private:
         }
     }
 
-    void build_gas(size_t num_prims) {
+    void build_gas(uint64_t num_prims) {
         OptixAccelBuildOptions accel_options = {};
         accel_options.buildFlags = OPTIX_BUILD_FLAG_PREFER_FAST_TRACE | OPTIX_BUILD_FLAG_ALLOW_COMPACTION;
         accel_options.operation = OPTIX_BUILD_OPERATION_BUILD;
@@ -254,17 +254,17 @@ private:
 
     DeviceContext& ctx_;
     OptixTraversableHandle gas_handle_ = 0;
-    size_t num_prims_ = 0;
+    uint64_t num_prims_ = 0;
 
     OptixAabb* aabb_buffer_ = nullptr;
-    size_t aabb_capacity_ = 0;
+    uint64_t aabb_capacity_ = 0;
 
     CUdeviceptr gas_output_ = 0;
-    size_t gas_output_capacity_ = 0;
+    uint64_t gas_output_capacity_ = 0;
     CUdeviceptr gas_temp_ = 0;
-    size_t gas_temp_capacity_ = 0;
+    uint64_t gas_temp_capacity_ = 0;
     CUdeviceptr gas_compact_ = 0;
-    size_t gas_compact_capacity_ = 0;
+    uint64_t gas_compact_capacity_ = 0;
 };
 
 // =============================================================================
@@ -309,21 +309,22 @@ public:
 
     /// Trace rays through the scene.
     /// Requires update_primitives() to be called first.
+    /// Note: ray_origins/ray_directions use float4 for ABI stability (.w unused).
     void trace_rays(
-        size_t num_rays,
-        float3* ray_origins,
-        float3* ray_directions,
+        uint64_t num_rays,
+        float4* ray_origins,
+        float4* ray_directions,
         float4* color_out,
         float* depth_out,
         uint32_t sh_degree,
         float tmin,
         float* tmax,
-        size_t max_iters,
+        uint32_t max_iters,
         SavedState* saved
     );
 
     bool has_primitives() const { return prims_.num_prims > 0; }
-    size_t num_prims() const { return prims_.num_prims; }
+    uint64_t num_prims() const { return prims_.num_prims; }
     int device_index() const { return ctx_.device(); }
 
 private:
@@ -345,6 +346,7 @@ private:
 
     OptixShaderBindingTable sbt_ = {};
     CUdeviceptr d_param_ = 0;
+    uint32_t* d_debug_flag_ = nullptr;  // GPU self-check flag
 
     Params params_ = {};
     OptixPipelineCompileOptions pipeline_options_ = {};

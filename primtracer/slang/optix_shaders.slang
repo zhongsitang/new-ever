@@ -48,15 +48,34 @@ import safe_math;
 import spherical_harmonics;
 
 // =============================================================================
-// Data Structures
+// Data Structures (ABI-stable, must match C++ types.h exactly)
 // =============================================================================
 
+/// GPU self-check sentinel values (must match C++ GPU_CHECK_SENTINEL_*)
+static const float GPU_CHECK_SENTINEL_0 = 1.2345678f;
+static const float GPU_CHECK_SENTINEL_1 = 8.7654321f;
+static const uint GPU_CHECK_PASS = 0;
+static const uint GPU_CHECK_FAIL = 0xDEADBEEF;
+
+/// Slang StructuredBuffer wrapper (16 bytes, matches C++ StructuredBuffer<T>)
+struct BufferPtr<T> {
+    RWStructuredBuffer<T> data;
+    uint64_t count;
+};
+
+/// Read-only buffer pointer (16 bytes)
+struct BufferPtrRO<T> {
+    StructuredBuffer<T> data;
+    uint64_t count;
+};
+
+/// Camera parameters (80 bytes, 16-byte aligned, matches C++)
+/// Uses float4 instead of float3 for ABI-stable 16-byte stride.
 struct Camera {
     float fx, fy;
-    int height;
-    int width;
-    float3 U, V, W;
-    float3 eye;
+    int height, width;
+    float4 U, V, W;   // .w unused
+    float4 eye;       // .w unused
 };
 
 /// Buffer for collecting and sorting ray-primitive intersections.
@@ -72,39 +91,56 @@ struct HitAttr {
 };
 
 // =============================================================================
-// Launch Parameters (set by host)
+// Launch Parameters (must match C++ Params struct byte-for-byte)
 // =============================================================================
+// Layout verified by GPU self-check on first frame.
 
-// Output buffers
-RWStructuredBuffer<float4>      image;              // Rendered RGBA output
-RWStructuredBuffer<float>       depth_out;          // Rendered depth output
-RWStructuredBuffer<uint>        iters;              // Iteration count per ray
-RWStructuredBuffer<uint>        last_prim;          // Last primitive hit (for debugging)
-RWStructuredBuffer<uint>        prim_hits; // Hit count per primitive
-RWStructuredBuffer<float4>      last_delta_contrib; // Last sample delta contribution
-RWStructuredBuffer<IntegratorState> last_state;         // Final volume state per ray
-RWStructuredBuffer<int>         hit_collection;     // Collected hit IDs for backward pass
+struct Params {
+    // ===== Output buffers =====
+    BufferPtr<float4> image;
+    BufferPtr<float> depth_out;
+    BufferPtr<uint> iters;
+    BufferPtr<uint> last_prim;
+    BufferPtr<uint> prim_hits;
+    BufferPtr<float4> last_delta_contrib;
+    BufferPtr<IntegratorState> last_state;
+    BufferPtr<int> hit_collection;
 
-// Input buffers
-StructuredBuffer<float3>        ray_origins;
-StructuredBuffer<float3>        ray_directions;
-Camera                          camera;
+    // ===== Ray data =====
+    BufferPtr<float4> ray_origins;     // .w unused
+    BufferPtr<float4> ray_directions;  // .w unused
+    Camera camera;
 
-// Primitive data
-RWStructuredBuffer<float3>      means;      // Ellipsoid centers
-RWStructuredBuffer<float3>      scales;     // Ellipsoid radii
-RWStructuredBuffer<float4>      quats;      // Ellipsoid rotations (quaternion wxyz)
-RWStructuredBuffer<float>       densities;  // Ellipsoid densities
-RWStructuredBuffer<float>       features;   // SH coefficients for color
+    // ===== Primitive data =====
+    BufferPtr<float4> means;    // .w unused
+    BufferPtr<float4> scales;   // .w unused
+    BufferPtr<float4> quats;
+    BufferPtr<float> densities;
+    BufferPtr<float> features;
 
-// Rendering parameters
-size_t sh_degree;                           // Spherical harmonics degree
-size_t max_iters;                           // Maximum iterations per ray
-float tmin;                                 // Minimum ray t
-StructuredBuffer<float>         tmax;       // Maximum ray t (per-ray)
-RWStructuredBuffer<float4>      initial_contrib;  // Initial accumulated contribution
-float max_prim_size;                        // Maximum primitive size (for acceleration)
-RaytracingAccelerationStructure traversable; // BVH acceleration structure
+    // ===== Render settings =====
+    uint sh_degree;
+    uint max_iters;
+    float tmin;
+    float _pad0;
+    BufferPtrRO<float> tmax;
+    BufferPtr<float4> initial_contrib;
+    float max_prim_size;
+    float _pad1;
+    uint64_t handle;  // OptixTraversableHandle
+
+    // ===== GPU self-check =====
+    float check_sentinel0;
+    float check_sentinel1;
+    RWStructuredBuffer<uint> debug_flag;
+    uint _pad2;
+};
+
+// Global params set by host via SLANG_globalParams
+Params gParams;
+
+// Access the traversable handle (stored as uint64_t in params)
+RaytracingAccelerationStructure traversable;
 
 // =============================================================================
 // Helper Functions
@@ -120,12 +156,12 @@ SamplePoint create_sample(uint hit_id, float t) {
     let hit_type = hit_id % HITS_PER_PRIMITIVE;
 
     // Get density and compute signed contribution
-    let density = densities[prim_index];
+    let density = gParams.densities.data[prim_index];
     let signed_density = density * ((hit_type == HIT_TYPE_ENTRY) ? 1.0f : -1.0f);
 
     // Evaluate base color from SH degree 0
     Features feat;
-    SHFeatures sh_feats = {prim_index, sh_degree, features};
+    SHFeatures sh_feats = {prim_index, gParams.sh_degree, gParams.features.data};
     feat.f0 = get_sh(sh_feats, 0);
     float3 rayd = {0, 0, 1};  // Default direction for SH evaluation
     let color = eval_sh_col0(rayd, feat);
@@ -155,9 +191,10 @@ void intersect_ellipsoid() {
     float3 rayd = WorldRayDirection();
     float3 rayo = WorldRayOrigin();
 
-    let mean = means[prim_index];
-    let scale = scales[prim_index];
-    let quat = quats[prim_index];
+    // Read float4, use only xyz
+    let mean = gParams.means.data[prim_index].xyz;
+    let scale = gParams.scales.data[prim_index].xyz;
+    let quat = gParams.quats.data[prim_index];
     float2 t_entry_exit = ray_intersect_ellipsoid(rayo - mean, rayd, scale, quat);
 
     float cur_t = RayTMin();
@@ -253,25 +290,40 @@ void miss(inout HitBuffer buf)
 /// Ray generation shader: main entry point for rendering.
 ///
 /// For each pixel/ray:
-/// 1. Initialize volume rendering state
-/// 2. Trace ray through scene, collecting sorted hits
-/// 3. Process hits front-to-back, updating volume state
-/// 4. Output final color
+/// 1. GPU self-check on first thread (validates ABI layout)
+/// 2. Initialize volume rendering state
+/// 3. Trace ray through scene, collecting sorted hits
+/// 4. Process hits front-to-back, updating volume state
+/// 5. Output final color
 [shader("raygeneration")]
 void render_volume()
 {
     const uint3 idx = DispatchRaysIndex();
     const uint3 dim = DispatchRaysDimensions();
 
-    // Initialize ray
-    float3 direction = l2_normalize(ray_directions[idx.x]);
-    float3 origin = ray_origins[idx.x] + tmin * ray_directions[idx.x];
-    float ray_tmax = tmax[idx.x];  // Per-ray tmax
+    // =========================================================================
+    // GPU Self-Check: First thread validates sentinel values.
+    // If mismatch detected, set debug flag and exit early.
+    // This catches Host<->Shader struct layout mismatches on first frame.
+    // =========================================================================
+    if (idx.x == 0) {
+        bool valid = (gParams.check_sentinel0 == GPU_CHECK_SENTINEL_0) &&
+                     (gParams.check_sentinel1 == GPU_CHECK_SENTINEL_1);
+        if (!valid) {
+            gParams.debug_flag.data[0] = GPU_CHECK_FAIL;
+            return;  // Early exit, don't corrupt output
+        }
+    }
+
+    // Initialize ray (read float4, use only xyz)
+    float3 direction = l2_normalize(gParams.ray_directions.data[idx.x].xyz);
+    float3 origin = gParams.ray_origins.data[idx.x].xyz + gParams.tmin * gParams.ray_directions.data[idx.x].xyz;
+    float ray_tmax = gParams.tmax.data[idx.x];  // Per-ray tmax
 
     // Initialize volume rendering state
     IntegratorState state = make_initial_state();
     state.t = 0;
-    state.accumulated_contrib = initial_contrib[idx.x];
+    state.accumulated_contrib = gParams.initial_contrib.data[idx.x];
 
     SamplePoint sample = {};
     uint last_hit_id = -1;
@@ -279,7 +331,7 @@ void render_volume()
     uint hit_id;
 
     int iter = 0;
-    while (state.logT < LOG_CUTOFF && iter < max_iters)
+    while (state.logT < LOG_CUTOFF && iter < gParams.max_iters)
     {
         let start_t = abs(state.t);
 
@@ -313,27 +365,27 @@ void render_volume()
 
             // Create sample and update volume state
             sample = create_sample(hit_id, sample.t);
-            state = update(state, sample, tmin, ray_tmax, max_prim_size);
+            state = update(state, sample, gParams.tmin, ray_tmax, gParams.max_prim_size);
 
             // Record hit for backward pass
-            prim_hits[hit_id / HITS_PER_PRIMITIVE]++;
-            hit_collection[idx.x + iter * dim.x] = hit_id;
+            gParams.prim_hits.data[hit_id / HITS_PER_PRIMITIVE]++;
+            gParams.hit_collection.data[idx.x + iter * dim.x] = hit_id;
             iter++;
 
-            if (!(state.logT < LOG_CUTOFF && iter < max_iters)) break;
+            if (!(state.logT < LOG_CUTOFF && iter < gParams.max_iters)) break;
         }
         if (end) break;
     }
 
     // Extract and output final color (RGBA) and depth
-    let output = extract_color(state, tmin);
-    image[idx.x] = {output.C.x, output.C.y, output.C.z, output.alpha};
-    depth_out[idx.x] = output.depth;
+    let output = extract_color(state, gParams.tmin);
+    gParams.image.data[idx.x] = {output.C.x, output.C.y, output.C.z, output.alpha};
+    gParams.depth_out.data[idx.x] = output.depth;
 
     // Save state for backward pass
     let dual_state = to_dual(state, sample);
-    last_state[idx.x] = dual_state;
-    last_delta_contrib[idx.x] = sample.delta_contrib;
-    last_prim[idx.x] = last_hit_id;
-    iters[idx.x] = iter;
+    gParams.last_state.data[idx.x] = dual_state;
+    gParams.last_delta_contrib.data[idx.x] = sample.delta_contrib;
+    gParams.last_prim.data[idx.x] = last_hit_id;
+    gParams.iters.data[idx.x] = iter;
 }

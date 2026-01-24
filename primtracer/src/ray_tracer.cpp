@@ -47,6 +47,9 @@ RayTracer::RayTracer(int device_index)
     create_sbt();
 
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_param_), sizeof(Params)));
+
+    // Allocate GPU self-check flag
+    CUDA_CHECK(cudaMalloc(&d_debug_flag_, sizeof(uint32_t)));
 }
 
 void RayTracer::create_module(const char* ptx) {
@@ -160,24 +163,25 @@ void RayTracer::update_primitives(const Primitives& prims) {
     prims_ = prims;
     accel_->rebuild(prims);
 
-    // Update params with model data
-    params_.means = {prims_.means, prims_.num_prims};
-    params_.scales = {prims_.scales, prims_.num_prims};
+    // Update params with model data (cast float3* to float4* for ABI stability)
+    // The host data must be padded to 16-byte stride (float4).
+    params_.means = {reinterpret_cast<float4*>(prims_.means), prims_.num_prims};
+    params_.scales = {reinterpret_cast<float4*>(prims_.scales), prims_.num_prims};
     params_.quats = {prims_.quats, prims_.num_prims};
     params_.densities = {prims_.densities, prims_.num_prims};
     params_.features = {prims_.features, prims_.num_prims * prims_.feature_size};
 }
 
 void RayTracer::trace_rays(
-    size_t num_rays,
-    float3* ray_origins,
-    float3* ray_directions,
+    uint64_t num_rays,
+    float4* ray_origins,
+    float4* ray_directions,
     float4* color_out,
     float* depth_out,
     uint32_t sh_degree,
     float tmin,
     float* tmax,
-    size_t max_iters,
+    uint32_t max_iters,
     SavedState* saved)
 {
     if (!has_primitives()) {
@@ -190,6 +194,9 @@ void RayTracer::trace_rays(
     uint32_t* last_prim = nullptr;
     CUDA_CHECK(cudaMalloc(&last_prim, num_rays * sizeof(uint32_t)));
 
+    // Initialize GPU self-check flag to PASS (will be set to FAIL by GPU if mismatch)
+    CUDA_CHECK(cudaMemset(d_debug_flag_, 0, sizeof(uint32_t)));
+
     // Setup params
     params_.image = {color_out, num_rays};
     params_.depth_out = {depth_out, num_rays};
@@ -199,13 +206,14 @@ void RayTracer::trace_rays(
     params_.ray_origins = {ray_origins, num_rays};
     params_.ray_directions = {ray_directions, num_rays};
     params_.tmin = tmin;
+    params_._pad0 = 0.0f;
     params_.tmax = {tmax, num_rays};
     params_.last_prim = {last_prim, num_rays};
 
     if (saved) {
         params_.last_state = {saved->states, num_rays};
         params_.last_delta_contrib = {saved->delta_contribs, num_rays};
-        params_.hit_collection = {saved->hit_collection, num_rays * max_iters};
+        params_.hit_collection = {saved->hit_collection, static_cast<uint64_t>(num_rays) * max_iters};
         params_.iters = {saved->iters, num_rays};
         params_.prim_hits = {saved->prim_hits, prims_.num_prims};
 
@@ -224,7 +232,16 @@ void RayTracer::trace_rays(
         params_.initial_contrib = {nullptr, 0};
     }
 
-    params_.handle = accel_->handle();
+    // Set traversable handle and padding
+    params_.handle = static_cast<uint64_t>(accel_->handle());
+    params_._pad1 = 0.0f;
+
+    // Setup GPU self-check sentinels
+    params_.check_sentinel0 = GPU_CHECK_SENTINEL_0;
+    params_.check_sentinel1 = GPU_CHECK_SENTINEL_1;
+    params_.debug_flag = d_debug_flag_;
+    params_._pad2 = 0;
+
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,
                           sizeof(Params), cudaMemcpyHostToDevice));
 
@@ -234,6 +251,14 @@ void RayTracer::trace_rays(
     CUDA_SYNC_CHECK();
     CUDA_CHECK(cudaStreamSynchronize(0));
 
+    // Check GPU self-check result
+    uint32_t debug_result = 0;
+    CUDA_CHECK(cudaMemcpy(&debug_result, d_debug_flag_, sizeof(uint32_t), cudaMemcpyDeviceToHost));
+    if (debug_result == GPU_CHECK_FAIL) {
+        throw Exception("GPU self-check FAILED: Host<->Shader struct layout mismatch detected. "
+                        "Rebuild shaders or check types.h/optix_shaders.slang alignment.");
+    }
+
     // Free temporary buffer
     CUDA_CHECK(cudaFree(last_prim));
 }
@@ -242,6 +267,8 @@ RayTracer::~RayTracer() {
     // Note: Don't use CUDA_CHECK/OPTIX_CHECK in destructor - they may throw,
     // but destructors are implicitly noexcept.
 
+    if (d_debug_flag_)
+        cudaFree(std::exchange(d_debug_flag_, nullptr));
     if (d_param_)
         cudaFree(reinterpret_cast<void*>(std::exchange(d_param_, 0)));
     if (sbt_.raygenRecord)
