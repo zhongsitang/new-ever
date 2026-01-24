@@ -252,62 +252,63 @@ void RayPipeline::trace_rays(
     float4* color_out,
     float* depth_out,
     uint sh_degree,
-    float tmin, float* tmax,
-    float4* initial_contrib,
-    Cam* camera,
+    float tmin,
+    float* tmax,
     size_t max_iters,
-    float max_prim_size,
-    uint* iters,
-    uint* last_prim,
-    uint* prim_hits,
-    float4* last_delta_contrib,
-    IntegratorState* last_state,
-    int* hit_collection,
-    int* d_hit_count,
-    int* d_hit_inds)
+    BackwardState* backward)
 {
     CUDA_CHECK(cudaSetDevice(device_));
+
+    // Allocate temporary buffer for last_prim (internal use only)
+    uint* last_prim = nullptr;
+    CUDA_CHECK(cudaMalloc(&last_prim, num_rays * sizeof(uint)));
 
     // Setup params
     params_.image = {color_out, num_rays};
     params_.depth_out = {depth_out, num_rays};
-    params_.last_state = {last_state, num_rays};
-    params_.last_delta_contrib = {last_delta_contrib, num_rays};
-    params_.hit_collection = {hit_collection, num_rays * max_iters};
-    params_.iters = {iters, num_rays};
-    params_.last_prim = {last_prim, num_rays};
-    params_.prim_hits = {prim_hits, model_.num_prims};
     params_.sh_degree = sh_degree;
-    params_.max_prim_size = max_prim_size;
+    params_.max_prim_size = 3.0f;
     params_.max_iters = max_iters;
     params_.ray_origins = {ray_origins, num_rays};
     params_.ray_directions = {ray_directions, num_rays};
     params_.tmin = tmin;
     params_.tmax = {tmax, num_rays};
+    params_.last_prim = {last_prim, num_rays};
 
-    if (camera) {
-        params_.camera = *camera;
+    if (backward) {
+        params_.last_state = {backward->states, num_rays};
+        params_.last_delta_contrib = {backward->delta_contribs, num_rays};
+        params_.hit_collection = {backward->hit_collection, num_rays * max_iters};
+        params_.iters = {backward->iters, num_rays};
+        params_.prim_hits = {backward->prim_hits, model_.num_prims};
+
+        CUDA_CHECK(cudaMemset(backward->initial_contrib, 0, num_rays * sizeof(float4)));
+        params_.initial_contrib = {backward->initial_contrib, num_rays};
+
+        init_ray_start_samples(&params_, model_.aabbs,
+                               backward->initial_prim_count,
+                               backward->initial_prim_indices);
+    } else {
+        params_.last_state = {nullptr, 0};
+        params_.last_delta_contrib = {nullptr, 0};
+        params_.hit_collection = {nullptr, 0};
+        params_.iters = {nullptr, 0};
+        params_.prim_hits = {nullptr, 0};
+        params_.initial_contrib = {nullptr, 0};
     }
-
-    CUDA_CHECK(cudaMemset(initial_contrib, 0, num_rays * sizeof(float4)));
-    params_.initial_contrib = {initial_contrib, num_rays};
-
-    init_ray_start_samples(&params_, model_.aabbs, d_hit_count, d_hit_inds);
 
     params_.handle = gas_->gas_handle;
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,
                           sizeof(Params), cudaMemcpyHostToDevice));
 
-    if (camera) {
-        OPTIX_CHECK(optixLaunch(pipeline_, stream_, d_param_, sizeof(Params), &sbt_,
-                                camera->width, camera->height, 1));
-    } else {
-        OPTIX_CHECK(optixLaunch(pipeline_, stream_, d_param_, sizeof(Params), &sbt_,
-                                num_rays, 1, 1));
-    }
+    OPTIX_CHECK(optixLaunch(pipeline_, stream_, d_param_, sizeof(Params), &sbt_,
+                            num_rays, 1, 1));
 
     CUDA_SYNC_CHECK();
     CUDA_CHECK(cudaStreamSynchronize(stream_));
+
+    // Free temporary buffer
+    CUDA_CHECK(cudaFree(last_prim));
 }
 
 RayPipeline::~RayPipeline() noexcept(false) {

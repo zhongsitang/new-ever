@@ -113,8 +113,17 @@ py::dict trace_rays(
     torch::Tensor initial_prim_indices = torch::zeros({(long)num_prims}, opts_i);
     torch::Tensor initial_prim_count = torch::zeros({1}, opts_i);
 
-    // Temporary buffer (internal use only)
-    torch::Tensor last_prim = torch::zeros({(long)num_rays}, opts_i);
+    // Setup backward state
+    BackwardState backward = {
+        .states = reinterpret_cast<IntegratorState*>(states.data_ptr()),
+        .delta_contribs = reinterpret_cast<float4*>(delta_contribs.data_ptr()),
+        .iters = reinterpret_cast<uint*>(iters.data_ptr()),
+        .prim_hits = reinterpret_cast<uint*>(prim_hits.data_ptr()),
+        .hit_collection = reinterpret_cast<int*>(hit_collection.data_ptr()),
+        .initial_contrib = reinterpret_cast<float4*>(initial_contrib.data_ptr()),
+        .initial_prim_indices = reinterpret_cast<int*>(initial_prim_indices.data_ptr()),
+        .initial_prim_count = reinterpret_cast<int*>(initial_prim_count.data_ptr()),
+    };
 
     // Trace rays
     pipeline.trace_rays(
@@ -126,18 +135,8 @@ py::dict trace_rays(
         sh_degree,
         tmin,
         reinterpret_cast<float*>(tmax.data_ptr()),
-        reinterpret_cast<float4*>(initial_contrib.data_ptr()),
-        nullptr,  // camera
         max_iters,
-        3.0f,     // max_prim_size
-        reinterpret_cast<uint*>(iters.data_ptr()),
-        reinterpret_cast<uint*>(last_prim.data_ptr()),
-        reinterpret_cast<uint*>(prim_hits.data_ptr()),
-        reinterpret_cast<float4*>(delta_contribs.data_ptr()),
-        reinterpret_cast<IntegratorState*>(states.data_ptr()),
-        reinterpret_cast<int*>(hit_collection.data_ptr()),
-        reinterpret_cast<int*>(initial_prim_count.data_ptr()),
-        reinterpret_cast<int*>(initial_prim_indices.data_ptr())
+        &backward
     );
 
     return py::dict(

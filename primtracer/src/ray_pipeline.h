@@ -74,6 +74,18 @@ struct Params {
 // Forward declaration
 class GAS;
 
+/// Output buffers for backward pass gradient computation.
+struct BackwardState {
+    IntegratorState* states;        // (M, 12) volume integrator state per ray
+    float4* delta_contribs;         // (M, 4) last delta contribution
+    uint* iters;                    // (M,) iteration count per ray
+    uint* prim_hits;                // (N,) hit count per primitive
+    int* hit_collection;            // (M * max_iters,) hit primitive indices
+    float4* initial_contrib;        // (M, 4) contribution for rays starting inside
+    int* initial_prim_indices;      // (N,) primitives containing ray origins
+    int* initial_prim_count;        // (1,) count of initial_prim_indices
+};
+
 /// RayPipeline: Complete ray tracing pipeline for ellipsoid volume rendering.
 ///
 /// This class manages:
@@ -84,15 +96,6 @@ class GAS;
 class RayPipeline {
 public:
     /// Construct a ray pipeline with primitive data.
-    ///
-    /// @param device_index CUDA device index
-    /// @param means Primitive centers (N, 3)
-    /// @param scales Primitive scales (N, 3)
-    /// @param quats Primitive rotations as quaternions (N, 4)
-    /// @param densities Primitive densities (N,)
-    /// @param features SH features (N, C * 3)
-    /// @param num_prims Number of primitives
-    /// @param feature_size Number of SH coefficients per primitive
     RayPipeline(
         int device_index,
         float* means,
@@ -111,6 +114,17 @@ public:
     RayPipeline& operator=(const RayPipeline&) = delete;
 
     /// Trace rays through the scene.
+    ///
+    /// @param num_rays Number of rays to trace
+    /// @param ray_origins Ray origin positions (M, 3)
+    /// @param ray_directions Ray directions, should be normalized (M, 3)
+    /// @param color_out Output RGBA colors (M, 4)
+    /// @param depth_out Output expected depths (M,)
+    /// @param sh_degree Spherical harmonics degree
+    /// @param tmin Minimum ray parameter
+    /// @param tmax Maximum ray parameter per ray (M,)
+    /// @param max_iters Maximum hit iterations per ray
+    /// @param backward Output buffers for backward pass (can be nullptr if not needed)
     void trace_rays(
         size_t num_rays,
         float3* ray_origins,
@@ -120,18 +134,8 @@ public:
         uint sh_degree,
         float tmin,
         float* tmax,
-        float4* initial_contrib,
-        Cam* camera,
         size_t max_iters,
-        float max_prim_size,
-        uint* iters,
-        uint* last_prim,
-        uint* prim_hits,
-        float4* last_delta_contrib,
-        IntegratorState* last_state,
-        int* hit_collection,
-        int* d_hit_count,
-        int* d_hit_inds
+        BackwardState* backward
     );
 
     size_t num_prims() const { return model_.num_prims; }
