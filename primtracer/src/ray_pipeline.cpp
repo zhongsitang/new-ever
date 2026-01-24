@@ -68,9 +68,9 @@ OptixDeviceContext get_or_create_context(int device_index) {
 
 RayPipeline::RayPipeline(
     int device_index,
-    float* means,
-    float* scales,
-    float* quats,
+    float3* means,
+    float3* scales,
+    float4* quats,
     float* densities,
     float* features,
     size_t num_prims,
@@ -83,9 +83,9 @@ RayPipeline::RayPipeline(
     context_ = get_or_create_context(device_index);
 
     // Build primitives structure
-    model_.means = reinterpret_cast<float3*>(means);
-    model_.scales = reinterpret_cast<float3*>(scales);
-    model_.quats = reinterpret_cast<float4*>(quats);
+    model_.means = means;
+    model_.scales = scales;
+    model_.quats = quats;
     model_.densities = densities;
     model_.features = features;
     model_.num_prims = num_prims;

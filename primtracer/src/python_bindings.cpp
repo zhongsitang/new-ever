@@ -86,9 +86,9 @@ py::dict trace_rays(
     // Create pipeline (handles context, primitives, GAS internally)
     RayPipeline pipeline(
         device_index,
-        means.data_ptr<float>(),
-        scales.data_ptr<float>(),
-        quats.data_ptr<float>(),
+        means.data_ptr<float3>(),
+        scales.data_ptr<float3>(),
+        quats.data_ptr<float4>(),
         densities.data_ptr<float>(),
         features.data_ptr<float>(),
         num_prims,

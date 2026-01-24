@@ -98,9 +98,9 @@ public:
     /// Construct a ray pipeline with primitive data.
     RayPipeline(
         int device_index,
-        float* means,
-        float* scales,
-        float* quats,
+        float3* means,
+        float3* scales,
+        float4* quats,
         float* densities,
         float* features,
         size_t num_prims,
