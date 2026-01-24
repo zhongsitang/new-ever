@@ -42,14 +42,6 @@ using namespace pybind11::literals;
 template<typename T>
 T* data_ptr(const torch::Tensor& t) { return static_cast<T*>(t.data_ptr()); }
 
-/// Pad (N, 3) tensor to (N, 4) with zeros in the last column.
-/// This is required for ABI stability: float4 has 16-byte stride vs float3's 12-byte.
-inline torch::Tensor pad_to_float4(const torch::Tensor& t) {
-    if (t.size(-1) == 4) return t;  // Already padded
-    TORCH_CHECK(t.size(-1) == 3, "Expected last dimension 3 or 4");
-    return torch::nn::functional::pad(t, torch::nn::functional::PadFuncOptions({0, 1}));
-}
-
 // =============================================================================
 // PyRayTracer - Python wrapper for RayTracer with tensor lifetime management
 // =============================================================================
@@ -68,15 +60,13 @@ public:
         const torch::Tensor& densities,
         const torch::Tensor& features)
     {
-        // Validate inputs (allow either 3 or 4 for means/scales)
-        CHECK_CUDA(means); CHECK_CONTIGUOUS(means); CHECK_DEVICE(means, device_); CHECK_FLOAT(means);
-        CHECK_CUDA(scales); CHECK_CONTIGUOUS(scales); CHECK_DEVICE(scales, device_); CHECK_FLOAT(scales);
+        // Validate inputs
+        CHECK_INPUT(means, device_, 3);
+        CHECK_INPUT(scales, device_, 3);
         CHECK_INPUT(quats, device_, 4);
         CHECK_INPUT(features, device_, 3);
         CHECK_CUDA(densities); CHECK_CONTIGUOUS(densities);
         CHECK_DEVICE(densities, device_); CHECK_FLOAT(densities);
-        TORCH_CHECK(means.size(-1) == 3 || means.size(-1) == 4, "means must have last dimension 3 or 4");
-        TORCH_CHECK(scales.size(-1) == 3 || scales.size(-1) == 4, "scales must have last dimension 3 or 4");
 
         const uint64_t num_prims = means.size(0);
         const uint64_t feature_size = features.size(1);
@@ -86,14 +76,14 @@ public:
         TORCH_CHECK(densities.size(0) == (long)num_prims, "densities must match means count");
         TORCH_CHECK(features.size(0) == (long)num_prims, "features must match means count");
 
-        // Pad to float4 for ABI stability (16-byte stride)
-        means_ = pad_to_float4(means).contiguous();
-        scales_ = pad_to_float4(scales).contiguous();
+        // Store tensor references to prevent GC
+        means_ = means;
+        scales_ = scales;
         quats_ = quats;
         densities_ = densities;
         features_ = features;
 
-        // Update tracer (cast float4* to float3* - the stride is what matters)
+        // Update tracer
         Primitives prims = {
             .means = data_ptr<float3>(means_),
             .scales = data_ptr<float3>(scales_),
@@ -119,17 +109,11 @@ public:
             throw std::runtime_error("Must call update_primitives() before trace_rays()");
         }
 
-        // Validate ray inputs (allow either 3 or 4)
-        CHECK_CUDA(ray_origins); CHECK_CONTIGUOUS(ray_origins);
-        CHECK_DEVICE(ray_origins, device_); CHECK_FLOAT(ray_origins);
-        CHECK_CUDA(ray_directions); CHECK_CONTIGUOUS(ray_directions);
-        CHECK_DEVICE(ray_directions, device_); CHECK_FLOAT(ray_directions);
+        // Validate ray inputs
+        CHECK_INPUT(ray_origins, device_, 3);
+        CHECK_INPUT(ray_directions, device_, 3);
         CHECK_CUDA(tmax); CHECK_CONTIGUOUS(tmax);
         CHECK_DEVICE(tmax, device_); CHECK_FLOAT(tmax);
-        TORCH_CHECK(ray_origins.size(-1) == 3 || ray_origins.size(-1) == 4,
-                    "ray_origins must have last dimension 3 or 4");
-        TORCH_CHECK(ray_directions.size(-1) == 3 || ray_directions.size(-1) == 4,
-                    "ray_directions must have last dimension 3 or 4");
 
         const uint64_t num_rays = ray_origins.size(0);
         const uint64_t num_prims = tracer_->num_prims();
@@ -138,10 +122,6 @@ public:
 
         TORCH_CHECK(ray_directions.size(0) == (long)num_rays, "ray_directions must match ray_origins count");
         TORCH_CHECK(tmax.numel() == (long)num_rays, "tmax must have one value per ray");
-
-        // Pad ray data to float4 for ABI stability
-        auto ray_origins_f4 = pad_to_float4(ray_origins).contiguous();
-        auto ray_directions_f4 = pad_to_float4(ray_directions).contiguous();
 
         // Allocate output tensors
         auto opts_f = torch::device(device_).dtype(torch::kFloat32);
@@ -176,8 +156,8 @@ public:
         // Trace rays
         tracer_->trace_rays(
             num_rays,
-            data_ptr<float4>(ray_origins_f4),
-            data_ptr<float4>(ray_directions_f4),
+            data_ptr<float3>(ray_origins),
+            data_ptr<float3>(ray_directions),
             data_ptr<float4>(color),
             data_ptr<float>(depth),
             sh_degree,

@@ -163,10 +163,11 @@ void RayTracer::update_primitives(const Primitives& prims) {
     prims_ = prims;
     accel_->rebuild(prims);
 
-    // Update params with model data (cast float3* to float4* for ABI stability)
-    // The host data must be padded to 16-byte stride (float4).
-    params_.means = {reinterpret_cast<float4*>(prims_.means), prims_.num_prims};
-    params_.scales = {reinterpret_cast<float4*>(prims_.scales), prims_.num_prims};
+    // Update params with model data
+    // float3 data stored as flat float array (3 floats per element) to avoid
+    // stride mismatch between CUDA float3 (12 bytes) and Slang (possibly 16 bytes)
+    params_.means = {reinterpret_cast<float*>(prims_.means), prims_.num_prims * 3};
+    params_.scales = {reinterpret_cast<float*>(prims_.scales), prims_.num_prims * 3};
     params_.quats = {prims_.quats, prims_.num_prims};
     params_.densities = {prims_.densities, prims_.num_prims};
     params_.features = {prims_.features, prims_.num_prims * prims_.feature_size};
@@ -174,8 +175,8 @@ void RayTracer::update_primitives(const Primitives& prims) {
 
 void RayTracer::trace_rays(
     uint64_t num_rays,
-    float4* ray_origins,
-    float4* ray_directions,
+    float3* ray_origins,
+    float3* ray_directions,
     float4* color_out,
     float* depth_out,
     uint32_t sh_degree,
@@ -198,13 +199,14 @@ void RayTracer::trace_rays(
     CUDA_CHECK(cudaMemset(d_debug_flag_, 0, sizeof(uint32_t)));
 
     // Setup params
+    // float3 data stored as flat float array (3 floats per element)
     params_.image = {color_out, num_rays};
     params_.depth_out = {depth_out, num_rays};
     params_.sh_degree = sh_degree;
     params_.max_prim_size = 3.0f;
     params_.max_iters = max_iters;
-    params_.ray_origins = {ray_origins, num_rays};
-    params_.ray_directions = {ray_directions, num_rays};
+    params_.ray_origins = {reinterpret_cast<float*>(ray_origins), num_rays * 3};
+    params_.ray_directions = {reinterpret_cast<float*>(ray_directions), num_rays * 3};
     params_.tmin = tmin;
     params_._pad0 = 0.0f;
     params_.tmax = {tmax, num_rays};

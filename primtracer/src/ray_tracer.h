@@ -309,11 +309,10 @@ public:
 
     /// Trace rays through the scene.
     /// Requires update_primitives() to be called first.
-    /// Note: ray_origins/ray_directions use float4 for ABI stability (.w unused).
     void trace_rays(
         uint64_t num_rays,
-        float4* ray_origins,
-        float4* ray_directions,
+        float3* ray_origins,
+        float3* ray_directions,
         float4* color_out,
         float* depth_out,
         uint32_t sh_degree,

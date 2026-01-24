@@ -102,8 +102,9 @@ static_assert(alignof(Camera) == 16);
 /// Layout rules:
 /// - All pointers/handles are 8-byte aligned
 /// - Use uint32_t for small integers (not size_t)
-/// - Use float4 for vectors (not float3) for stable 16-byte stride
 /// - Explicit padding before 8-byte aligned fields after 4-byte fields
+/// - float3 buffers use StructuredBuffer<float> in Slang (read 3 floats manually)
+///   to avoid stride mismatch (CUDA float3 = 12 bytes, Slang float3 may be 16)
 struct Params {
     // ===== Output buffers =====
     StructuredBuffer<float4> image;
@@ -116,16 +117,15 @@ struct Params {
     StructuredBuffer<int32_t> hit_collection;
 
     // ===== Ray data =====
-    // Using float4 buffers for ABI stability (stride = 16 bytes).
-    // The .w component is unused. float3 has stride = 12 which may
-    // differ between CUDA and Slang StructuredBuffer implementations.
-    StructuredBuffer<float4> ray_origins;
-    StructuredBuffer<float4> ray_directions;
+    // float3 data stored as StructuredBuffer<float>, read 3 floats per element.
+    // This avoids stride mismatch: CUDA float3 is 12 bytes packed.
+    StructuredBuffer<float> ray_origins;     // [N*3] floats
+    StructuredBuffer<float> ray_directions;  // [N*3] floats
     Camera camera;
 
     // ===== Primitive data =====
-    StructuredBuffer<float4> means;    // .w unused
-    StructuredBuffer<float4> scales;   // .w unused
+    StructuredBuffer<float> means;    // [N*3] floats
+    StructuredBuffer<float> scales;   // [N*3] floats
     StructuredBuffer<float4> quats;
     StructuredBuffer<float> densities;
     StructuredBuffer<float> features;

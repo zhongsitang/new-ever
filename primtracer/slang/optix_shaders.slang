@@ -107,13 +107,16 @@ struct Params {
     BufferPtr<int> hit_collection;
 
     // ===== Ray data =====
-    BufferPtr<float4> ray_origins;     // .w unused
-    BufferPtr<float4> ray_directions;  // .w unused
+    // float3 data stored as flat float array to avoid stride mismatch.
+    // CUDA float3 = 12 bytes packed, Slang float3 might be 16 bytes.
+    // Read as: float3(data[i*3], data[i*3+1], data[i*3+2])
+    BufferPtr<float> ray_origins;     // [N*3] floats
+    BufferPtr<float> ray_directions;  // [N*3] floats
     Camera camera;
 
     // ===== Primitive data =====
-    BufferPtr<float4> means;    // .w unused
-    BufferPtr<float4> scales;   // .w unused
+    BufferPtr<float> means;    // [N*3] floats
+    BufferPtr<float> scales;   // [N*3] floats
     BufferPtr<float4> quats;
     BufferPtr<float> densities;
     BufferPtr<float> features;
@@ -141,6 +144,22 @@ Params gParams;
 
 // Access the traversable handle (stored as uint64_t in params)
 RaytracingAccelerationStructure traversable;
+
+// =============================================================================
+// Helper Functions for Packed float3 Access
+// =============================================================================
+
+/// Read float3 from packed float buffer at index i (stride = 3 floats)
+float3 loadFloat3(RWStructuredBuffer<float> buf, uint i) {
+    uint base = i * 3;
+    return float3(buf[base], buf[base + 1], buf[base + 2]);
+}
+
+/// Read float3 from read-only packed float buffer
+float3 loadFloat3RO(StructuredBuffer<float> buf, uint i) {
+    uint base = i * 3;
+    return float3(buf[base], buf[base + 1], buf[base + 2]);
+}
 
 // =============================================================================
 // Helper Functions
@@ -191,9 +210,9 @@ void intersect_ellipsoid() {
     float3 rayd = WorldRayDirection();
     float3 rayo = WorldRayOrigin();
 
-    // Read float4, use only xyz
-    let mean = gParams.means.data[prim_index].xyz;
-    let scale = gParams.scales.data[prim_index].xyz;
+    // Read from packed float buffers (3 floats per element)
+    let mean = loadFloat3(gParams.means.data, prim_index);
+    let scale = loadFloat3(gParams.scales.data, prim_index);
     let quat = gParams.quats.data[prim_index];
     float2 t_entry_exit = ray_intersect_ellipsoid(rayo - mean, rayd, scale, quat);
 
@@ -315,9 +334,9 @@ void render_volume()
         }
     }
 
-    // Initialize ray (read float4, use only xyz)
-    float3 direction = l2_normalize(gParams.ray_directions.data[idx.x].xyz);
-    float3 origin = gParams.ray_origins.data[idx.x].xyz + gParams.tmin * gParams.ray_directions.data[idx.x].xyz;
+    // Initialize ray (read from packed float buffer)
+    float3 direction = l2_normalize(loadFloat3(gParams.ray_directions.data, idx.x));
+    float3 origin = loadFloat3(gParams.ray_origins.data, idx.x) + gParams.tmin * direction;
     float ray_tmax = gParams.tmax.data[idx.x];  // Per-ray tmax
 
     // Initialize volume rendering state
