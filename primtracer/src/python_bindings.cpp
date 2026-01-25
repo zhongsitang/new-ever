@@ -38,10 +38,6 @@ using namespace pybind11::literals;
     CHECK_CUDA(x); CHECK_CONTIGUOUS(x); CHECK_DEVICE(x, dev); CHECK_FLOAT(x); \
     TORCH_CHECK(x.size(-1) == dim, #x " must have last dimension " #dim)
 
-// Helper for casting tensor data pointer to custom types
-template<typename T>
-T* data_ptr(const torch::Tensor& t) { return static_cast<T*>(t.data_ptr()); }
-
 // =============================================================================
 // PyRayTracer - Python wrapper for RayTracer with tensor lifetime management
 // =============================================================================
@@ -68,8 +64,7 @@ public:
         CHECK_CUDA(densities); CHECK_CONTIGUOUS(densities);
         CHECK_DEVICE(densities, device_); CHECK_FLOAT(densities);
 
-        const size_t num_prims = means.size(0);
-        const size_t feature_size = features.size(1);
+        const int32_t num_prims = static_cast<int32_t>(means.size(0));
 
         TORCH_CHECK(scales.size(0) == (long)num_prims, "scales must match means count");
         TORCH_CHECK(quats.size(0) == (long)num_prims, "quats must match means count");
@@ -83,15 +78,14 @@ public:
         densities_ = densities;
         features_ = features;
 
-        // Update tracer
+        // Update tracer (use scalar float pointers for safe torch interop)
         Primitives prims = {
-            .means = data_ptr<float3>(means),
-            .scales = data_ptr<float3>(scales),
-            .quats = data_ptr<float4>(quats),
-            .densities = data_ptr<float>(densities),
+            .means = means.data_ptr<float>(),
+            .scales = scales.data_ptr<float>(),
+            .quats = quats.data_ptr<float>(),
+            .densities = densities.data_ptr<float>(),
+            .features = features.data_ptr<float>(),
             .num_prims = num_prims,
-            .features = data_ptr<float>(features),
-            .feature_size = feature_size,
         };
         tracer_->update_primitives(prims);
     }
@@ -101,7 +95,7 @@ public:
         const torch::Tensor& ray_directions,
         float tmin,
         const torch::Tensor& tmax,
-        size_t max_iters)
+        int32_t max_iters)
     {
         torch::AutoGradMode enable_grad(false);
 
@@ -115,10 +109,10 @@ public:
         CHECK_CUDA(tmax); CHECK_CONTIGUOUS(tmax);
         CHECK_DEVICE(tmax, device_); CHECK_FLOAT(tmax);
 
-        const size_t num_rays = ray_origins.size(0);
-        const size_t num_prims = tracer_->num_prims();
-        const size_t feature_size = features_.size(1);
-        const auto sh_degree = static_cast<uint32_t>(sqrt(feature_size)) - 1;
+        const int32_t num_rays = static_cast<int32_t>(ray_origins.size(0));
+        const int32_t num_prims = tracer_->num_prims();
+        const int32_t feature_size = static_cast<int32_t>(features_.size(1));
+        const int32_t sh_degree = static_cast<int32_t>(sqrt(feature_size)) - 1;
 
         TORCH_CHECK(ray_directions.size(0) == (long)num_rays, "ray_directions must match ray_origins count");
         TORCH_CHECK(tmax.numel() == (long)num_rays, "tmax must have one value per ray");
@@ -127,44 +121,47 @@ public:
         auto opts_f = torch::device(device_).dtype(torch::kFloat32);
         auto opts_i = torch::device(device_).dtype(torch::kInt32);
 
-        torch::Tensor color = torch::zeros({(long)num_rays, 4}, opts_f);
-        torch::Tensor depth = torch::zeros({(long)num_rays}, opts_f);
+        torch::Tensor color = torch::zeros({num_rays, 4}, opts_f);
+        torch::Tensor depth = torch::zeros({num_rays}, opts_f);
 
         // Allocate backward state tensors
         constexpr size_t state_floats = sizeof(IntegratorState) / sizeof(float);
-        torch::Tensor states = torch::zeros({(long)num_rays, (long)state_floats}, opts_f);
-        torch::Tensor delta_contribs = torch::zeros({(long)num_rays, 4}, opts_f);
-        torch::Tensor iters = torch::zeros({(long)num_rays}, opts_i);
-        torch::Tensor prim_hits = torch::zeros({(long)num_prims}, opts_i);
-        torch::Tensor hit_collection = torch::zeros({(long)(num_rays * max_iters)}, opts_i);
-        torch::Tensor initial_contrib = torch::zeros({(long)num_rays, 4}, opts_f);
-        torch::Tensor initial_prim_indices = torch::zeros({(long)num_prims}, opts_i);
+        torch::Tensor states = torch::zeros({num_rays, state_floats}, opts_f);
+        torch::Tensor delta_contribs = torch::zeros({num_rays, 4}, opts_f);
+        torch::Tensor iters = torch::zeros({num_rays}, opts_i);
+        torch::Tensor last_prim = torch::zeros({num_rays}, opts_i);
+        torch::Tensor prim_hits = torch::zeros({num_prims}, opts_i);
+        torch::Tensor hit_collection = torch::zeros({(num_rays * max_iters)}, opts_i);
+        torch::Tensor initial_contrib = torch::zeros({num_rays, 4}, opts_f);
+        torch::Tensor initial_prim_indices = torch::zeros({num_prims}, opts_i);
         torch::Tensor initial_prim_count = torch::zeros({1}, opts_i);
 
-        // Setup backward state
+        // Setup backward state (use scalar float pointers for safe torch interop)
+        // Note: IntegratorState requires static_cast as PyTorch only supports basic types
         SavedState saved = {
-            .states = data_ptr<IntegratorState>(states),
-            .delta_contribs = data_ptr<float4>(delta_contribs),
-            .iters = data_ptr<uint32_t>(iters),
-            .prim_hits = data_ptr<uint32_t>(prim_hits),
-            .hit_collection = data_ptr<int>(hit_collection),
-            .initial_contrib = data_ptr<float4>(initial_contrib),
-            .initial_prim_indices = data_ptr<int>(initial_prim_indices),
-            .initial_prim_count = data_ptr<int>(initial_prim_count),
+            .states = static_cast<IntegratorState*>(states.data_ptr()),
+            .delta_contribs = delta_contribs.data_ptr<float>(),
+            .iters = iters.data_ptr<int32_t>(),
+            .last_prim = last_prim.data_ptr<int32_t>(),
+            .prim_hits = prim_hits.data_ptr<int32_t>(),
+            .hit_collection = hit_collection.data_ptr<int32_t>(),
+            .initial_contrib = initial_contrib.data_ptr<float>(),
+            .initial_prim_indices = initial_prim_indices.data_ptr<int32_t>(),
+            .initial_prim_count = initial_prim_count.data_ptr<int32_t>(),
         };
 
-        // Trace rays
+        // Trace rays (use scalar float pointers for safe torch interop)
         tracer_->trace_rays(
-            num_rays,
-            data_ptr<float3>(ray_origins),
-            data_ptr<float3>(ray_directions),
-            data_ptr<float4>(color),
-            data_ptr<float>(depth),
-            sh_degree,
+            ray_origins.data_ptr<float>(),
+            ray_directions.data_ptr<float>(),
+            tmax.data_ptr<float>(),
             tmin,
-            data_ptr<float>(tmax),
+            num_rays,
+            sh_degree,
             max_iters,
-            &saved
+            color.data_ptr<float>(),
+            depth.data_ptr<float>(),
+            saved
         );
 
         return py::dict(
@@ -183,7 +180,7 @@ public:
     }
 
     bool has_primitives() const { return tracer_->has_primitives(); }
-    size_t num_prims() const { return tracer_->num_prims(); }
+    int32_t num_prims() const { return tracer_->num_prims(); }
     int device_index() const { return tracer_->device_index(); }
 
 private:

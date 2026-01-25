@@ -21,97 +21,105 @@
 // Basic Types
 // =============================================================================
 
-/// Slang StructuredBuffer layout: {T* data, size_t size}
+/// Slang StructuredBuffer layout: {T* data, int32_t size}
+/// Using int32_t for stable cross-platform ABI with Slang
 template <typename T>
 struct StructuredBuffer {
     T* data;
-    size_t size;
+    int32_t size;
 };
 
 // =============================================================================
 // Primitive Data
 // =============================================================================
 
-/// Ellipsoid primitive geometry (GPU pointers)
+/// Ellipsoid primitive geometry (GPU pointers).
+/// All vector data stored as scalar float arrays for safe torch tensor interop.
 struct Primitives {
-    float3* means;
-    float3* scales;
-    float4* quats;        // quaternion (w,x,y,z)
+    float* means;         // (N, 3) flattened
+    float* scales;        // (N, 3) flattened
+    float* quats;         // (N, 4) flattened, quaternion (w,x,y,z)
     float* densities;
-    size_t num_prims;
-    float* features;      // SH coefficients
-    size_t feature_size;
+    float* features;      // SH coefficients, size = num_prims * (sh_degree+1)^2 * 3
+    int32_t num_prims;
 };
 
 // =============================================================================
 // Volume Rendering State
 // =============================================================================
 
-/// Per-ray volume integrator state (48 bytes, 16-byte aligned)
+/// Per-ray volume integrator state (48 bytes, 16-byte aligned).
+/// Using float4 for C to avoid float3 alignment issues with Slang.
 struct IntegratorState {
     float4 accumulated_contrib;  // (density, r*d, g*d, b*d)
-    float3 C;                    // accumulated color RGB
+    float4 C;                    // accumulated color RGB (w unused, for alignment)
     float logT;                  // log transmittance
     float depth_accum;           // accumulated depth
     float t;                     // current ray parameter
-    float _pad[2];
+    float _pad;                  // padding to 48 bytes
 };
 
 static_assert(sizeof(IntegratorState) == 48);
 static_assert(alignof(IntegratorState) == 16);
 
-/// State saved for backward gradient computation
+/// State saved for backward gradient computation.
+/// All vector data stored as scalar float arrays for safe torch tensor interop.
 struct SavedState {
-    IntegratorState* states;     // (M,) per-ray integrator state
-    float4* delta_contribs;      // (M,) last delta contribution
-    uint32_t* iters;             // (M,) iteration count per ray
-    uint32_t* prim_hits;         // (N,) hit count per primitive
-    int32_t* hit_collection;     // (M * max_iters,) hit primitive indices
-    float4* initial_contrib;     // (M,) contribution for rays starting inside
+    IntegratorState* states;       // (M,) per-ray integrator state
+    float* delta_contribs;         // (M, 4) flattened, last delta contribution
+    int32_t* iters;                // (M,) iteration count per ray
+    int32_t* last_prim;            // (M,) last primitive hit per ray
+    int32_t* prim_hits;            // (N,) hit count per primitive
+    int32_t* hit_collection;       // (M * max_iters,) hit primitive indices
+    float* initial_contrib;        // (M, 4) flattened, contribution for rays starting inside
     int32_t* initial_prim_indices; // (N,) primitives containing ray origins
-    int32_t* initial_prim_count; // (1,) count of initial_prim_indices
+    int32_t* initial_prim_count;   // (1,) count of initial_prim_indices
 };
 
 // =============================================================================
-// OptiX Launch Parameters (must match slang layout)
+// OptiX Launch Parameters
 // =============================================================================
-
-struct Camera {
-    float fx, fy;
-    int height, width;
-    float3 U, V, W;
-    float3 eye;
-};
+//
+// IMPORTANT: Memory layout must match Slang shader global variables exactly.
+// Order: Input buffers -> Output buffers -> Scalars -> Handle
+//
+// Alignment rules:
+//   - StructuredBuffers: 16-byte aligned each
+//   - Scalar parameters: 4-byte aligned, grouped for 16-byte alignment
+//   - OptixTraversableHandle: 8-byte aligned
 
 struct Params {
-    // Output buffers
-    StructuredBuffer<float4> image;
-    StructuredBuffer<float> depth_out;
-    StructuredBuffer<uint32_t> iters;
-    StructuredBuffer<uint32_t> last_prim;
-    StructuredBuffer<uint32_t> prim_hits;
-    StructuredBuffer<float4> last_delta_contrib;
-    StructuredBuffer<IntegratorState> last_state;
-    StructuredBuffer<int32_t> hit_collection;
-
+    // --- Input buffers (read-only) ------------------------------------------
     // Ray data
-    StructuredBuffer<float3> ray_origins;
-    StructuredBuffer<float3> ray_directions;
-    Camera camera;
-
+    StructuredBuffer<float> ray_origins;
+    StructuredBuffer<float> ray_directions;
+    StructuredBuffer<float> tmax;
     // Primitive data
-    StructuredBuffer<float3> means;
-    StructuredBuffer<float3> scales;
-    StructuredBuffer<float4> quats;
+    StructuredBuffer<float> means;
+    StructuredBuffer<float> scales;
+    StructuredBuffer<float> quats;
     StructuredBuffer<float> densities;
     StructuredBuffer<float> features;
 
-    // Render settings
-    size_t sh_degree;
-    size_t max_iters;
+    // --- Output buffers -----------------------------------------------------
+    // Primary outputs
+    StructuredBuffer<float> image;
+    StructuredBuffer<float> depth_out;
+    // Backward state outputs
+    StructuredBuffer<IntegratorState> last_state;
+    StructuredBuffer<float> last_delta_contrib;
+    StructuredBuffer<int32_t> iters;
+    StructuredBuffer<int32_t> last_prim;
+    StructuredBuffer<int32_t> prim_hits;
+    StructuredBuffer<int32_t> hit_collection;
+    StructuredBuffer<float> initial_contrib;
+
+    // --- Scalar parameters --------------------------------------------------
+    int32_t sh_degree;
+    int32_t max_iters;
     float tmin;
-    StructuredBuffer<float> tmax;
-    StructuredBuffer<float4> initial_contrib;
     float max_prim_size;
+
+    // --- Acceleration structure ---------------------------------------------
     OptixTraversableHandle handle;
 };

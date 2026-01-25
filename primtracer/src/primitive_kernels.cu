@@ -107,18 +107,21 @@ float4 compute_contribution(float density, const float* features) {
 // =============================================================================
 
 __global__ void compute_primitive_bounds_kernel(
-    const float3* __restrict__ means,
-    const float3* __restrict__ scales,
-    const float4* __restrict__ quats,
-    size_t num_prims,
+    const float* __restrict__ means,
+    const float* __restrict__ scales,
+    const float* __restrict__ quats,
+    int num_prims,
     OptixAabb* __restrict__ aabbs)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= (int)num_prims) return;
+    if (i >= num_prims) return;
 
-    float3 center = means[i];
-    float3 size = scales[i];
-    mat3 Rt = quat_to_rotation_matrix_t(quats[i]);
+    // Load float3 from scalar array
+    float3 center = make_float3(means[i * 3 + 0], means[i * 3 + 1], means[i * 3 + 2]);
+    float3 size = make_float3(scales[i * 3 + 0], scales[i * 3 + 1], scales[i * 3 + 2]);
+    // Load float4 quaternion from scalar array
+    float4 quat = make_float4(quats[i * 4 + 0], quats[i * 4 + 1], quats[i * 4 + 2], quats[i * 4 + 3]);
+    mat3 Rt = quat_to_rotation_matrix_t(quat);
 
     // M = S * Rt, extents = column norms
     mat3 S(size.x, 0.f, 0.f, 0.f, size.y, 0.f, 0.f, 0.f, size.z);
@@ -135,11 +138,11 @@ __global__ void compute_primitive_bounds_kernel(
 }
 
 void compute_primitive_aabbs(const Primitives& prims, OptixAabb* aabbs) {
-    size_t grid = (prims.num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int grid = (prims.num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
     compute_primitive_bounds_kernel<<<grid, BLOCK_SIZE>>>(
-        reinterpret_cast<const float3*>(prims.means),
-        reinterpret_cast<const float3*>(prims.scales),
-        reinterpret_cast<const float4*>(prims.quats),
+        prims.means,
+        prims.scales,
+        prims.quats,
         prims.num_prims, aabbs);
     CUDA_SYNC_CHECK();
 }
@@ -153,17 +156,18 @@ namespace {
 // Find primitives within tmin distance of ray origin
 __global__ void find_enclosing_primitives_kernel(
     const OptixAabb* __restrict__ aabbs,
-    size_t num_prims,
+    const float* __restrict__ ray_origins,
+    int num_prims,
     float tmin,
-    const float3* __restrict__ ray_origins,
     int* __restrict__ hit_indices,
     int* __restrict__ hit_count)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= (int)num_prims) return;
+    if (i >= num_prims) return;
 
     OptixAabb aabb = aabbs[i];
-    float3 o = ray_origins[0];
+    // Load first ray origin from scalar array
+    float3 o = make_float3(ray_origins[0], ray_origins[1], ray_origins[2]);
     float tmin_sq = tmin * tmin;
 
     // Squared distance point-to-AABB (Arvo, Graphics Gems)
@@ -182,26 +186,40 @@ __global__ void find_enclosing_primitives_kernel(
 
 // Accumulate contributions for rays inside primitives (multi-ray)
 __global__ void accumulate_initial_samples_kernel(
-    const float3* __restrict__ means,
-    const float3* __restrict__ scales,
-    const float4* __restrict__ quats,
+    const float* __restrict__ means,
+    const float* __restrict__ scales,
+    const float* __restrict__ quats,
     const float* __restrict__ densities,
     const float* __restrict__ features,
-    size_t num_rays,
-    float tmin,
-    const float3* __restrict__ ray_origins,
-    const float3* __restrict__ ray_directions,
-    float* __restrict__ initial_contrib,
+    const float* __restrict__ ray_origins,
+    const float* __restrict__ ray_directions,
     const int* __restrict__ hit_indices,
-    const int* __restrict__ hit_count)
+    const int* __restrict__ hit_count,
+    int num_rays,
+    float tmin,
+    float* __restrict__ initial_contrib)
 {
     int ray_idx = blockIdx.x * blockDim.x + threadIdx.x;
     int hit_idx = blockIdx.y * blockDim.y + threadIdx.y;
-    if (hit_idx >= *hit_count || ray_idx >= (int)num_rays) return;
+    if (hit_idx >= *hit_count || ray_idx >= num_rays) return;
 
-    float3 ray_start = ray_origins[ray_idx] + tmin * safe_normalize(ray_directions[ray_idx]);
+    // Load ray data from scalar arrays
+    float3 ray_origin = make_float3(
+        ray_origins[ray_idx * 3 + 0],
+        ray_origins[ray_idx * 3 + 1],
+        ray_origins[ray_idx * 3 + 2]);
+    float3 ray_dir = make_float3(
+        ray_directions[ray_idx * 3 + 0],
+        ray_directions[ray_idx * 3 + 1],
+        ray_directions[ray_idx * 3 + 2]);
+    float3 ray_start = ray_origin + tmin * safe_normalize(ray_dir);
+
     int prim = hit_indices[hit_idx];
-    float3 local = world_to_ellipsoid(ray_start, means[prim], quats[prim], scales[prim]);
+    // Load primitive data from scalar arrays
+    float3 mean = make_float3(means[prim * 3 + 0], means[prim * 3 + 1], means[prim * 3 + 2]);
+    float3 scale = make_float3(scales[prim * 3 + 0], scales[prim * 3 + 1], scales[prim * 3 + 2]);
+    float4 quat = make_float4(quats[prim * 4 + 0], quats[prim * 4 + 1], quats[prim * 4 + 2], quats[prim * 4 + 3]);
+    float3 local = world_to_ellipsoid(ray_start, mean, quat, scale);
 
     if (dot(local, local) <= 1.f) {
         float4 c = compute_contribution(densities[prim], &features[prim * 3]);
@@ -214,19 +232,26 @@ __global__ void accumulate_initial_samples_kernel(
 
 // Single-ray version: check all primitives directly
 __global__ void accumulate_initial_samples_single_kernel(
-    const float3* __restrict__ means,
-    const float3* __restrict__ scales,
-    const float4* __restrict__ quats,
+    // Primitive inputs
+    const float* __restrict__ means,
+    const float* __restrict__ scales,
+    const float* __restrict__ quats,
     const float* __restrict__ densities,
     const float* __restrict__ features,
-    size_t num_prims,
-    const float3* __restrict__ ray_origin,
+    const float* __restrict__ ray_origin,
+    int num_prims,
     float* __restrict__ initial_contrib)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= (int)num_prims) return;
+    if (i >= num_prims) return;
 
-    float3 local = world_to_ellipsoid(*ray_origin, means[i], quats[i], scales[i]);
+    // Load ray origin from scalar array
+    float3 origin = make_float3(ray_origin[0], ray_origin[1], ray_origin[2]);
+    // Load primitive data from scalar arrays
+    float3 mean = make_float3(means[i * 3 + 0], means[i * 3 + 1], means[i * 3 + 2]);
+    float3 scale = make_float3(scales[i * 3 + 0], scales[i * 3 + 1], scales[i * 3 + 2]);
+    float4 quat = make_float4(quats[i * 4 + 0], quats[i * 4 + 1], quats[i * 4 + 2], quats[i * 4 + 3]);
+    float3 local = world_to_ellipsoid(origin, mean, quat, scale);
 
     if (dot(local, local) <= 1.f) {
         float4 c = compute_contribution(densities[i], &features[i * 3]);
@@ -243,8 +268,8 @@ __global__ void accumulate_initial_samples_single_kernel(
 // Public API
 // =============================================================================
 
-void init_ray_start_samples(Params* params, OptixAabb* aabbs,
-                            int* d_hit_count, int* d_hit_inds) {
+void init_ray_start_samples(const OptixAabb* aabbs, Params* params,
+                            int* d_hit_inds, int* d_hit_count) {
     int num_prims = params->means.size;
     int num_rays  = params->initial_contrib.size;
 
@@ -256,10 +281,10 @@ void init_ray_start_samples(Params* params, OptixAabb* aabbs,
     cudaMemset(d_hit_count, 0, sizeof(int));
 
     // Phase 1: find enclosing primitives
-    size_t grid = (num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int grid = (num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
     find_enclosing_primitives_kernel<<<grid, BLOCK_SIZE>>>(
-        aabbs, (size_t)num_prims, params->tmin,
-        reinterpret_cast<const float3*>(params->ray_origins.data),
+        aabbs, params->ray_origins.data,
+        num_prims, params->tmin,
         d_hit_inds, d_hit_count);
 
     int hit_count = 0;
@@ -272,15 +297,15 @@ void init_ray_start_samples(Params* params, OptixAabb* aabbs,
         dim3 block(RAY_BLOCK, HIT_BLOCK);
 
         accumulate_initial_samples_kernel<<<grid2, block>>>(
-            reinterpret_cast<const float3*>(params->means.data),
-            reinterpret_cast<const float3*>(params->scales.data),
-            reinterpret_cast<const float4*>(params->quats.data),
+            params->means.data,
+            params->scales.data,
+            params->quats.data,
             params->densities.data, params->features.data,
-            (size_t)num_rays, params->tmin,
-            reinterpret_cast<const float3*>(params->ray_origins.data),
-            reinterpret_cast<const float3*>(params->ray_directions.data),
-            reinterpret_cast<float*>(params->initial_contrib.data),
-            d_hit_inds, d_hit_count);
+            params->ray_origins.data,
+            params->ray_directions.data,
+            d_hit_inds, d_hit_count,
+            num_rays, params->tmin,
+            params->initial_contrib.data);
         CUDA_SYNC_CHECK();
     }
 
@@ -292,16 +317,16 @@ void init_ray_start_samples(Params* params, OptixAabb* aabbs,
 
 void init_ray_start_samples_single(Params* params) {
     int num_prims = params->means.size;
-    size_t grid = (num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int grid = (num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     accumulate_initial_samples_single_kernel<<<grid, BLOCK_SIZE>>>(
-        reinterpret_cast<const float3*>(params->means.data),
-        reinterpret_cast<const float3*>(params->scales.data),
-        reinterpret_cast<const float4*>(params->quats.data),
+        params->means.data,
+        params->scales.data,
+        params->quats.data,
         params->densities.data, params->features.data,
-        (size_t)num_prims,
-        reinterpret_cast<const float3*>(params->ray_origins.data),
-        reinterpret_cast<float*>(params->initial_contrib.data));
+        params->ray_origins.data,
+        num_prims,
+        params->initial_contrib.data);
     CUDA_SYNC_CHECK();
 }
 

@@ -160,25 +160,24 @@ void RayTracer::update_primitives(const Primitives& prims) {
     prims_ = prims;
     accel_->rebuild(prims);
 
-    // Update params with model data
+    // Update params with model data (features set in trace_rays with sh_degree)
     params_.means = {prims_.means, prims_.num_prims};
     params_.scales = {prims_.scales, prims_.num_prims};
     params_.quats = {prims_.quats, prims_.num_prims};
     params_.densities = {prims_.densities, prims_.num_prims};
-    params_.features = {prims_.features, prims_.num_prims * prims_.feature_size};
 }
 
 void RayTracer::trace_rays(
-    size_t num_rays,
-    float3* ray_origins,
-    float3* ray_directions,
-    float4* color_out,
-    float* depth_out,
-    uint32_t sh_degree,
+    const float* ray_origins,
+    const float* ray_directions,
+    const float* tmax,
     float tmin,
-    float* tmax,
-    size_t max_iters,
-    SavedState* saved)
+    int32_t num_rays,
+    int32_t sh_degree,
+    int32_t max_iters,
+    float* color_out,
+    float* depth_out,
+    SavedState& saved)
 {
     if (!has_primitives()) {
         throw Exception("Must call update_primitives() before trace_rays()");
@@ -186,44 +185,38 @@ void RayTracer::trace_rays(
 
     CUDA_CHECK(cudaSetDevice(ctx_.device()));
 
-    // Allocate temporary buffer for last_prim
-    uint32_t* last_prim = nullptr;
-    CUDA_CHECK(cudaMalloc(&last_prim, num_rays * sizeof(uint32_t)));
+    // Input buffers
+    params_.ray_origins = {const_cast<float*>(ray_origins), num_rays};
+    params_.ray_directions = {const_cast<float*>(ray_directions), num_rays};
+    params_.tmax = {const_cast<float*>(tmax), num_rays};
+    params_.means = {prims_.means, prims_.num_prims};
+    params_.scales = {prims_.scales, prims_.num_prims};
+    params_.quats = {prims_.quats, prims_.num_prims};
+    params_.densities = {prims_.densities, prims_.num_prims};
+    params_.features = {prims_.features, prims_.num_prims * (sh_degree + 1) * (sh_degree + 1)};
 
-    // Setup params
+    // Output buffers
     params_.image = {color_out, num_rays};
     params_.depth_out = {depth_out, num_rays};
+    params_.last_state = {saved.states, num_rays};
+    params_.last_delta_contrib = {saved.delta_contribs, num_rays};
+    params_.iters = {saved.iters, num_rays};
+    params_.last_prim = {saved.last_prim, num_rays};
+    params_.prim_hits = {saved.prim_hits, prims_.num_prims};
+    params_.hit_collection = {saved.hit_collection, num_rays * max_iters};
+    CUDA_CHECK(cudaMemset(saved.initial_contrib, 0, num_rays * 4 * sizeof(float)));
+    params_.initial_contrib = {saved.initial_contrib, num_rays};
+
+    // Scalar parameters
     params_.sh_degree = sh_degree;
-    params_.max_prim_size = 3.0f;
     params_.max_iters = max_iters;
-    params_.ray_origins = {ray_origins, num_rays};
-    params_.ray_directions = {ray_directions, num_rays};
     params_.tmin = tmin;
-    params_.tmax = {tmax, num_rays};
-    params_.last_prim = {last_prim, num_rays};
+    params_.max_prim_size = 3.0f;
 
-    if (saved) {
-        params_.last_state = {saved->states, num_rays};
-        params_.last_delta_contrib = {saved->delta_contribs, num_rays};
-        params_.hit_collection = {saved->hit_collection, num_rays * max_iters};
-        params_.iters = {saved->iters, num_rays};
-        params_.prim_hits = {saved->prim_hits, prims_.num_prims};
-
-        CUDA_CHECK(cudaMemset(saved->initial_contrib, 0, num_rays * sizeof(float4)));
-        params_.initial_contrib = {saved->initial_contrib, num_rays};
-
-        init_ray_start_samples(&params_, accel_->aabbs(),
-                               saved->initial_prim_count,
-                               saved->initial_prim_indices);
-    } else {
-        params_.last_state = {nullptr, 0};
-        params_.last_delta_contrib = {nullptr, 0};
-        params_.hit_collection = {nullptr, 0};
-        params_.iters = {nullptr, 0};
-        params_.prim_hits = {nullptr, 0};
-        params_.initial_contrib = {nullptr, 0};
-    }
-
+    // Acceleration structure
+    init_ray_start_samples(accel_->aabbs(), &params_,
+                           saved.initial_prim_indices,
+                           saved.initial_prim_count);
     params_.handle = accel_->handle();
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,
                           sizeof(Params), cudaMemcpyHostToDevice));
@@ -233,15 +226,9 @@ void RayTracer::trace_rays(
 
     CUDA_SYNC_CHECK();
     CUDA_CHECK(cudaStreamSynchronize(0));
-
-    // Free temporary buffer
-    CUDA_CHECK(cudaFree(last_prim));
 }
 
 RayTracer::~RayTracer() {
-    // Note: Don't use CUDA_CHECK/OPTIX_CHECK in destructor - they may throw,
-    // but destructors are implicitly noexcept.
-
     if (d_param_)
         cudaFree(reinterpret_cast<void*>(std::exchange(d_param_, 0)));
     if (sbt_.raygenRecord)
@@ -261,7 +248,4 @@ RayTracer::~RayTracer() {
         optixProgramGroupDestroy(std::exchange(hitgroup_pg_, nullptr));
     if (module_)
         optixModuleDestroy(std::exchange(module_, nullptr));
-
-    // Note: DeviceContext is globally cached, not destroyed here
-    // AccelStructure is destroyed automatically via unique_ptr
 }
