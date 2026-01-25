@@ -33,10 +33,11 @@ struct StructuredBuffer {
 // =============================================================================
 
 /// Ellipsoid primitive geometry (GPU pointers)
+/// All vector data stored as scalar float arrays for safe torch tensor interop
 struct Primitives {
-    float3* means;
-    float3* scales;
-    float4* quats;        // quaternion (w,x,y,z)
+    float* means;         // (N, 3) flattened
+    float* scales;        // (N, 3) flattened
+    float* quats;         // (N, 4) flattened, quaternion (w,x,y,z)
     float* densities;
     size_t num_prims;
     float* features;      // SH coefficients
@@ -61,13 +62,14 @@ static_assert(sizeof(IntegratorState) == 48);
 static_assert(alignof(IntegratorState) == 16);
 
 /// State saved for backward gradient computation
+/// All vector data stored as scalar float arrays for safe torch tensor interop
 struct SavedState {
     IntegratorState* states;     // (M,) per-ray integrator state
-    float4* delta_contribs;      // (M,) last delta contribution
+    float* delta_contribs;       // (M, 4) flattened, last delta contribution
     uint32_t* iters;             // (M,) iteration count per ray
     uint32_t* prim_hits;         // (N,) hit count per primitive
     int32_t* hit_collection;     // (M * max_iters,) hit primitive indices
-    float4* initial_contrib;     // (M,) contribution for rays starting inside
+    float* initial_contrib;      // (M, 4) flattened, contribution for rays starting inside
     int32_t* initial_prim_indices; // (N,) primitives containing ray origins
     int32_t* initial_prim_count; // (1,) count of initial_prim_indices
 };
@@ -84,25 +86,25 @@ struct Camera {
 };
 
 struct Params {
-    // Output buffers
-    StructuredBuffer<float4> image;
+    // Output buffers (float4 stored as float* with size = num_rays * 4)
+    StructuredBuffer<float> image;
     StructuredBuffer<float> depth_out;
     StructuredBuffer<uint32_t> iters;
     StructuredBuffer<uint32_t> last_prim;
     StructuredBuffer<uint32_t> prim_hits;
-    StructuredBuffer<float4> last_delta_contrib;
+    StructuredBuffer<float> last_delta_contrib;
     StructuredBuffer<IntegratorState> last_state;
     StructuredBuffer<int32_t> hit_collection;
 
-    // Ray data
-    StructuredBuffer<float3> ray_origins;
-    StructuredBuffer<float3> ray_directions;
+    // Ray data (float3 stored as float* with size = num_rays * 3)
+    StructuredBuffer<float> ray_origins;
+    StructuredBuffer<float> ray_directions;
     Camera camera;
 
-    // Primitive data
-    StructuredBuffer<float3> means;
-    StructuredBuffer<float3> scales;
-    StructuredBuffer<float4> quats;
+    // Primitive data (float3/float4 stored as float*)
+    StructuredBuffer<float> means;
+    StructuredBuffer<float> scales;
+    StructuredBuffer<float> quats;
     StructuredBuffer<float> densities;
     StructuredBuffer<float> features;
 
@@ -111,7 +113,7 @@ struct Params {
     size_t max_iters;
     float tmin;
     StructuredBuffer<float> tmax;
-    StructuredBuffer<float4> initial_contrib;
+    StructuredBuffer<float> initial_contrib;
     float max_prim_size;
     OptixTraversableHandle handle;
 };

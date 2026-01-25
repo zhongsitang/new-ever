@@ -75,25 +75,25 @@ struct HitAttr {
 // Launch Parameters (set by host)
 // =============================================================================
 
-// Output buffers
-RWStructuredBuffer<float4>      image;              // Rendered RGBA output
+// Output buffers (float4 stored as flattened float arrays)
+RWStructuredBuffer<float>       image;              // Rendered RGBA output (N, 4) flattened
 RWStructuredBuffer<float>       depth_out;          // Rendered depth output
 RWStructuredBuffer<uint>        iters;              // Iteration count per ray
 RWStructuredBuffer<uint>        last_prim;          // Last primitive hit (for debugging)
 RWStructuredBuffer<uint>        prim_hits; // Hit count per primitive
-RWStructuredBuffer<float4>      last_delta_contrib; // Last sample delta contribution
+RWStructuredBuffer<float>       last_delta_contrib; // Last sample delta contribution (N, 4) flattened
 RWStructuredBuffer<IntegratorState> last_state;         // Final volume state per ray
 RWStructuredBuffer<int>         hit_collection;     // Collected hit IDs for backward pass
 
-// Input buffers
-StructuredBuffer<float3>        ray_origins;
-StructuredBuffer<float3>        ray_directions;
+// Input buffers (float3 stored as flattened float arrays)
+StructuredBuffer<float>         ray_origins;        // (N, 3) flattened
+StructuredBuffer<float>         ray_directions;     // (N, 3) flattened
 Camera                          camera;
 
-// Primitive data
-RWStructuredBuffer<float3>      means;      // Ellipsoid centers
-RWStructuredBuffer<float3>      scales;     // Ellipsoid radii
-RWStructuredBuffer<float4>      quats;      // Ellipsoid rotations (quaternion wxyz)
+// Primitive data (float3/float4 stored as flattened float arrays)
+RWStructuredBuffer<float>       means;      // Ellipsoid centers (N, 3) flattened
+RWStructuredBuffer<float>       scales;     // Ellipsoid radii (N, 3) flattened
+RWStructuredBuffer<float>       quats;      // Ellipsoid rotations (N, 4) flattened, quaternion wxyz
 RWStructuredBuffer<float>       densities;  // Ellipsoid densities
 RWStructuredBuffer<float>       features;   // SH coefficients for color
 
@@ -102,13 +102,36 @@ size_t sh_degree;                           // Spherical harmonics degree
 size_t max_iters;                           // Maximum iterations per ray
 float tmin;                                 // Minimum ray t
 StructuredBuffer<float>         tmax;       // Maximum ray t (per-ray)
-RWStructuredBuffer<float4>      initial_contrib;  // Initial accumulated contribution
+RWStructuredBuffer<float>       initial_contrib;  // Initial accumulated contribution (N, 4) flattened
 float max_prim_size;                        // Maximum primitive size (for acceleration)
 RaytracingAccelerationStructure traversable; // BVH acceleration structure
 
 // =============================================================================
 // Helper Functions
 // =============================================================================
+
+/// Load float3 from scalar buffer at given index
+float3 load_float3(StructuredBuffer<float> buf, uint idx) {
+    return float3(buf[idx * 3 + 0], buf[idx * 3 + 1], buf[idx * 3 + 2]);
+}
+
+/// Load float3 from RW scalar buffer at given index
+float3 load_float3_rw(RWStructuredBuffer<float> buf, uint idx) {
+    return float3(buf[idx * 3 + 0], buf[idx * 3 + 1], buf[idx * 3 + 2]);
+}
+
+/// Load float4 from RW scalar buffer at given index
+float4 load_float4_rw(RWStructuredBuffer<float> buf, uint idx) {
+    return float4(buf[idx * 4 + 0], buf[idx * 4 + 1], buf[idx * 4 + 2], buf[idx * 4 + 3]);
+}
+
+/// Store float4 to RW scalar buffer at given index
+void store_float4(RWStructuredBuffer<float> buf, uint idx, float4 val) {
+    buf[idx * 4 + 0] = val.x;
+    buf[idx * 4 + 1] = val.y;
+    buf[idx * 4 + 2] = val.z;
+    buf[idx * 4 + 3] = val.w;
+}
 
 /// Create a SamplePoint from a hit ID and t value.
 ///
@@ -155,9 +178,10 @@ void intersect_ellipsoid() {
     float3 rayd = WorldRayDirection();
     float3 rayo = WorldRayOrigin();
 
-    let mean = means[prim_index];
-    let scale = scales[prim_index];
-    let quat = quats[prim_index];
+    // Load primitive data from scalar arrays
+    let mean = load_float3_rw(means, prim_index);
+    let scale = load_float3_rw(scales, prim_index);
+    let quat = load_float4_rw(quats, prim_index);
     float2 t_entry_exit = ray_intersect_ellipsoid(rayo - mean, rayd, scale, quat);
 
     float cur_t = RayTMin();
@@ -263,15 +287,17 @@ void render_volume()
     const uint3 idx = DispatchRaysIndex();
     const uint3 dim = DispatchRaysDimensions();
 
-    // Initialize ray
-    float3 direction = l2_normalize(ray_directions[idx.x]);
-    float3 origin = ray_origins[idx.x] + tmin * ray_directions[idx.x];
+    // Initialize ray (load from scalar arrays)
+    float3 ray_dir_raw = load_float3(ray_directions, idx.x);
+    float3 direction = l2_normalize(ray_dir_raw);
+    float3 ray_origin = load_float3(ray_origins, idx.x);
+    float3 origin = ray_origin + tmin * ray_dir_raw;
     float ray_tmax = tmax[idx.x];  // Per-ray tmax
 
     // Initialize volume rendering state
     IntegratorState state = make_initial_state();
     state.t = 0;
-    state.accumulated_contrib = initial_contrib[idx.x];
+    state.accumulated_contrib = load_float4_rw(initial_contrib, idx.x);
 
     SamplePoint sample = {};
     uint last_hit_id = -1;
@@ -327,13 +353,13 @@ void render_volume()
 
     // Extract and output final color (RGBA) and depth
     let output = extract_color(state, tmin);
-    image[idx.x] = {output.C.x, output.C.y, output.C.z, output.alpha};
+    store_float4(image, idx.x, float4(output.C.x, output.C.y, output.C.z, output.alpha));
     depth_out[idx.x] = output.depth;
 
     // Save state for backward pass
     let dual_state = to_dual(state, sample);
     last_state[idx.x] = dual_state;
-    last_delta_contrib[idx.x] = sample.delta_contrib;
+    store_float4(last_delta_contrib, idx.x, sample.delta_contrib);
     last_prim[idx.x] = last_hit_id;
     iters[idx.x] = iter;
 }

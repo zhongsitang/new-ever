@@ -83,11 +83,11 @@ public:
         densities_ = densities;
         features_ = features;
 
-        // Update tracer
+        // Update tracer (use scalar float pointers for safe torch interop)
         Primitives prims = {
-            .means = data_ptr<float3>(means),
-            .scales = data_ptr<float3>(scales),
-            .quats = data_ptr<float4>(quats),
+            .means = data_ptr<float>(means),
+            .scales = data_ptr<float>(scales),
+            .quats = data_ptr<float>(quats),
             .densities = data_ptr<float>(densities),
             .num_prims = num_prims,
             .features = data_ptr<float>(features),
@@ -141,24 +141,24 @@ public:
         torch::Tensor initial_prim_indices = torch::zeros({(long)num_prims}, opts_i);
         torch::Tensor initial_prim_count = torch::zeros({1}, opts_i);
 
-        // Setup backward state
+        // Setup backward state (use scalar float pointers for safe torch interop)
         SavedState saved = {
             .states = data_ptr<IntegratorState>(states),
-            .delta_contribs = data_ptr<float4>(delta_contribs),
+            .delta_contribs = data_ptr<float>(delta_contribs),
             .iters = data_ptr<uint32_t>(iters),
             .prim_hits = data_ptr<uint32_t>(prim_hits),
             .hit_collection = data_ptr<int>(hit_collection),
-            .initial_contrib = data_ptr<float4>(initial_contrib),
+            .initial_contrib = data_ptr<float>(initial_contrib),
             .initial_prim_indices = data_ptr<int>(initial_prim_indices),
             .initial_prim_count = data_ptr<int>(initial_prim_count),
         };
 
-        // Trace rays
+        // Trace rays (use scalar float pointers for safe torch interop)
         tracer_->trace_rays(
             num_rays,
-            data_ptr<float3>(ray_origins),
-            data_ptr<float3>(ray_directions),
-            data_ptr<float4>(color),
+            data_ptr<float>(ray_origins),
+            data_ptr<float>(ray_directions),
+            data_ptr<float>(color),
             data_ptr<float>(depth),
             sh_degree,
             tmin,

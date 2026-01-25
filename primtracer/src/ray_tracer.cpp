@@ -170,9 +170,9 @@ void RayTracer::update_primitives(const Primitives& prims) {
 
 void RayTracer::trace_rays(
     size_t num_rays,
-    float3* ray_origins,
-    float3* ray_directions,
-    float4* color_out,
+    float* ray_origins,
+    float* ray_directions,
+    float* color_out,
     float* depth_out,
     uint32_t sh_degree,
     float tmin,
@@ -209,7 +209,7 @@ void RayTracer::trace_rays(
         params_.iters = {saved->iters, num_rays};
         params_.prim_hits = {saved->prim_hits, prims_.num_prims};
 
-        CUDA_CHECK(cudaMemset(saved->initial_contrib, 0, num_rays * sizeof(float4)));
+        CUDA_CHECK(cudaMemset(saved->initial_contrib, 0, num_rays * 4 * sizeof(float)));
         params_.initial_contrib = {saved->initial_contrib, num_rays};
 
         init_ray_start_samples(&params_, accel_->aabbs(),
