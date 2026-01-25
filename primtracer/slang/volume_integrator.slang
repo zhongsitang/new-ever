@@ -25,7 +25,6 @@
 // contribution of each ellipsoid segment along the ray.
 // =============================================================================
 
-#define EPS 1e-18
 import safe_math;
 
 // =============================================================================
@@ -46,19 +45,6 @@ struct IntegratorState : IDifferentiable
     float _pad;                  // padding to 48 bytes
 };
 
-/// Create initial volume state for a new ray.
-IntegratorState make_initial_state()
-{
-    IntegratorState state;
-    state.accumulated_contrib = float4(0.0f);
-    state.C = float4(0.0f);
-    state.logT = 0.0f;
-    state.depth_accum = 0.0f;
-    state.t = 0.0f;
-    state._pad = 0.0f;
-    return state;
-}
-
 /// Sample point along a ray, representing an ellipsoid boundary crossing.
 ///
 /// When a ray crosses an ellipsoid boundary:
@@ -72,35 +58,11 @@ struct SamplePoint : IDifferentiable
 }
 
 // =============================================================================
-// Utility Functions
-// =============================================================================
-
-bool AlmostEqualRelative(float A, float B,
-                         float maxRelDiff = 1.2e-7f)
-{
-    return abs(A - B) <= max(abs(A), abs(B)) * maxRelDiff;
-}
-
-/// Convert state to dual representation (for backward pass).
-IntegratorState to_dual(in IntegratorState state, in SamplePoint sample)
-{
-    IntegratorState dual_state = state;
-    return dual_state;
-}
-
-/// Convert state from dual representation.
-IntegratorState from_dual(in IntegratorState state, in SamplePoint sample)
-{
-    IntegratorState dual_state = state;
-    return dual_state;
-}
-
-// =============================================================================
 // Volume Integration
 // =============================================================================
 
 /// Inverse update for backward pass - computes previous state from current state.
-IntegratorState inverse_update_dual(
+IntegratorState inverse_update(
     in IntegratorState new_state,
     in SamplePoint new_sample,
     in SamplePoint sample,
@@ -135,7 +97,7 @@ IntegratorState inverse_update_dual(
     }
     else
     {
-        segment_depth_val = safe_div(1.f, avg.x) * (-safe_expm1(-area)) - (t + t_min) * safe_exp(-area) + (state.t + t_min);
+        segment_depth_val = safe_div(1.f, avg.x) * (-safe_expm1(-area)) - t * safe_exp(-area) + state.t;
     }
 
     const float segment_depth = max(segment_depth_val, 0.f);
@@ -144,14 +106,13 @@ IntegratorState inverse_update_dual(
     return state;
 }
 
-/// Update volume state with a new sample point (ellipsoid boundary crossing).
+/// Perform one volume integration step at an ellipsoid boundary.
 ///
-/// This is the core volume rendering integration step:
 /// 1. Accumulate the delta contribution from the boundary
 /// 2. Compute the opacity contribution from the segment
 /// 3. Update accumulated color weighted by transmittance
 [Differentiable]
-IntegratorState update(
+IntegratorState integrate_step(
     in IntegratorState state,
     in SamplePoint sample,
     no_diff in float t_min,
@@ -185,7 +146,7 @@ IntegratorState update(
     }
     else
     {
-        segment_depth_val = safe_div(1.f, avg.x) * (-safe_expm1(-area)) - (t + t_min) * safe_exp(-area) + (state.t + t_min);
+        segment_depth_val = safe_div(1.f, avg.x) * (-safe_expm1(-area)) - t * safe_exp(-area) + state.t;
     }
 
     const float segment_depth = max(segment_depth_val, 0.f);

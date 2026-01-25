@@ -65,16 +65,14 @@ class _PrimTracerFn(Function):
         ctx.save_for_backward(
             mean, scale, quat, density, features, rayo, rayd, tmax,
             out["states"], out["delta_contribs"], out["iters"],
-            out["hit_collection"], out["initial_contrib"],
-            out["initial_prim_indices"], out["initial_prim_count"],
+            out["hit_collection"],
         )
         return out["color"], out["depth"], out["iters"], out["hit_collection"], out["prim_hits"]
 
     @staticmethod
     def backward(ctx, dL_color, dL_depth, *_):
         mean, scale, quat, density, features, rayo, rayd, tmax, \
-            states, delta_contribs, iters, hit_collection, \
-            initial_contrib, initial_prim_indices, initial_prim_count = ctx.saved_tensors
+            states, delta_contribs, iters, hit_collection = ctx.saved_tensors
 
         N, M = mean.shape[0], rayo.shape[0]
         dev = mean.device
@@ -88,7 +86,6 @@ class _PrimTracerFn(Function):
             "features": torch.zeros_like(features),
             "rayo": torch.zeros(M, 3, device=dev),
             "rayd": torch.zeros(M, 3, device=dev),
-            "initial": torch.zeros(M, 4, device=dev),
         }
         prim_hits = torch.zeros(N, dtype=torch.int32, device=dev)
         grad = torch.cat([dL_color, dL_depth.view(-1, 1)], dim=1).contiguous()
@@ -98,20 +95,14 @@ class _PrimTracerFn(Function):
                     dL["mean"], dL["scale"], dL["quat"], dL["density"], dL["features"],
                     dL["rayo"], dL["rayd"])
 
+            # Unified backward pass - handles both normal hits and virtual entry hits
+            # for rays starting inside primitives
             _bw.backwards_kernel(
                 (16, 1, 1), (_div_up(M, 16), 1, 1),
                 states, delta_contribs, iters, hit_collection, rayo, rayd,
-                dual, initial_contrib, dL["initial"], prim_hits,
+                dual, prim_hits,
                 grad, ctx.tmin, tmax, 3.0, ctx.max_iters
             )
-
-            n_init = initial_prim_count.item()
-            if n_init > 0:
-                _bw.backwards_initial_contrib_kernel(
-                    (64, 16, 1), (_div_up(M, 64), _div_up(n_init, 16), 1),
-                    rayo, rayd, dual, initial_contrib, initial_prim_indices[:n_init],
-                    dL["initial"], prim_hits, ctx.tmin
-                )
 
         clip = 1e3
         return (

@@ -69,7 +69,6 @@ static_assert(sizeof(IntegratorState) == 48);
 static_assert(alignof(IntegratorState) == 16);
 
 /// State saved for backward gradient computation.
-/// All vector data stored as scalar float arrays for safe torch tensor interop.
 struct SavedState {
     IntegratorState* states;       // (M,) per-ray integrator state
     float* delta_contribs;         // (M, 4) flattened, last delta contribution
@@ -77,9 +76,6 @@ struct SavedState {
     int32_t* last_prim;            // (M,) last primitive hit per ray
     int32_t* prim_hits;            // (N,) hit count per primitive
     int32_t* hit_collection;       // (M * max_iters,) hit primitive indices
-    float* initial_contrib;        // (M, 4) flattened, contribution for rays starting inside
-    int32_t* initial_prim_indices; // (N,) primitives containing ray origins
-    int32_t* initial_prim_count;   // (1,) count of initial_prim_indices
 };
 
 // =============================================================================
@@ -118,7 +114,6 @@ struct LaunchParams {
     StructuredBuffer<int32_t> last_prim;
     StructuredBuffer<int32_t> prim_hits;
     StructuredBuffer<int32_t> hit_collection;
-    StructuredBuffer<float> initial_contrib;
 
     // --- Scalar parameters --------------------------------------------------
     int32_t num_prims;

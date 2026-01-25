@@ -136,12 +136,9 @@ public:
         torch::Tensor last_prim = torch::zeros({num_rays}, opts_i);
         torch::Tensor prim_hits = torch::zeros({num_prims}, opts_i);
         torch::Tensor hit_collection = torch::zeros({(num_rays * max_iters)}, opts_i);
-        torch::Tensor initial_contrib = torch::zeros({num_rays, 4}, opts_f);
-        torch::Tensor initial_prim_indices = torch::zeros({num_prims}, opts_i);
-        torch::Tensor initial_prim_count = torch::zeros({1}, opts_i);
 
-        // Setup backward state (use scalar float pointers for safe torch interop)
-        // Note: IntegratorState requires static_cast as PyTorch only supports basic types
+        // Setup backward state
+        // IntegratorState requires static_cast as PyTorch only supports basic types
         SavedState saved = {
             .states = static_cast<IntegratorState*>(states.data_ptr()),
             .delta_contribs = delta_contribs.data_ptr<float>(),
@@ -149,9 +146,6 @@ public:
             .last_prim = last_prim.data_ptr<int32_t>(),
             .prim_hits = prim_hits.data_ptr<int32_t>(),
             .hit_collection = hit_collection.data_ptr<int32_t>(),
-            .initial_contrib = initial_contrib.data_ptr<float>(),
-            .initial_prim_indices = initial_prim_indices.data_ptr<int32_t>(),
-            .initial_prim_count = initial_prim_count.data_ptr<int32_t>(),
         };
 
         // Trace rays (use scalar float pointers for safe torch interop)
@@ -175,10 +169,7 @@ public:
             "delta_contribs"_a = delta_contribs,
             "iters"_a = iters,
             "prim_hits"_a = prim_hits,
-            "hit_collection"_a = hit_collection,
-            "initial_contrib"_a = initial_contrib,
-            "initial_prim_indices"_a = initial_prim_indices,
-            "initial_prim_count"_a = initial_prim_count
+            "hit_collection"_a = hit_collection
         );
     }
 
@@ -258,7 +249,7 @@ Returns:
         - color: RGBA output, shape (M, 4)
         - depth: Expected depth, shape (M,)
         - states, delta_contribs, iters, prim_hits: Volume integrator state
-        - hit_collection, initial_contrib, initial_prim_indices, initial_prim_count: Hit data
+        - hit_collection: Collected hit IDs for backward pass
 )doc")
         .def("has_primitives", &PyRayTracer::has_primitives,
              "Returns True if primitives have been set via update_primitives()")

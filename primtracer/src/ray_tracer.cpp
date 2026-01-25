@@ -203,8 +203,6 @@ void RayTracer::trace_rays(
     params_.last_prim = {saved.last_prim, num_rays};
     params_.prim_hits = {saved.prim_hits, prims_.num_prims};
     params_.hit_collection = {saved.hit_collection, num_rays * max_iters};
-    CUDA_CHECK(cudaMemset(saved.initial_contrib, 0, num_rays * 4 * sizeof(float)));
-    params_.initial_contrib = {saved.initial_contrib, num_rays};
 
     // Scalar parameters
     params_.num_rays = num_rays;
@@ -212,10 +210,6 @@ void RayTracer::trace_rays(
     params_.max_iters = max_iters;
     params_.max_prim_size = 3.0f;
 
-    // Acceleration structure
-    init_ray_start_samples(accel_->aabbs(), &params_,
-                           saved.initial_prim_indices,
-                           saved.initial_prim_count);
     params_.handle = accel_->handle();
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,
                           sizeof(LaunchParams), cudaMemcpyHostToDevice));

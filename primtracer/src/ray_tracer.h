@@ -78,11 +78,6 @@ inline void optix_log_cb(unsigned int, const char*, const char*, void*) {}
 /// Compute axis-aligned bounding boxes for ellipsoid primitives.
 void compute_primitive_aabbs(const Primitives& prims, OptixAabb* aabbs);
 
-/// Initialize contributions for rays starting inside primitives.
-void init_ray_start_samples(const OptixAabb* aabbs, LaunchParams* params,
-                            int* d_hit_inds = nullptr,
-                            int* d_hit_count = nullptr);
-
 // =============================================================================
 // DeviceContext - Per-device OptiX context (globally cached)
 // =============================================================================

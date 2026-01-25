@@ -20,116 +20,31 @@
 // differentiable volume rendering of ellipsoid primitives.
 //
 // Hit ID encoding (same as forward pass):
-//   hit_id = prim_index * HITS_PER_PRIMITIVE + hit_type
+//   hit_id = (hit_type << HIT_ID_TYPE_SHIFT) | prim_index
 //   where hit_type: 1 = entry, 0 = exit
+// This encoding ensures exit sorts before entry at same t
 // =============================================================================
 
-#define HITS_PER_PRIMITIVE 2
 #define HIT_TYPE_EXIT 0
 #define HIT_TYPE_ENTRY 1
 
-import volume_integrator;
+static const uint HIT_ID_TYPE_SHIFT = 28;
+static const uint HIT_ID_PRIM_MASK = (1u << HIT_ID_TYPE_SHIFT) - 1;
+
+uint get_prim_idx(uint hit_id) { return hit_id & HIT_ID_PRIM_MASK; }
+uint get_hit_type(uint hit_id) { return hit_id >> HIT_ID_TYPE_SHIFT; }
+
+import tensor_utils;
 import ellipsoid_intersect;
-import safe_math;
+import volume_integrator;
 import spherical_harmonics;
 
 // =============================================================================
-// Tensor Utilities
+// Parameters
 // =============================================================================
 
-float3 get_float3(TensorView<float> view, uint ind) {
-    return {
-        view[ind, 0],
-        view[ind, 1],
-        view[ind, 2]
-    };
-}
-
-float3 get_float3(TensorView<float> view, uint ind, uint feat_ind) {
-    return {
-        view[ind, feat_ind, 0],
-        view[ind, feat_ind, 1],
-        view[ind, feat_ind, 2]
-    };
-}
-
-float4 get_float4(TensorView<float> view, uint ind) {
-    return {
-        view[ind, 0],
-        view[ind, 1],
-        view[ind, 2],
-        view[ind, 3]
-    };
-}
-
-Features get_feats(in TensorView<float> features, in uint prim_index, in uint sh_degree) {
-    Features feat;
-    feat.f0 = get_float3(features, prim_index, 0);
-    if (sh_degree > 0) {
-        feat.f1 = get_float3(features, prim_index, 1);
-        feat.f2 = get_float3(features, prim_index, 2);
-        feat.f3 = get_float3(features, prim_index, 3);
-        if (sh_degree > 1) {
-            feat.f4 = get_float3(features, prim_index, 4);
-            feat.f5 = get_float3(features, prim_index, 5);
-            feat.f6 = get_float3(features, prim_index, 6);
-            feat.f7 = get_float3(features, prim_index, 7);
-            feat.f8 = get_float3(features, prim_index, 8);
-            if (sh_degree > 2) {
-                feat.f9 = get_float3(features, prim_index, 9);
-                feat.f10 = get_float3(features, prim_index, 10);
-                feat.f11 = get_float3(features, prim_index, 11);
-                feat.f12 = get_float3(features, prim_index, 12);
-                feat.f13 = get_float3(features, prim_index, 13);
-                feat.f14 = get_float3(features, prim_index, 14);
-                feat.f15 = get_float3(features, prim_index, 15);
-            }
-        }
-    }
-    return feat;
-}
-
-void atomic_add_float3(TensorView<float> view, uint ind, uint feat_ind, float3 val) {
-    float temp;
-    view.InterlockedAdd(uint3(ind, feat_ind, 0u), val.x, temp);
-    view.InterlockedAdd(uint3(ind, feat_ind, 1u), val.y, temp);
-    view.InterlockedAdd(uint3(ind, feat_ind, 2u), val.z, temp);
-}
-
-void atomic_add_float3(TensorView<float> view, uint ind, float3 val) {
-    float temp;
-    view.InterlockedAdd(uint2(ind, 0u), val.x, temp);
-    view.InterlockedAdd(uint2(ind, 1u), val.y, temp);
-    view.InterlockedAdd(uint2(ind, 2u), val.z, temp);
-}
-
-void atomic_add_float4(TensorView<float> view, uint ind, float4 val) {
-    float temp;
-    view.InterlockedAdd(uint2(ind, 0u), val.x, temp);
-    view.InterlockedAdd(uint2(ind, 1u), val.y, temp);
-    view.InterlockedAdd(uint2(ind, 2u), val.z, temp);
-    view.InterlockedAdd(uint2(ind, 3u), val.w, temp);
-}
-
-/// Load IntegratorState from tensor (48 bytes = 12 floats).
-/// Layout: [0-3] accumulated_contrib, [4-7] C (w unused), [8] logT, [9] depth_accum, [10] t, [11] pad
-IntegratorState get_state(TensorView<float> view, uint ind) {
-    IntegratorState state;
-    state.accumulated_contrib = float4(view[ind, 0], view[ind, 1], view[ind, 2], view[ind, 3]);
-    state.C = float4(view[ind, 4], view[ind, 5], view[ind, 6], view[ind, 7]);
-    state.logT = view[ind, 8];
-    state.depth_accum = view[ind, 9];
-    state.t = view[ind, 10];
-    state._pad = view[ind, 11];
-    return state;
-}
-
-// =============================================================================
-// Gradient Model
-// =============================================================================
-
-/// Container for model parameters and their gradients.
-struct DualModel {
+/// Container for primitive parameters and their gradient outputs.
+struct Params {
     // Forward parameters
     TensorView<float> means;
     TensorView<float> scales;
@@ -152,9 +67,13 @@ struct DualModel {
 // =============================================================================
 
 /// Run backward pass for a single volume update step.
+///
+/// Uses intersect_clamped with t_clamp = tmin to handle rays starting inside primitives.
+/// The clamping ensures forward/backward consistency and naturally zeros geometry gradients
+/// for virtual entry hits.
 DifferentialPair<IntegratorState>
-run_update(in IntegratorState old_dual_state,
-           in SamplePoint old_sample,
+run_update(in IntegratorState prev_state,
+           in SamplePoint prev_sample,
            in SamplePoint sample,
            in uint prim_index,
            in uint hit_type,
@@ -166,20 +85,19 @@ run_update(in IntegratorState old_dual_state,
            in float tmax,
            in uint sh_degree,
            in float max_prim_size,
-           inout DualModel model)
+           inout Params params)
 {
-    var old_deriv_state = diffPair(from_dual(old_dual_state, old_sample), {});
+    var prev_deriv_state = diffPair(prev_state, {});
     var deriv_sample = diffPair(sample, {});
-    bool skip_close = false;
 
-    bwd_diff(update)(old_deriv_state, deriv_sample, tmin, tmax, max_prim_size, deriv_state.d);
+    bwd_diff(integrate_step)(prev_deriv_state, deriv_sample, tmin, tmax, max_prim_size, deriv_state.d);
 
     // Propagate gradients to primitive parameters
-    let mean = get_float3(model.means, prim_index);
-    let scale = get_float3(model.scales, prim_index);
-    let quat = get_float4(model.quats, prim_index);
-    let density = model.densities[prim_index];
-    Features feat = get_feats(model.features, prim_index, sh_degree);
+    let mean = get_float3(params.means, prim_index);
+    let scale = get_float3(params.scales, prim_index);
+    let quat = get_float4(params.quats, prim_index);
+    let density = params.densities[prim_index];
+    Features feat = get_feats(params.features, prim_index, sh_degree);
     float3 color = eval_color(direction, feat, sh_degree);
 
     var deriv_origin = diffPair(origin, {});
@@ -190,14 +108,16 @@ run_update(in IntegratorState old_dual_state,
     var deriv_color = diffPair(color, {});
     var deriv_density = diffPair(density, {});
 
-    bwd_diff(safe_intersect)(deriv_origin, deriv_direction,
-        deriv_scales, deriv_mean, deriv_quat, deriv_color, deriv_density, hit_type, skip_close, deriv_sample.d);
+    // Use t_clamp = tmin to match forward pass behavior for rays starting inside primitives
+    float t_clamp = tmin;
+    bwd_diff(intersect_clamped)(deriv_origin, deriv_direction,
+        deriv_scales, deriv_mean, deriv_quat, deriv_color, deriv_density, hit_type, t_clamp, deriv_sample.d);
 
-    atomic_add_float3(model.dL_dmeans, prim_index, deriv_mean.d);
-    atomic_add_float3(model.dL_dscales, prim_index, deriv_scales.d);
-    atomic_add_float4(model.dL_dquats, prim_index, deriv_quat.d);
+    atomic_add_float3(params.dL_dmeans, prim_index, deriv_mean.d);
+    atomic_add_float3(params.dL_dscales, prim_index, deriv_scales.d);
+    atomic_add_float4(params.dL_dquats, prim_index, deriv_quat.d);
     float temp;
-    model.dL_ddensities.InterlockedAdd(prim_index, deriv_density.d, temp);
+    params.dL_ddensities.InterlockedAdd(prim_index, deriv_density.d, temp);
 
     float3 d_rayd = deriv_direction.d;
     deriv_direction = diffPair(direction, {});
@@ -205,51 +125,59 @@ run_update(in IntegratorState old_dual_state,
     bwd_diff(eval_color)(deriv_direction, d_feat, sh_degree, deriv_color.d);
     d_rayd += deriv_direction.d;
 
-    atomic_add_float3(model.dL_dfeatures, prim_index, 0u, d_feat.d.f0);
+    atomic_add_float3(params.dL_dfeatures, prim_index, 0u, d_feat.d.f0);
     if (sh_degree > 0) {
-        atomic_add_float3(model.dL_dfeatures, prim_index, 1u, d_feat.d.f1);
-        atomic_add_float3(model.dL_dfeatures, prim_index, 2u, d_feat.d.f2);
-        atomic_add_float3(model.dL_dfeatures, prim_index, 3u, d_feat.d.f3);
+        atomic_add_float3(params.dL_dfeatures, prim_index, 1u, d_feat.d.f1);
+        atomic_add_float3(params.dL_dfeatures, prim_index, 2u, d_feat.d.f2);
+        atomic_add_float3(params.dL_dfeatures, prim_index, 3u, d_feat.d.f3);
         if (sh_degree > 1) {
-            atomic_add_float3(model.dL_dfeatures, prim_index, 4u, d_feat.d.f4);
-            atomic_add_float3(model.dL_dfeatures, prim_index, 5u, d_feat.d.f5);
-            atomic_add_float3(model.dL_dfeatures, prim_index, 6u, d_feat.d.f6);
-            atomic_add_float3(model.dL_dfeatures, prim_index, 7u, d_feat.d.f7);
-            atomic_add_float3(model.dL_dfeatures, prim_index, 8u, d_feat.d.f8);
+            atomic_add_float3(params.dL_dfeatures, prim_index, 4u, d_feat.d.f4);
+            atomic_add_float3(params.dL_dfeatures, prim_index, 5u, d_feat.d.f5);
+            atomic_add_float3(params.dL_dfeatures, prim_index, 6u, d_feat.d.f6);
+            atomic_add_float3(params.dL_dfeatures, prim_index, 7u, d_feat.d.f7);
+            atomic_add_float3(params.dL_dfeatures, prim_index, 8u, d_feat.d.f8);
             if (sh_degree > 2) {
-                atomic_add_float3(model.dL_dfeatures, prim_index, 9u, d_feat.d.f9);
-                atomic_add_float3(model.dL_dfeatures, prim_index, 10u, d_feat.d.f10);
-                atomic_add_float3(model.dL_dfeatures, prim_index, 11u, d_feat.d.f11);
-                atomic_add_float3(model.dL_dfeatures, prim_index, 12u, d_feat.d.f12);
-                atomic_add_float3(model.dL_dfeatures, prim_index, 13u, d_feat.d.f13);
-                atomic_add_float3(model.dL_dfeatures, prim_index, 14u, d_feat.d.f14);
-                atomic_add_float3(model.dL_dfeatures, prim_index, 15u, d_feat.d.f15);
+                atomic_add_float3(params.dL_dfeatures, prim_index, 9u, d_feat.d.f9);
+                atomic_add_float3(params.dL_dfeatures, prim_index, 10u, d_feat.d.f10);
+                atomic_add_float3(params.dL_dfeatures, prim_index, 11u, d_feat.d.f11);
+                atomic_add_float3(params.dL_dfeatures, prim_index, 12u, d_feat.d.f12);
+                atomic_add_float3(params.dL_dfeatures, prim_index, 13u, d_feat.d.f13);
+                atomic_add_float3(params.dL_dfeatures, prim_index, 14u, d_feat.d.f14);
+                atomic_add_float3(params.dL_dfeatures, prim_index, 15u, d_feat.d.f15);
             }
         }
     }
 
-    atomic_add_float3(model.dL_drayos, ray_ind, deriv_origin.d);
-    atomic_add_float3(model.dL_drayds, ray_ind, d_rayd);
+    atomic_add_float3(params.dL_drayos, ray_ind, deriv_origin.d);
+    atomic_add_float3(params.dL_drayds, ray_ind, d_rayd);
 
-    return old_deriv_state;
+    return prev_deriv_state;
 }
 
-/// Load sample point from a hit ID.
-SamplePoint load_sample(in uint hit_id, in DualModel model, in float3 origin, float3 direction, uint sh_degree, bool skip_close)
+/// Load sample point from a hit ID with t clamping for rays starting inside primitives.
+///
+/// The t_clamp parameter ensures consistency between forward (OptiX) and backward passes:
+/// - Forward: OptiX reports virtual entry hits at t = tmin for rays starting inside
+/// - Backward: intersect_clamped uses max(t_entry, tmin) to match this behavior
+///
+/// This unified approach handles both normal hits and "inside" hits correctly,
+/// with the max operation naturally zeroing gradients for geometry parameters
+/// when the ray starts inside a primitive.
+SamplePoint load_sample_clamped(in uint hit_id, in Params params, in float3 origin, float3 direction, uint sh_degree, float t_clamp)
 {
-    let prim_index = (uint)floor(hit_id / HITS_PER_PRIMITIVE);
-    let hit_type = mod(hit_id, HITS_PER_PRIMITIVE);
+    let prim_index = get_prim_idx(hit_id);
+    let hit_type = get_hit_type(hit_id);
 
-    let mean = get_float3(model.means, prim_index);
-    let scale = get_float3(model.scales, prim_index);
-    let quat = get_float4(model.quats, prim_index);
-    let density = model.densities[prim_index];
+    let mean = get_float3(params.means, prim_index);
+    let scale = get_float3(params.scales, prim_index);
+    let quat = get_float4(params.quats, prim_index);
+    let density = params.densities[prim_index];
 
-    Features feat = get_feats(model.features, prim_index, sh_degree);
+    Features feat = get_feats(params.features, prim_index, sh_degree);
     float3 color = eval_color(direction, feat, sh_degree);
 
-    return safe_intersect(origin, direction,
-        scale, mean, quat, color, density, hit_type, skip_close);
+    return intersect_clamped(origin, direction,
+        scale, mean, quat, color, density, hit_type, t_clamp);
 }
 
 // =============================================================================
@@ -257,6 +185,10 @@ SamplePoint load_sample(in uint hit_id, in DualModel model, in float3 origin, fl
 // =============================================================================
 
 /// Main backward pass kernel.
+///
+/// This unified kernel handles all hits including rays starting inside primitives.
+/// Virtual entry hits (rays starting inside) are processed the same as normal hits,
+/// with intersect_clamped ensuring correct gradient behavior.
 [AutoPyBindCUDA]
 [CUDAKernel]
 void backwards_kernel(
@@ -267,9 +199,7 @@ void backwards_kernel(
 
     TensorView<float> ray_origins,
     TensorView<float> ray_directions,
-    DualModel model,
-    TensorView<float> initial_contrib,
-    TensorView<float> dL_dinitial_contrib,
+    Params params,
     TensorView<int32_t> prim_hits,
 
     TensorView<float> dL_doutputs,  // (R, G, B, A, depth)
@@ -284,15 +214,12 @@ void backwards_kernel(
     if (ray_ind >= ray_origins.size(0)) {
         return;
     }
-    var dual_state = get_state(last_state, ray_ind);
+    var state = get_state(last_state, ray_ind);
     let direction = get_float3(ray_directions, ray_ind);
-    let origin = get_float3(ray_origins, ray_ind) + tmin*direction;
-    let ray_tmax = tmax[ray_ind];  // Per-ray tmax
-    bool skip_close = false;
+    let origin = get_float3(ray_origins, ray_ind);
+    let ray_tmax = tmax[ray_ind];
 
-    var deriv_state = diffPair(dual_state, {});
-    float start_t = dual_state.t;
-    let bw_origin = origin + dual_state.t * direction;
+    var deriv_state = diffPair(state, {});
 
     // dL_doutputs format: (R, G, B, A, depth)
     RenderOutput.Differential dL_doutput;
@@ -305,112 +232,47 @@ void backwards_kernel(
     var dtmin = diffPair(tmin, {});
     bwd_diff(extract_color)(deriv_state, dtmin, dL_doutput);
 
-    let feature_size = model.features.size(1);
+    let feature_size = params.features.size(1);
     let sh_degree = int(sqrt(feature_size))-1;
 
+    // t_clamp = tmin to match forward pass behavior for rays starting inside primitives
+    float t_clamp = tmin;
+
     uint hit_id = hit_collection[ray_ind + max(num_iters-1, 0) * ray_origins.size(0)];
-    SamplePoint sample = load_sample(hit_id, model, origin, direction, sh_degree, skip_close);
+    SamplePoint sample = load_sample_clamped(hit_id, params, origin, direction, sh_degree, t_clamp);
 
     // Iterate backward through hits
     for (int i=num_iters; i-->0; )
     {
-        uint old_hit_id;
-        SamplePoint old_sample;
+        uint prev_hit_id;
+        SamplePoint prev_sample;
         if (i-1 >= 0) {
-            old_hit_id = hit_collection[ray_ind + (i-1) * ray_origins.size(0)];
-            old_sample = load_sample(old_hit_id, model, origin, direction, sh_degree, skip_close);
+            prev_hit_id = hit_collection[ray_ind + (i-1) * ray_origins.size(0)];
+            prev_sample = load_sample_clamped(prev_hit_id, params, origin, direction, sh_degree, t_clamp);
         } else {
-            old_sample.t = 0;
-            old_sample.delta_contrib = {0.f, 0.f, 0.f, 0.f};
+            prev_sample.t = tmin;
+            prev_sample.delta_contrib = {0.f, 0.f, 0.f, 0.f};
         }
 
-        IntegratorState old_dual_state = inverse_update_dual(dual_state, sample, old_sample, tmin, ray_tmax);
+        IntegratorState prev_state = inverse_update(state, sample, prev_sample, tmin, ray_tmax);
 
-        let old_deriv_state = run_update(
-                old_dual_state,
-                old_sample,
+        let prev_deriv_state = run_update(
+                prev_state,
+                prev_sample,
                 sample,
-                (uint)floor(hit_id / HITS_PER_PRIMITIVE),
-                mod(hit_id, HITS_PER_PRIMITIVE),
+                get_prim_idx(hit_id),
+                get_hit_type(hit_id),
                 ray_ind,
                 deriv_state,
                 origin, direction, tmin, ray_tmax, sh_degree, max_prim_size,
-                model);
+                params);
         int itemp;
-        prim_hits.InterlockedAdd((uint)floor(hit_id / HITS_PER_PRIMITIVE), 1, itemp);
+        prim_hits.InterlockedAdd(get_prim_idx(hit_id), 1, itemp);
 
-        hit_id = old_hit_id;
-        dual_state = old_dual_state;
-        sample = old_sample;
+        hit_id = prev_hit_id;
+        state = prev_state;
+        sample = prev_sample;
 
-        deriv_state = diffPair(old_dual_state, old_deriv_state.d);
-    }
-    float temp;
-    dL_dinitial_contrib[ray_ind, 0u] = deriv_state.d.accumulated_contrib.x;
-    dL_dinitial_contrib[ray_ind, 1u] = deriv_state.d.accumulated_contrib.y;
-    dL_dinitial_contrib[ray_ind, 2u] = deriv_state.d.accumulated_contrib.z;
-    dL_dinitial_contrib[ray_ind, 3u] = deriv_state.d.accumulated_contrib.w;
-}
-
-/// Mix density and color into contribution vector.
-[Differentiable]
-float4 mix_contrib(float density, float3 color) {
-    return {density, density*color.x, density*color.y, density*color.z};
-}
-
-/// Backward pass for initial contribution (rays starting inside primitives).
-[AutoPyBindCUDA]
-[CUDAKernel]
-void backwards_initial_contrib_kernel(
-    TensorView<float> ray_origins,
-    TensorView<float> ray_directions,
-    DualModel model,
-    TensorView<float> initial_contrib,
-    TensorView<int32_t> initial_prim_indices,
-    TensorView<float> dL_dinitial_contrib,
-    TensorView<int32_t> prim_hits,
-    float tmin,
-)
-{
-    uint thread_j = cudaThreadIdx().x + cudaBlockIdx().x * cudaBlockDim().x;
-    uint thread_i = cudaThreadIdx().y + cudaBlockIdx().y * cudaBlockDim().y;
-    if (thread_i >= initial_prim_indices.size(0) || thread_j >= ray_directions.size(0))
-        return;
-
-    uint prim_index = initial_prim_indices[thread_i];
-    uint ray_ind = thread_j;
-
-    float3 mean = get_float3(model.means, prim_index);
-    float4 quat = get_float4(model.quats, prim_index);
-    float3 scales = get_float3(model.scales, prim_index);
-    float3 rayd = get_float3(ray_directions, ray_ind);
-    float3 rayo = get_float3(ray_origins, 0) + tmin * rayd;
-    float3 clip_scale = max(scales, 1e-8);
-
-    let R = quat2mat(safe_div(quat, length(quat)));
-
-    let Trayo = safe_div(mul(rayo - mean, R), clip_scale);
-    if (length(Trayo) <= 1) {
-        float temp;
-        let density = model.densities[prim_index];
-        int sh_degree = 0;
-        Features feat = get_feats(model.features, prim_index, sh_degree);
-        float3 color = eval_color(rayd, feat, sh_degree);
-        var deriv_color = diffPair(color, {});
-        var deriv_density = diffPair(density, {});
-        float4 vdL_dinitial_contrib = get_float4(dL_dinitial_contrib, ray_ind);
-        bwd_diff(mix_contrib)(deriv_density, deriv_color, vdL_dinitial_contrib);
-
-        model.dL_ddensities.InterlockedAdd(prim_index, deriv_density.d, temp);
-
-        var deriv_direction = diffPair(rayd, {});
-        var d_feat = diffPair(feat, {});
-        bwd_diff(eval_color)(deriv_direction, d_feat, sh_degree, deriv_color.d);
-        float3 dfeat = {
-            d_feat.d.f0.x,
-            d_feat.d.f0.y,
-            d_feat.d.f0.z
-        };
-        atomic_add_float3(model.dL_dfeatures, prim_index, 0, dfeat);
+        deriv_state = diffPair(prev_state, prev_deriv_state.d);
     }
 }
