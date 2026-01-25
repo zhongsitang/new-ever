@@ -85,16 +85,16 @@ RWStructuredBuffer<int>         hit_collection;     // Collected hit IDs for bac
 StructuredBuffer<float>         ray_origins;        // (N, 3) flattened
 StructuredBuffer<float>         ray_directions;     // (N, 3) flattened
 
-// Primitive data
-RWStructuredBuffer<float>       means;      // Ellipsoid centers (N, 3) flattened
-RWStructuredBuffer<float>       scales;     // Ellipsoid radii (N, 3) flattened
-RWStructuredBuffer<float>       quats;      // Ellipsoid rotations (N, 4) flattened, quaternion wxyz
-RWStructuredBuffer<float>       densities;  // Ellipsoid densities
-RWStructuredBuffer<float>       features;   // SH coefficients for color
+// Primitive data (read-only in shaders)
+StructuredBuffer<float>         means;      // Ellipsoid centers (N, 3) flattened
+StructuredBuffer<float>         scales;     // Ellipsoid radii (N, 3) flattened
+StructuredBuffer<float>         quats;      // Ellipsoid rotations (N, 4) flattened, quaternion wxyz
+StructuredBuffer<float>         densities;  // Ellipsoid densities
+StructuredBuffer<float>         features;   // SH coefficients for color
 
-// Per-ray parameters (StructuredBuffers moved here for alignment)
+// Per-ray parameters (read-only in shaders)
 StructuredBuffer<float>         tmax;               // Maximum ray t (per-ray)
-RWStructuredBuffer<float>       initial_contrib;    // Initial accumulated contribution (N, 4) flattened
+StructuredBuffer<float>         initial_contrib;    // Initial accumulated contribution (N, 4) flattened
 
 // Scalar parameters (4-byte aligned, grouped for 16-byte alignment)
 int sh_degree;                              // Spherical harmonics degree
@@ -106,7 +106,7 @@ float max_prim_size;                        // Maximum primitive size (for accel
 RaytracingAccelerationStructure traversable; // BVH acceleration structure
 
 // =============================================================================
-// Helper Functions (overloaded for StructuredBuffer and RWStructuredBuffer)
+// Helper Functions
 // =============================================================================
 
 /// Load float3 from scalar buffer at given index
@@ -114,16 +114,8 @@ float3 load_float3(StructuredBuffer<float> buf, uint idx) {
     return float3(buf[idx * 3 + 0], buf[idx * 3 + 1], buf[idx * 3 + 2]);
 }
 
-float3 load_float3(RWStructuredBuffer<float> buf, uint idx) {
-    return float3(buf[idx * 3 + 0], buf[idx * 3 + 1], buf[idx * 3 + 2]);
-}
-
 /// Load float4 from scalar buffer at given index
 float4 load_float4(StructuredBuffer<float> buf, uint idx) {
-    return float4(buf[idx * 4 + 0], buf[idx * 4 + 1], buf[idx * 4 + 2], buf[idx * 4 + 3]);
-}
-
-float4 load_float4(RWStructuredBuffer<float> buf, uint idx) {
     return float4(buf[idx * 4 + 0], buf[idx * 4 + 1], buf[idx * 4 + 2], buf[idx * 4 + 3]);
 }
 

@@ -33,7 +33,7 @@ static const float SH_C3[] = {
 struct SHFeatures {
   int idx;
   int max_deg;
-  RWStructuredBuffer<float> shs;
+  StructuredBuffer<float> shs;
 };
 
 float3 get_sh(in SHFeatures feats, int deg) {
@@ -124,7 +124,7 @@ static const half SH_C3_HALF[] = {
 struct HalfSHFeatures {
   int idx;
   int max_deg;
-  RWStructuredBuffer<half> shs;
+  StructuredBuffer<half> shs;
 };
 
 half3 get_sh(in HalfSHFeatures feats, int deg) {
