@@ -65,7 +65,6 @@ public:
         CHECK_DEVICE(densities, device_); CHECK_FLOAT(densities);
 
         const int32_t num_prims = static_cast<int32_t>(means.size(0));
-        const int32_t feature_size = static_cast<int32_t>(features.size(1));
 
         TORCH_CHECK(scales.size(0) == (long)num_prims, "scales must match means count");
         TORCH_CHECK(quats.size(0) == (long)num_prims, "quats must match means count");
@@ -87,7 +86,6 @@ public:
             .densities = densities.data_ptr<float>(),
             .features = features.data_ptr<float>(),
             .num_prims = num_prims,
-            .feature_size = feature_size,
         };
         tracer_->update_primitives(prims);
     }

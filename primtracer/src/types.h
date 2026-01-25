@@ -40,9 +40,8 @@ struct Primitives {
     float* scales;        // (N, 3) flattened
     float* quats;         // (N, 4) flattened, quaternion (w,x,y,z)
     float* densities;
-    float* features;      // SH coefficients
+    float* features;      // SH coefficients, size = num_prims * (sh_degree+1)^2 * 3
     int32_t num_prims;
-    int32_t feature_size;
 };
 
 // =============================================================================

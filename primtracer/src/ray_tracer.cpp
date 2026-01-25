@@ -160,12 +160,11 @@ void RayTracer::update_primitives(const Primitives& prims) {
     prims_ = prims;
     accel_->rebuild(prims);
 
-    // Update params with model data
+    // Update params with model data (features set in trace_rays with sh_degree)
     params_.means = {prims_.means, prims_.num_prims};
     params_.scales = {prims_.scales, prims_.num_prims};
     params_.quats = {prims_.quats, prims_.num_prims};
     params_.densities = {prims_.densities, prims_.num_prims};
-    params_.features = {prims_.features, prims_.num_prims * prims_.feature_size};
 }
 
 void RayTracer::trace_rays(
@@ -194,6 +193,7 @@ void RayTracer::trace_rays(
     params_.image = {color_out, num_rays};
     params_.depth_out = {depth_out, num_rays};
     params_.sh_degree = sh_degree;
+    params_.features = {prims_.features, prims_.num_prims * (sh_degree + 1) * (sh_degree + 1)};
     params_.max_prim_size = 3.0f;
     params_.max_iters = max_iters;
     params_.ray_origins = {ray_origins, num_rays};
