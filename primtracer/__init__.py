@@ -91,7 +91,8 @@ class _PrimTracerFn(Function):
         grad = torch.cat([dL_color, dL_depth.view(-1, 1)], dim=1).contiguous()
 
         if iters.sum() > 0:
-            dual = (mean, scale, quat, density, features,
+            dual = (mean.contiguous(), scale.contiguous(), quat.contiguous(),
+                    density.contiguous(), features.contiguous(),
                     dL["mean"], dL["scale"], dL["quat"], dL["density"], dL["features"],
                     dL["rayo"], dL["rayd"])
 
