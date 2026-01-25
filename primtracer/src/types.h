@@ -46,16 +46,17 @@ static_assert(alignof(StructuredBuffer<float>) == 8);
 // Primitive Data
 // =============================================================================
 
-/// Ellipsoid primitive geometry (GPU pointers)
-/// Note: Uses uint64_t instead of size_t for ABI stability.
+/// Ellipsoid primitive geometry (GPU device pointers)
+/// All float3/float4 data uses scalar packing (xyzxyz... / xyzwxyzw...)
+/// for ABI stability and consistent stride across C++/Slang.
 struct Primitives {
-    float3* means;
-    float3* scales;
-    float4* quats;        // quaternion (w,x,y,z)
-    float* densities;
-    uint64_t num_prims;
-    float* features;      // SH coefficients
-    uint64_t feature_size;
+    float* means;         // Ellipsoid centers, scalar packed (x,y,z,x,y,z,...)
+    float* scales;        // Ellipsoid radii, scalar packed (x,y,z,x,y,z,...)
+    float* quats;         // Quaternions (w,x,y,z), scalar packed
+    float* densities;     // Per-primitive density
+    float* features;      // SH coefficients, layout: [num_prims, feature_size, 3]
+    int32_t num_prims;    // Number of primitives
+    int32_t feature_size; // Number of SH features per primitive
 };
 
 // =============================================================================
@@ -121,15 +122,15 @@ struct Params {
     StructuredBuffer<IntegratorState> last_state;
     StructuredBuffer<int32_t> hit_collection;
 
-    // Ray data
-    StructuredBuffer<float3> ray_origins;
-    StructuredBuffer<float3> ray_directions;
+    // Ray data (scalar packed: xyzxyz...)
+    StructuredBuffer<float> ray_origins;
+    StructuredBuffer<float> ray_directions;
     Camera camera;
 
-    // Primitive data (means/scales use scalar packing: xyzxyz... to save VRAM)
-    StructuredBuffer<float> means;
-    StructuredBuffer<float> scales;
-    StructuredBuffer<float4> quats;
+    // Primitive data (all use scalar packing for ABI stability)
+    StructuredBuffer<float> means;      // xyzxyz...
+    StructuredBuffer<float> scales;     // xyzxyz...
+    StructuredBuffer<float> quats;      // wxyzwxyz...
     StructuredBuffer<float> densities;
     StructuredBuffer<float> features;
 

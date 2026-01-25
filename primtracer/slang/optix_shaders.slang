@@ -96,17 +96,17 @@ RWStructuredBuffer<float4>          last_delta_contrib; // Last sample delta con
 RWStructuredBuffer<IntegratorState> last_state;         // Final volume state per ray
 RWStructuredBuffer<int>             hit_collection;     // Collected hit IDs for backward pass
 
-// Input buffers
-StructuredBuffer<float3>            ray_origins;
-StructuredBuffer<float3>            ray_directions;
+// Input buffers (scalar packed: xyzxyz...)
+StructuredBuffer<float>             ray_origins;
+StructuredBuffer<float>             ray_directions;
 Camera                              camera;
 
-// Primitive data (means/scales use scalar packing: xyzxyz... to save VRAM)
-RWStructuredBuffer<float>           means;              // Ellipsoid centers (scalar packed)
-RWStructuredBuffer<float>           scales;             // Ellipsoid radii (scalar packed)
-RWStructuredBuffer<float4>          quats;              // Ellipsoid rotations (quaternion wxyz)
-RWStructuredBuffer<float>           densities;          // Ellipsoid densities
-RWStructuredBuffer<float>           features;           // SH coefficients for color
+// Primitive data (all use scalar packing for ABI stability)
+RWStructuredBuffer<float>           means;              // xyzxyz...
+RWStructuredBuffer<float>           scales;             // xyzxyz...
+RWStructuredBuffer<float>           quats;              // wxyzwxyz...
+RWStructuredBuffer<float>           densities;
+RWStructuredBuffer<float>           features;
 
 // Rendering parameters (grouped by size to minimize padding)
 int                                 sh_degree;          // Spherical harmonics degree
@@ -160,8 +160,18 @@ SamplePoint create_sample(uint hit_id, float t) {
 // =============================================================================
 
 /// Load float3 from scalar-packed buffer (xyzxyz... layout)
-float3 load_float3(RWStructuredBuffer<float> buf, uint idx) {
+float3 get_float3(RWStructuredBuffer<float> buf, uint idx) {
     return float3(buf[idx * 3], buf[idx * 3 + 1], buf[idx * 3 + 2]);
+}
+
+/// Load float3 from read-only scalar-packed buffer
+float3 get_float3(StructuredBuffer<float> buf, uint idx) {
+    return float3(buf[idx * 3], buf[idx * 3 + 1], buf[idx * 3 + 2]);
+}
+
+/// Load float4 from scalar-packed buffer (xyzwxyzw... layout)
+float4 get_float4(RWStructuredBuffer<float> buf, uint idx) {
+    return float4(buf[idx * 4], buf[idx * 4 + 1], buf[idx * 4 + 2], buf[idx * 4 + 3]);
 }
 
 /// Intersection shader: computes ray-ellipsoid intersection.
@@ -175,9 +185,9 @@ void intersect_ellipsoid() {
     float3 rayd = WorldRayDirection();
     float3 rayo = WorldRayOrigin();
 
-    let mean = load_float3(means, prim_index);
-    let scale = load_float3(scales, prim_index);
-    let quat = quats[prim_index];
+    let mean = get_float3(means, prim_index);
+    let scale = get_float3(scales, prim_index);
+    let quat = get_float4(quats, prim_index);
     float2 t_entry_exit = ray_intersect_ellipsoid(rayo - mean, rayd, scale, quat);
 
     float cur_t = RayTMin();
@@ -295,8 +305,8 @@ void render_volume()
     }
 
     // Initialize ray
-    float3 direction = l2_normalize(ray_directions[idx.x]);
-    float3 origin = ray_origins[idx.x] + tmin * ray_directions[idx.x];
+    float3 direction = l2_normalize(get_float3(ray_directions, idx.x));
+    float3 origin = get_float3(ray_origins, idx.x) + tmin * direction;
     float ray_tmax = tmax[idx.x];  // Per-ray tmax
 
     // Initialize volume rendering state

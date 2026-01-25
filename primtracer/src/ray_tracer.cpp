@@ -163,12 +163,12 @@ void RayTracer::update_primitives(const Primitives& prims) {
     prims_ = prims;
     accel_->rebuild(prims);
 
-    // Update params with model data (means/scales use scalar packing: xyzxyz...)
-    params_.means = {reinterpret_cast<float*>(prims_.means), prims_.num_prims * 3};
-    params_.scales = {reinterpret_cast<float*>(prims_.scales), prims_.num_prims * 3};
-    params_.quats = {prims_.quats, prims_.num_prims};
-    params_.densities = {prims_.densities, prims_.num_prims};
-    params_.features = {prims_.features, prims_.num_prims * prims_.feature_size};
+    // Update params with model data (all use scalar packing)
+    params_.means = {prims_.means, static_cast<uint64_t>(prims_.num_prims) * 3};
+    params_.scales = {prims_.scales, static_cast<uint64_t>(prims_.num_prims) * 3};
+    params_.quats = {prims_.quats, static_cast<uint64_t>(prims_.num_prims) * 4};
+    params_.densities = {prims_.densities, static_cast<uint64_t>(prims_.num_prims)};
+    params_.features = {prims_.features, static_cast<uint64_t>(prims_.num_prims) * prims_.feature_size};
 }
 
 void RayTracer::trace_rays(
@@ -199,8 +199,8 @@ void RayTracer::trace_rays(
     params_.sh_degree = sh_degree;
     params_.max_prim_size = 3.0f;
     params_.max_iters = max_iters;
-    params_.ray_origins = {ray_origins, num_rays};
-    params_.ray_directions = {ray_directions, num_rays};
+    params_.ray_origins = {reinterpret_cast<float*>(ray_origins), num_rays * 3};
+    params_.ray_directions = {reinterpret_cast<float*>(ray_directions), num_rays * 3};
     params_.tmin = tmin;
     params_.tmax = {tmax, num_rays};
     params_.last_prim = {last_prim, num_rays};
