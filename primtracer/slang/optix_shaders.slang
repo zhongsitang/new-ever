@@ -51,14 +51,6 @@ import spherical_harmonics;
 // Data Structures
 // =============================================================================
 
-struct Camera {
-    float fx, fy;
-    int height;
-    int width;
-    float3 U, V, W;
-    float3 eye;
-};
-
 /// Buffer for collecting and sorting ray-primitive intersections.
 /// Maintains hits sorted by t value for front-to-back traversal.
 struct HitBuffer {
@@ -78,17 +70,16 @@ struct HitAttr {
 // Output buffers (float4 stored as flattened float arrays)
 RWStructuredBuffer<float>       image;              // Rendered RGBA output (N, 4) flattened
 RWStructuredBuffer<float>       depth_out;          // Rendered depth output
-RWStructuredBuffer<uint>        iters;              // Iteration count per ray
-RWStructuredBuffer<uint>        last_prim;          // Last primitive hit (for debugging)
-RWStructuredBuffer<uint>        prim_hits; // Hit count per primitive
+RWStructuredBuffer<int>         iters;              // Iteration count per ray
+RWStructuredBuffer<int>         last_prim;          // Last primitive hit (for debugging)
+RWStructuredBuffer<int>         prim_hits;          // Hit count per primitive
 RWStructuredBuffer<float>       last_delta_contrib; // Last sample delta contribution (N, 4) flattened
-RWStructuredBuffer<IntegratorState> last_state;         // Final volume state per ray
+RWStructuredBuffer<IntegratorState> last_state;     // Final volume state per ray
 RWStructuredBuffer<int>         hit_collection;     // Collected hit IDs for backward pass
 
 // Input buffers (float3 stored as flattened float arrays)
 StructuredBuffer<float>         ray_origins;        // (N, 3) flattened
 StructuredBuffer<float>         ray_directions;     // (N, 3) flattened
-Camera                          camera;
 
 // Primitive data (float3/float4 stored as flattened float arrays)
 RWStructuredBuffer<float>       means;      // Ellipsoid centers (N, 3) flattened
@@ -97,9 +88,9 @@ RWStructuredBuffer<float>       quats;      // Ellipsoid rotations (N, 4) flatte
 RWStructuredBuffer<float>       densities;  // Ellipsoid densities
 RWStructuredBuffer<float>       features;   // SH coefficients for color
 
-// Rendering parameters
-size_t sh_degree;                           // Spherical harmonics degree
-size_t max_iters;                           // Maximum iterations per ray
+// Rendering parameters (using int for stable cross-platform ABI)
+int sh_degree;                              // Spherical harmonics degree
+int max_iters;                              // Maximum iterations per ray
 float tmin;                                 // Minimum ray t
 StructuredBuffer<float>         tmax;       // Maximum ray t (per-ray)
 RWStructuredBuffer<float>       initial_contrib;  // Initial accumulated contribution (N, 4) flattened

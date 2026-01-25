@@ -68,8 +68,8 @@ public:
         CHECK_CUDA(densities); CHECK_CONTIGUOUS(densities);
         CHECK_DEVICE(densities, device_); CHECK_FLOAT(densities);
 
-        const size_t num_prims = means.size(0);
-        const size_t feature_size = features.size(1);
+        const int32_t num_prims = static_cast<int32_t>(means.size(0));
+        const int32_t feature_size = static_cast<int32_t>(features.size(1));
 
         TORCH_CHECK(scales.size(0) == (long)num_prims, "scales must match means count");
         TORCH_CHECK(quats.size(0) == (long)num_prims, "quats must match means count");
@@ -101,7 +101,7 @@ public:
         const torch::Tensor& ray_directions,
         float tmin,
         const torch::Tensor& tmax,
-        size_t max_iters)
+        int32_t max_iters)
     {
         torch::AutoGradMode enable_grad(false);
 
@@ -115,10 +115,10 @@ public:
         CHECK_CUDA(tmax); CHECK_CONTIGUOUS(tmax);
         CHECK_DEVICE(tmax, device_); CHECK_FLOAT(tmax);
 
-        const size_t num_rays = ray_origins.size(0);
-        const size_t num_prims = tracer_->num_prims();
-        const size_t feature_size = features_.size(1);
-        const auto sh_degree = static_cast<uint32_t>(sqrt(feature_size)) - 1;
+        const int32_t num_rays = static_cast<int32_t>(ray_origins.size(0));
+        const int32_t num_prims = tracer_->num_prims();
+        const int32_t feature_size = static_cast<int32_t>(features_.size(1));
+        const int32_t sh_degree = static_cast<int32_t>(sqrt(feature_size)) - 1;
 
         TORCH_CHECK(ray_directions.size(0) == (long)num_rays, "ray_directions must match ray_origins count");
         TORCH_CHECK(tmax.numel() == (long)num_rays, "tmax must have one value per ray");
@@ -145,12 +145,12 @@ public:
         SavedState saved = {
             .states = data_ptr<IntegratorState>(states),
             .delta_contribs = data_ptr<float>(delta_contribs),
-            .iters = data_ptr<uint32_t>(iters),
-            .prim_hits = data_ptr<uint32_t>(prim_hits),
-            .hit_collection = data_ptr<int>(hit_collection),
+            .iters = data_ptr<int32_t>(iters),
+            .prim_hits = data_ptr<int32_t>(prim_hits),
+            .hit_collection = data_ptr<int32_t>(hit_collection),
             .initial_contrib = data_ptr<float>(initial_contrib),
-            .initial_prim_indices = data_ptr<int>(initial_prim_indices),
-            .initial_prim_count = data_ptr<int>(initial_prim_count),
+            .initial_prim_indices = data_ptr<int32_t>(initial_prim_indices),
+            .initial_prim_count = data_ptr<int32_t>(initial_prim_count),
         };
 
         // Trace rays (use scalar float pointers for safe torch interop)
@@ -183,7 +183,7 @@ public:
     }
 
     bool has_primitives() const { return tracer_->has_primitives(); }
-    size_t num_prims() const { return tracer_->num_prims(); }
+    int32_t num_prims() const { return tracer_->num_prims(); }
     int device_index() const { return tracer_->device_index(); }
 
 private:

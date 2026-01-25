@@ -311,20 +311,20 @@ public:
     /// Requires update_primitives() to be called first.
     /// All vector parameters use scalar float arrays for safe torch tensor interop.
     void trace_rays(
-        size_t num_rays,
+        int32_t num_rays,
         float* ray_origins,      // (num_rays, 3) flattened
         float* ray_directions,   // (num_rays, 3) flattened
         float* color_out,        // (num_rays, 4) flattened
         float* depth_out,
-        uint32_t sh_degree,
+        int32_t sh_degree,
         float tmin,
         float* tmax,
-        size_t max_iters,
+        int32_t max_iters,
         SavedState* saved
     );
 
     bool has_primitives() const { return prims_.num_prims > 0; }
-    size_t num_prims() const { return prims_.num_prims; }
+    int32_t num_prims() const { return prims_.num_prims; }
     int device_index() const { return ctx_.device(); }
 
 private:

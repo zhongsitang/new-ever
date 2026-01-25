@@ -110,11 +110,11 @@ __global__ void compute_primitive_bounds_kernel(
     const float* __restrict__ means,
     const float* __restrict__ scales,
     const float* __restrict__ quats,
-    size_t num_prims,
+    int num_prims,
     OptixAabb* __restrict__ aabbs)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= (int)num_prims) return;
+    if (i >= num_prims) return;
 
     // Load float3 from scalar array
     float3 center = make_float3(means[i * 3 + 0], means[i * 3 + 1], means[i * 3 + 2]);
@@ -138,7 +138,7 @@ __global__ void compute_primitive_bounds_kernel(
 }
 
 void compute_primitive_aabbs(const Primitives& prims, OptixAabb* aabbs) {
-    size_t grid = (prims.num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int grid = (prims.num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
     compute_primitive_bounds_kernel<<<grid, BLOCK_SIZE>>>(
         prims.means,
         prims.scales,
@@ -156,14 +156,14 @@ namespace {
 // Find primitives within tmin distance of ray origin
 __global__ void find_enclosing_primitives_kernel(
     const OptixAabb* __restrict__ aabbs,
-    size_t num_prims,
+    int num_prims,
     float tmin,
     const float* __restrict__ ray_origins,
     int* __restrict__ hit_indices,
     int* __restrict__ hit_count)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= (int)num_prims) return;
+    if (i >= num_prims) return;
 
     OptixAabb aabb = aabbs[i];
     // Load first ray origin from scalar array
@@ -191,7 +191,7 @@ __global__ void accumulate_initial_samples_kernel(
     const float* __restrict__ quats,
     const float* __restrict__ densities,
     const float* __restrict__ features,
-    size_t num_rays,
+    int num_rays,
     float tmin,
     const float* __restrict__ ray_origins,
     const float* __restrict__ ray_directions,
@@ -201,7 +201,7 @@ __global__ void accumulate_initial_samples_kernel(
 {
     int ray_idx = blockIdx.x * blockDim.x + threadIdx.x;
     int hit_idx = blockIdx.y * blockDim.y + threadIdx.y;
-    if (hit_idx >= *hit_count || ray_idx >= (int)num_rays) return;
+    if (hit_idx >= *hit_count || ray_idx >= num_rays) return;
 
     // Load ray data from scalar arrays
     float3 ray_origin = make_float3(
@@ -237,12 +237,12 @@ __global__ void accumulate_initial_samples_single_kernel(
     const float* __restrict__ quats,
     const float* __restrict__ densities,
     const float* __restrict__ features,
-    size_t num_prims,
+    int num_prims,
     const float* __restrict__ ray_origin,
     float* __restrict__ initial_contrib)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= (int)num_prims) return;
+    if (i >= num_prims) return;
 
     // Load ray origin from scalar array
     float3 origin = make_float3(ray_origin[0], ray_origin[1], ray_origin[2]);
@@ -280,9 +280,9 @@ void init_ray_start_samples(Params* params, OptixAabb* aabbs,
     cudaMemset(d_hit_count, 0, sizeof(int));
 
     // Phase 1: find enclosing primitives
-    size_t grid = (num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int grid = (num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
     find_enclosing_primitives_kernel<<<grid, BLOCK_SIZE>>>(
-        aabbs, (size_t)num_prims, params->tmin,
+        aabbs, num_prims, params->tmin,
         params->ray_origins.data,
         d_hit_inds, d_hit_count);
 
@@ -300,7 +300,7 @@ void init_ray_start_samples(Params* params, OptixAabb* aabbs,
             params->scales.data,
             params->quats.data,
             params->densities.data, params->features.data,
-            (size_t)num_rays, params->tmin,
+            num_rays, params->tmin,
             params->ray_origins.data,
             params->ray_directions.data,
             params->initial_contrib.data,
@@ -316,14 +316,14 @@ void init_ray_start_samples(Params* params, OptixAabb* aabbs,
 
 void init_ray_start_samples_single(Params* params) {
     int num_prims = params->means.size;
-    size_t grid = (num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int grid = (num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
     accumulate_initial_samples_single_kernel<<<grid, BLOCK_SIZE>>>(
         params->means.data,
         params->scales.data,
         params->quats.data,
         params->densities.data, params->features.data,
-        (size_t)num_prims,
+        num_prims,
         params->ray_origins.data,
         params->initial_contrib.data);
     CUDA_SYNC_CHECK();

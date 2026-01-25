@@ -21,11 +21,12 @@
 // Basic Types
 // =============================================================================
 
-/// Slang StructuredBuffer layout: {T* data, size_t size}
+/// Slang StructuredBuffer layout: {T* data, int32_t size}
+/// Using int32_t for stable cross-platform ABI with Slang
 template <typename T>
 struct StructuredBuffer {
     T* data;
-    size_t size;
+    int32_t size;
 };
 
 // =============================================================================
@@ -39,9 +40,9 @@ struct Primitives {
     float* scales;        // (N, 3) flattened
     float* quats;         // (N, 4) flattened, quaternion (w,x,y,z)
     float* densities;
-    size_t num_prims;
+    int32_t num_prims;
     float* features;      // SH coefficients
-    size_t feature_size;
+    int32_t feature_size;
 };
 
 // =============================================================================
@@ -66,8 +67,8 @@ static_assert(alignof(IntegratorState) == 16);
 struct SavedState {
     IntegratorState* states;     // (M,) per-ray integrator state
     float* delta_contribs;       // (M, 4) flattened, last delta contribution
-    uint32_t* iters;             // (M,) iteration count per ray
-    uint32_t* prim_hits;         // (N,) hit count per primitive
+    int32_t* iters;              // (M,) iteration count per ray
+    int32_t* prim_hits;          // (N,) hit count per primitive
     int32_t* hit_collection;     // (M * max_iters,) hit primitive indices
     float* initial_contrib;      // (M, 4) flattened, contribution for rays starting inside
     int32_t* initial_prim_indices; // (N,) primitives containing ray origins
@@ -78,20 +79,13 @@ struct SavedState {
 // OptiX Launch Parameters (must match slang layout)
 // =============================================================================
 
-struct Camera {
-    float fx, fy;
-    int height, width;
-    float3 U, V, W;
-    float3 eye;
-};
-
 struct Params {
     // Output buffers (float4 stored as float* with size = num_rays * 4)
     StructuredBuffer<float> image;
     StructuredBuffer<float> depth_out;
-    StructuredBuffer<uint32_t> iters;
-    StructuredBuffer<uint32_t> last_prim;
-    StructuredBuffer<uint32_t> prim_hits;
+    StructuredBuffer<int32_t> iters;
+    StructuredBuffer<int32_t> last_prim;
+    StructuredBuffer<int32_t> prim_hits;
     StructuredBuffer<float> last_delta_contrib;
     StructuredBuffer<IntegratorState> last_state;
     StructuredBuffer<int32_t> hit_collection;
@@ -99,7 +93,6 @@ struct Params {
     // Ray data (float3 stored as float* with size = num_rays * 3)
     StructuredBuffer<float> ray_origins;
     StructuredBuffer<float> ray_directions;
-    Camera camera;
 
     // Primitive data (float3/float4 stored as float*)
     StructuredBuffer<float> means;
@@ -108,9 +101,9 @@ struct Params {
     StructuredBuffer<float> densities;
     StructuredBuffer<float> features;
 
-    // Render settings
-    size_t sh_degree;
-    size_t max_iters;
+    // Render settings (using int32_t for stable Slang interop)
+    int32_t sh_degree;
+    int32_t max_iters;
     float tmin;
     StructuredBuffer<float> tmax;
     StructuredBuffer<float> initial_contrib;

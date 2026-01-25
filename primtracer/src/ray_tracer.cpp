@@ -169,15 +169,15 @@ void RayTracer::update_primitives(const Primitives& prims) {
 }
 
 void RayTracer::trace_rays(
-    size_t num_rays,
+    int32_t num_rays,
     float* ray_origins,
     float* ray_directions,
     float* color_out,
     float* depth_out,
-    uint32_t sh_degree,
+    int32_t sh_degree,
     float tmin,
     float* tmax,
-    size_t max_iters,
+    int32_t max_iters,
     SavedState* saved)
 {
     if (!has_primitives()) {
@@ -187,8 +187,8 @@ void RayTracer::trace_rays(
     CUDA_CHECK(cudaSetDevice(ctx_.device()));
 
     // Allocate temporary buffer for last_prim
-    uint32_t* last_prim = nullptr;
-    CUDA_CHECK(cudaMalloc(&last_prim, num_rays * sizeof(uint32_t)));
+    int32_t* last_prim = nullptr;
+    CUDA_CHECK(cudaMalloc(&last_prim, num_rays * sizeof(int32_t)));
 
     // Setup params
     params_.image = {color_out, num_rays};
