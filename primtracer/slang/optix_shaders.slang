@@ -106,7 +106,7 @@ float max_prim_size;                        // Maximum primitive size (for accel
 RaytracingAccelerationStructure traversable; // BVH acceleration structure
 
 // =============================================================================
-// Helper Functions
+// Helper Functions (overloaded for StructuredBuffer and RWStructuredBuffer)
 // =============================================================================
 
 /// Load float3 from scalar buffer at given index
@@ -114,13 +114,16 @@ float3 load_float3(StructuredBuffer<float> buf, uint idx) {
     return float3(buf[idx * 3 + 0], buf[idx * 3 + 1], buf[idx * 3 + 2]);
 }
 
-/// Load float3 from RW scalar buffer at given index
-float3 load_float3_rw(RWStructuredBuffer<float> buf, uint idx) {
+float3 load_float3(RWStructuredBuffer<float> buf, uint idx) {
     return float3(buf[idx * 3 + 0], buf[idx * 3 + 1], buf[idx * 3 + 2]);
 }
 
-/// Load float4 from RW scalar buffer at given index
-float4 load_float4_rw(RWStructuredBuffer<float> buf, uint idx) {
+/// Load float4 from scalar buffer at given index
+float4 load_float4(StructuredBuffer<float> buf, uint idx) {
+    return float4(buf[idx * 4 + 0], buf[idx * 4 + 1], buf[idx * 4 + 2], buf[idx * 4 + 3]);
+}
+
+float4 load_float4(RWStructuredBuffer<float> buf, uint idx) {
     return float4(buf[idx * 4 + 0], buf[idx * 4 + 1], buf[idx * 4 + 2], buf[idx * 4 + 3]);
 }
 
@@ -178,9 +181,9 @@ void intersect_ellipsoid() {
     float3 rayo = WorldRayOrigin();
 
     // Load primitive data from scalar arrays
-    let mean = load_float3_rw(means, prim_index);
-    let scale = load_float3_rw(scales, prim_index);
-    let quat = load_float4_rw(quats, prim_index);
+    let mean = load_float3(means, prim_index);
+    let scale = load_float3(scales, prim_index);
+    let quat = load_float4(quats, prim_index);
     float2 t_entry_exit = ray_intersect_ellipsoid(rayo - mean, rayd, scale, quat);
 
     float cur_t = RayTMin();
@@ -296,7 +299,7 @@ void render_volume()
     // Initialize volume rendering state
     IntegratorState state = make_initial_state();
     state.t = 0;
-    state.accumulated_contrib = load_float4_rw(initial_contrib, idx.x);
+    state.accumulated_contrib = load_float4(initial_contrib, idx.x);
 
     SamplePoint sample = {};
     uint last_hit_id = -1;
