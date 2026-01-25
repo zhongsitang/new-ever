@@ -14,6 +14,7 @@
 
 #include <pybind11/pybind11.h>
 #include <torch/extension.h>
+#include <cmath>
 
 #include <optix_function_table_definition.h>
 
@@ -78,14 +79,19 @@ public:
         densities_ = densities;
         features_ = features;
 
+        // Compute sh_degree from features shape: (N, (sh_degree+1)^2, 3)
+        const int32_t sh_count = static_cast<int32_t>(features.size(1));
+        const int32_t sh_degree = static_cast<int32_t>(sqrt(sh_count)) - 1;
+
         // Update tracer (use scalar float pointers for safe torch interop)
-        Primitives prims = {
-            .means = means.data_ptr<float>(),
-            .scales = scales.data_ptr<float>(),
-            .quats = quats.data_ptr<float>(),
-            .densities = densities.data_ptr<float>(),
-            .features = features.data_ptr<float>(),
-            .num_prims = num_prims,
+        Primitives prims{
+            means.data_ptr<float>(),
+            scales.data_ptr<float>(),
+            quats.data_ptr<float>(),
+            densities.data_ptr<float>(),
+            features.data_ptr<float>(),
+            num_prims,
+            sh_degree,
         };
         tracer_->update_primitives(prims);
     }
@@ -111,8 +117,6 @@ public:
 
         const int32_t num_rays = static_cast<int32_t>(ray_origins.size(0));
         const int32_t num_prims = tracer_->num_prims();
-        const int32_t feature_size = static_cast<int32_t>(features_.size(1));
-        const int32_t sh_degree = static_cast<int32_t>(sqrt(feature_size)) - 1;
 
         TORCH_CHECK(ray_directions.size(0) == (long)num_rays, "ray_directions must match ray_origins count");
         TORCH_CHECK(tmax.numel() == (long)num_rays, "tmax must have one value per ray");
@@ -157,7 +161,6 @@ public:
             tmax.data_ptr<float>(),
             tmin,
             num_rays,
-            sh_degree,
             max_iters,
             color.data_ptr<float>(),
             depth.data_ptr<float>(),

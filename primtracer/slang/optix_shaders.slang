@@ -67,7 +67,7 @@ struct HitAttr {
 // Launch Parameters (set by host)
 // =============================================================================
 //
-// IMPORTANT: Memory layout must match C++ Params struct exactly.
+// IMPORTANT: Memory layout must match C++ LaunchParams struct exactly.
 // Order: Input buffers -> Output buffers -> Scalars -> Handle
 
 // --- Input buffers (read-only) ----------------------------------------------
@@ -85,7 +85,7 @@ StructuredBuffer<float>         features;           // SH coefficients for color
 // --- Output buffers ---------------------------------------------------------
 // Primary outputs
 RWStructuredBuffer<float>       image;              // Rendered RGBA output (N, 4) flattened
-RWStructuredBuffer<float>       depth_out;          // Rendered depth output
+RWStructuredBuffer<float>       depth;              // Rendered depth output
 // Backward state outputs
 RWStructuredBuffer<IntegratorState> last_state;     // Final volume state per ray
 RWStructuredBuffer<float>       last_delta_contrib; // Last delta contribution (N, 4) flattened
@@ -96,6 +96,8 @@ RWStructuredBuffer<int>         hit_collection;     // Collected hit IDs for bac
 StructuredBuffer<float>         initial_contrib;    // Initial contribution (N, 4) flattened
 
 // --- Scalar parameters ------------------------------------------------------
+int num_prims;                              // Number of primitives
+int num_rays;                               // Number of rays
 int sh_degree;                              // Spherical harmonics degree
 int max_iters;                              // Maximum iterations per ray
 float tmin;                                 // Minimum ray t
@@ -347,7 +349,7 @@ void render_volume()
     // Extract and output final color (RGBA) and depth
     let output = extract_color(state, tmin);
     store_float4(image, idx.x, float4(output.C.x, output.C.y, output.C.z, output.alpha));
-    depth_out[idx.x] = output.depth;
+    depth[idx.x] = output.depth;
 
     // Save state for backward pass
     let dual_state = to_dual(state, sample);

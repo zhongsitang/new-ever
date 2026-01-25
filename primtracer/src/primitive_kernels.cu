@@ -268,10 +268,10 @@ __global__ void accumulate_initial_samples_single_kernel(
 // Public API
 // =============================================================================
 
-void init_ray_start_samples(const OptixAabb* aabbs, Params* params,
+void init_ray_start_samples(const OptixAabb* aabbs, LaunchParams* params,
                             int* d_hit_inds, int* d_hit_count) {
-    int num_prims = params->means.size;
-    int num_rays  = params->initial_contrib.size;
+    int num_prims = params->num_prims;
+    int num_rays = params->num_rays;
 
     bool alloc_temp = (d_hit_count == nullptr);
     if (alloc_temp) {
@@ -315,7 +315,7 @@ void init_ray_start_samples(const OptixAabb* aabbs, Params* params,
     }
 }
 
-void init_ray_start_samples_single(Params* params) {
+void init_ray_start_samples_single(LaunchParams* params) {
     int num_prims = params->means.size;
     int grid = (num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
@@ -330,6 +330,6 @@ void init_ray_start_samples_single(Params* params) {
     CUDA_SYNC_CHECK();
 }
 
-void init_ray_start_samples_zero(Params* params) {
+void init_ray_start_samples_zero(LaunchParams* params) {
     (void)params;  // no-op placeholder
 }

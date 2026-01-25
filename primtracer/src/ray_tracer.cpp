@@ -46,7 +46,7 @@ RayTracer::RayTracer(int device_index)
     create_pipeline();
     create_sbt();
 
-    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_param_), sizeof(Params)));
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_param_), sizeof(LaunchParams)));
 }
 
 void RayTracer::create_module(const char* ptx) {
@@ -160,11 +160,14 @@ void RayTracer::update_primitives(const Primitives& prims) {
     prims_ = prims;
     accel_->rebuild(prims);
 
-    // Update params with model data (features set in trace_rays with sh_degree)
+    // Update params with primitive data
     params_.means = {prims_.means, prims_.num_prims};
     params_.scales = {prims_.scales, prims_.num_prims};
     params_.quats = {prims_.quats, prims_.num_prims};
     params_.densities = {prims_.densities, prims_.num_prims};
+    params_.features = {prims_.features, prims_.feature_count()};
+    params_.num_prims = prims_.num_prims;
+    params_.sh_degree = prims_.sh_degree;
 }
 
 void RayTracer::trace_rays(
@@ -173,7 +176,6 @@ void RayTracer::trace_rays(
     const float* tmax,
     float tmin,
     int32_t num_rays,
-    int32_t sh_degree,
     int32_t max_iters,
     float* color_out,
     float* depth_out,
@@ -185,19 +187,16 @@ void RayTracer::trace_rays(
 
     CUDA_CHECK(cudaSetDevice(ctx_.device()));
 
-    // Input buffers
+    // Ray buffers
     params_.ray_origins = {const_cast<float*>(ray_origins), num_rays};
     params_.ray_directions = {const_cast<float*>(ray_directions), num_rays};
     params_.tmax = {const_cast<float*>(tmax), num_rays};
-    params_.means = {prims_.means, prims_.num_prims};
-    params_.scales = {prims_.scales, prims_.num_prims};
-    params_.quats = {prims_.quats, prims_.num_prims};
-    params_.densities = {prims_.densities, prims_.num_prims};
-    params_.features = {prims_.features, prims_.num_prims * (sh_degree + 1) * (sh_degree + 1)};
 
     // Output buffers
     params_.image = {color_out, num_rays};
-    params_.depth_out = {depth_out, num_rays};
+    params_.depth = {depth_out, num_rays};
+
+    // Backward state buffers
     params_.last_state = {saved.states, num_rays};
     params_.last_delta_contrib = {saved.delta_contribs, num_rays};
     params_.iters = {saved.iters, num_rays};
@@ -208,9 +207,9 @@ void RayTracer::trace_rays(
     params_.initial_contrib = {saved.initial_contrib, num_rays};
 
     // Scalar parameters
-    params_.sh_degree = sh_degree;
-    params_.max_iters = max_iters;
+    params_.num_rays = num_rays;
     params_.tmin = tmin;
+    params_.max_iters = max_iters;
     params_.max_prim_size = 3.0f;
 
     // Acceleration structure
@@ -219,9 +218,9 @@ void RayTracer::trace_rays(
                            saved.initial_prim_count);
     params_.handle = accel_->handle();
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,
-                          sizeof(Params), cudaMemcpyHostToDevice));
+                          sizeof(LaunchParams), cudaMemcpyHostToDevice));
 
-    OPTIX_CHECK(optixLaunch(pipeline_, 0, d_param_, sizeof(Params), &sbt_,
+    OPTIX_CHECK(optixLaunch(pipeline_, 0, d_param_, sizeof(LaunchParams), &sbt_,
                             num_rays, 1, 1));
 
     CUDA_SYNC_CHECK();

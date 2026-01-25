@@ -79,7 +79,7 @@ inline void optix_log_cb(unsigned int, const char*, const char*, void*) {}
 void compute_primitive_aabbs(const Primitives& prims, OptixAabb* aabbs);
 
 /// Initialize contributions for rays starting inside primitives.
-void init_ray_start_samples(const OptixAabb* aabbs, Params* params,
+void init_ray_start_samples(const OptixAabb* aabbs, LaunchParams* params,
                             int* d_hit_inds = nullptr,
                             int* d_hit_count = nullptr);
 
@@ -316,7 +316,6 @@ public:
         const float* tmax,             // (num_rays,) per-ray max distance
         float tmin,
         int32_t num_rays,
-        int32_t sh_degree,
         int32_t max_iters,
         float* color_out,              // (num_rays, 4) flattened
         float* depth_out,              // (num_rays,) depth values
@@ -347,6 +346,6 @@ private:
     OptixShaderBindingTable sbt_ = {};
     CUdeviceptr d_param_ = 0;
 
-    Params params_ = {};
+    LaunchParams params_ = {};
     OptixPipelineCompileOptions pipeline_options_ = {};
 };

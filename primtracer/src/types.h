@@ -40,8 +40,14 @@ struct Primitives {
     float* scales;        // (N, 3) flattened
     float* quats;         // (N, 4) flattened, quaternion (w,x,y,z)
     float* densities;
-    float* features;      // SH coefficients, size = num_prims * (sh_degree+1)^2 * 3
+    float* features;      // SH coefficients, size = feature_count() * 3
     int32_t num_prims;
+    int32_t sh_degree;
+
+    /// Number of SH coefficients per primitive: (sh_degree+1)^2
+    int32_t sh_count() const { return (sh_degree + 1) * (sh_degree + 1); }
+    /// Total feature count: num_prims * sh_count()
+    int32_t feature_count() const { return num_prims * sh_count(); }
 };
 
 // =============================================================================
@@ -88,7 +94,7 @@ struct SavedState {
 //   - Scalar parameters: 4-byte aligned, grouped for 16-byte alignment
 //   - OptixTraversableHandle: 8-byte aligned
 
-struct Params {
+struct LaunchParams {
     // --- Input buffers (read-only) ------------------------------------------
     // Ray data
     StructuredBuffer<float> ray_origins;
@@ -104,7 +110,7 @@ struct Params {
     // --- Output buffers -----------------------------------------------------
     // Primary outputs
     StructuredBuffer<float> image;
-    StructuredBuffer<float> depth_out;
+    StructuredBuffer<float> depth;
     // Backward state outputs
     StructuredBuffer<IntegratorState> last_state;
     StructuredBuffer<float> last_delta_contrib;
@@ -115,6 +121,8 @@ struct Params {
     StructuredBuffer<float> initial_contrib;
 
     // --- Scalar parameters --------------------------------------------------
+    int32_t num_prims;
+    int32_t num_rays;
     int32_t sh_degree;
     int32_t max_iters;
     float tmin;
