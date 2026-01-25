@@ -309,15 +309,19 @@ public:
 
     /// Trace rays through the scene.
     /// Requires update_primitives() to be called first.
+    /// All vector data uses scalar float pointers for safe torch tensor interop:
+    /// - ray_origins: (M, 3) flattened
+    /// - ray_directions: (M, 3) flattened
+    /// - color_out: (M, 4) flattened RGBA
     void trace_rays(
         size_t num_rays,
-        float3* ray_origins,
-        float3* ray_directions,
-        float4* color_out,
-        float* depth_out,
+        float* ray_origins,      // (M, 3)
+        float* ray_directions,   // (M, 3)
+        float* color_out,        // (M, 4) RGBA
+        float* depth_out,        // (M,)
         uint32_t sh_degree,
         float tmin,
-        float* tmax,
+        float* tmax,             // (M,)
         size_t max_iters,
         SavedState* saved
     );

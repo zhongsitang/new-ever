@@ -33,11 +33,15 @@ struct StructuredBuffer {
 // =============================================================================
 
 /// Ellipsoid primitive geometry (GPU pointers)
+/// All vector data uses scalar float pointers for safe torch tensor interop.
+/// - means: (N, 3) flattened - access as means[i*3 + component]
+/// - scales: (N, 3) flattened - access as scales[i*3 + component]
+/// - quats: (N, 4) flattened - access as quats[i*4 + component], (w,x,y,z)
 struct Primitives {
-    float3* means;
-    float3* scales;
-    float4* quats;        // quaternion (w,x,y,z)
-    float* densities;
+    float* means;         // (N, 3) centers
+    float* scales;        // (N, 3) radii
+    float* quats;         // (N, 4) quaternion (w,x,y,z)
+    float* densities;     // (N,)
     size_t num_prims;
     float* features;      // SH coefficients
     size_t feature_size;
@@ -61,13 +65,14 @@ static_assert(sizeof(IntegratorState) == 48);
 static_assert(alignof(IntegratorState) == 16);
 
 /// State saved for backward gradient computation
+/// Vector data uses scalar float pointers for safe torch tensor interop.
 struct SavedState {
     IntegratorState* states;     // (M,) per-ray integrator state
-    float4* delta_contribs;      // (M,) last delta contribution
+    float* delta_contribs;       // (M, 4) last delta contribution
     uint32_t* iters;             // (M,) iteration count per ray
     uint32_t* prim_hits;         // (N,) hit count per primitive
     int32_t* hit_collection;     // (M * max_iters,) hit primitive indices
-    float4* initial_contrib;     // (M,) contribution for rays starting inside
+    float* initial_contrib;      // (M, 4) contribution for rays starting inside
     int32_t* initial_prim_indices; // (N,) primitives containing ray origins
     int32_t* initial_prim_count; // (1,) count of initial_prim_indices
 };
@@ -83,35 +88,38 @@ struct Camera {
     float3 eye;
 };
 
+/// OptiX launch parameters.
+/// All vector data (float3/float4) uses scalar float buffers for safe torch interop.
+/// Slang shaders use helper functions from tensor_utils.slang to reconstruct vectors.
 struct Params {
-    // Output buffers
-    StructuredBuffer<float4> image;
-    StructuredBuffer<float> depth_out;
-    StructuredBuffer<uint32_t> iters;
-    StructuredBuffer<uint32_t> last_prim;
-    StructuredBuffer<uint32_t> prim_hits;
-    StructuredBuffer<float4> last_delta_contrib;
-    StructuredBuffer<IntegratorState> last_state;
-    StructuredBuffer<int32_t> hit_collection;
+    // Output buffers (scalar float for safe interop)
+    StructuredBuffer<float> image;           // (M, 4) RGBA
+    StructuredBuffer<float> depth_out;       // (M,)
+    StructuredBuffer<uint32_t> iters;        // (M,)
+    StructuredBuffer<uint32_t> last_prim;    // (M,)
+    StructuredBuffer<uint32_t> prim_hits;    // (N,)
+    StructuredBuffer<float> last_delta_contrib; // (M, 4)
+    StructuredBuffer<IntegratorState> last_state; // (M,)
+    StructuredBuffer<int32_t> hit_collection; // (M * max_iters,)
 
-    // Ray data
-    StructuredBuffer<float3> ray_origins;
-    StructuredBuffer<float3> ray_directions;
+    // Ray data (scalar float for safe interop)
+    StructuredBuffer<float> ray_origins;     // (M, 3)
+    StructuredBuffer<float> ray_directions;  // (M, 3)
     Camera camera;
 
-    // Primitive data
-    StructuredBuffer<float3> means;
-    StructuredBuffer<float3> scales;
-    StructuredBuffer<float4> quats;
-    StructuredBuffer<float> densities;
-    StructuredBuffer<float> features;
+    // Primitive data (scalar float for safe interop)
+    StructuredBuffer<float> means;           // (N, 3)
+    StructuredBuffer<float> scales;          // (N, 3)
+    StructuredBuffer<float> quats;           // (N, 4)
+    StructuredBuffer<float> densities;       // (N,)
+    StructuredBuffer<float> features;        // (N, feature_size, 3)
 
     // Render settings
     size_t sh_degree;
     size_t max_iters;
     float tmin;
-    StructuredBuffer<float> tmax;
-    StructuredBuffer<float4> initial_contrib;
+    StructuredBuffer<float> tmax;            // (M,)
+    StructuredBuffer<float> initial_contrib; // (M, 4)
     float max_prim_size;
     OptixTraversableHandle handle;
 };

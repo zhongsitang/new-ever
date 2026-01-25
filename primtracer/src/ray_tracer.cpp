@@ -160,19 +160,19 @@ void RayTracer::update_primitives(const Primitives& prims) {
     prims_ = prims;
     accel_->rebuild(prims);
 
-    // Update params with model data
-    params_.means = {prims_.means, prims_.num_prims};
-    params_.scales = {prims_.scales, prims_.num_prims};
-    params_.quats = {prims_.quats, prims_.num_prims};
-    params_.densities = {prims_.densities, prims_.num_prims};
-    params_.features = {prims_.features, prims_.num_prims * prims_.feature_size};
+    // Update params with model data (sizes reflect total float elements)
+    params_.means = {prims_.means, prims_.num_prims * 3};      // (N, 3)
+    params_.scales = {prims_.scales, prims_.num_prims * 3};    // (N, 3)
+    params_.quats = {prims_.quats, prims_.num_prims * 4};      // (N, 4)
+    params_.densities = {prims_.densities, prims_.num_prims};  // (N,)
+    params_.features = {prims_.features, prims_.num_prims * prims_.feature_size * 3}; // (N, C, 3)
 }
 
 void RayTracer::trace_rays(
     size_t num_rays,
-    float3* ray_origins,
-    float3* ray_directions,
-    float4* color_out,
+    float* ray_origins,
+    float* ray_directions,
+    float* color_out,
     float* depth_out,
     uint32_t sh_degree,
     float tmin,
@@ -190,38 +190,38 @@ void RayTracer::trace_rays(
     uint32_t* last_prim = nullptr;
     CUDA_CHECK(cudaMalloc(&last_prim, num_rays * sizeof(uint32_t)));
 
-    // Setup params
-    params_.image = {color_out, num_rays};
-    params_.depth_out = {depth_out, num_rays};
+    // Setup params (size = number of logical elements, not floats)
+    params_.image = {color_out, num_rays * 4};           // (M, 4)
+    params_.depth_out = {depth_out, num_rays};           // (M,)
     params_.sh_degree = sh_degree;
     params_.max_prim_size = 3.0f;
     params_.max_iters = max_iters;
-    params_.ray_origins = {ray_origins, num_rays};
-    params_.ray_directions = {ray_directions, num_rays};
+    params_.ray_origins = {ray_origins, num_rays * 3};   // (M, 3)
+    params_.ray_directions = {ray_directions, num_rays * 3}; // (M, 3)
     params_.tmin = tmin;
-    params_.tmax = {tmax, num_rays};
-    params_.last_prim = {last_prim, num_rays};
+    params_.tmax = {tmax, num_rays};                     // (M,)
+    params_.last_prim = {last_prim, num_rays};           // (M,)
 
     if (saved) {
         params_.last_state = {saved->states, num_rays};
-        params_.last_delta_contrib = {saved->delta_contribs, num_rays};
+        params_.last_delta_contrib = {saved->delta_contribs, num_rays * 4}; // (M, 4)
         params_.hit_collection = {saved->hit_collection, num_rays * max_iters};
         params_.iters = {saved->iters, num_rays};
         params_.prim_hits = {saved->prim_hits, prims_.num_prims};
 
-        CUDA_CHECK(cudaMemset(saved->initial_contrib, 0, num_rays * sizeof(float4)));
-        params_.initial_contrib = {saved->initial_contrib, num_rays};
+        CUDA_CHECK(cudaMemset(saved->initial_contrib, 0, num_rays * 4 * sizeof(float)));
+        params_.initial_contrib = {saved->initial_contrib, num_rays * 4}; // (M, 4)
 
         init_ray_start_samples(&params_, accel_->aabbs(),
                                saved->initial_prim_count,
                                saved->initial_prim_indices);
     } else {
         params_.last_state = {nullptr, 0};
-        params_.last_delta_contrib = {nullptr, 0};
+        params_.last_delta_contrib = {nullptr, 0};  // (M, 4)
         params_.hit_collection = {nullptr, 0};
         params_.iters = {nullptr, 0};
         params_.prim_hits = {nullptr, 0};
-        params_.initial_contrib = {nullptr, 0};
+        params_.initial_contrib = {nullptr, 0};     // (M, 4)
     }
 
     params_.handle = accel_->handle();

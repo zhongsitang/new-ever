@@ -38,7 +38,12 @@ using namespace pybind11::literals;
     CHECK_CUDA(x); CHECK_CONTIGUOUS(x); CHECK_DEVICE(x, dev); CHECK_FLOAT(x); \
     TORCH_CHECK(x.size(-1) == dim, #x " must have last dimension " #dim)
 
-// Helper for casting tensor data pointer to custom types
+// Safe helper for getting float pointer from tensor (avoids unsafe float3/float4 casts)
+inline float* float_ptr(const torch::Tensor& t) {
+    return static_cast<float*>(t.data_ptr());
+}
+
+// Helper for getting typed pointer (only use for safe types like int32_t, uint32_t)
 template<typename T>
 T* data_ptr(const torch::Tensor& t) { return static_cast<T*>(t.data_ptr()); }
 
@@ -83,14 +88,14 @@ public:
         densities_ = densities;
         features_ = features;
 
-        // Update tracer
+        // Update tracer (use scalar float pointers for safe interop)
         Primitives prims = {
-            .means = data_ptr<float3>(means),
-            .scales = data_ptr<float3>(scales),
-            .quats = data_ptr<float4>(quats),
-            .densities = data_ptr<float>(densities),
+            .means = float_ptr(means),           // (N, 3)
+            .scales = float_ptr(scales),         // (N, 3)
+            .quats = float_ptr(quats),           // (N, 4)
+            .densities = float_ptr(densities),   // (N,)
             .num_prims = num_prims,
-            .features = data_ptr<float>(features),
+            .features = float_ptr(features),     // (N, C, 3)
             .feature_size = feature_size,
         };
         tracer_->update_primitives(prims);
@@ -141,28 +146,28 @@ public:
         torch::Tensor initial_prim_indices = torch::zeros({(long)num_prims}, opts_i);
         torch::Tensor initial_prim_count = torch::zeros({1}, opts_i);
 
-        // Setup backward state
+        // Setup backward state (use scalar float pointers for safe interop)
         SavedState saved = {
             .states = data_ptr<IntegratorState>(states),
-            .delta_contribs = data_ptr<float4>(delta_contribs),
+            .delta_contribs = float_ptr(delta_contribs),    // (M, 4)
             .iters = data_ptr<uint32_t>(iters),
             .prim_hits = data_ptr<uint32_t>(prim_hits),
             .hit_collection = data_ptr<int>(hit_collection),
-            .initial_contrib = data_ptr<float4>(initial_contrib),
+            .initial_contrib = float_ptr(initial_contrib),  // (M, 4)
             .initial_prim_indices = data_ptr<int>(initial_prim_indices),
             .initial_prim_count = data_ptr<int>(initial_prim_count),
         };
 
-        // Trace rays
+        // Trace rays (use scalar float pointers for safe interop)
         tracer_->trace_rays(
             num_rays,
-            data_ptr<float3>(ray_origins),
-            data_ptr<float3>(ray_directions),
-            data_ptr<float4>(color),
-            data_ptr<float>(depth),
+            float_ptr(ray_origins),      // (M, 3)
+            float_ptr(ray_directions),   // (M, 3)
+            float_ptr(color),            // (M, 4)
+            float_ptr(depth),            // (M,)
             sh_degree,
             tmin,
-            data_ptr<float>(tmax),
+            float_ptr(tmax),             // (M,)
             max_iters,
             &saved
         );

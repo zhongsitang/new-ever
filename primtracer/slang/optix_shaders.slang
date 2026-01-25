@@ -48,6 +48,33 @@ import safe_math;
 import spherical_harmonics;
 
 // =============================================================================
+// Safe Tensor Access Helpers
+// =============================================================================
+// These functions safely load/store float3/float4 from contiguous float arrays,
+// avoiding unsafe reinterpret_cast from torch tensors to CUDA vector types.
+
+float3 sb_load_float3(StructuredBuffer<float> buf, uint idx) {
+    return float3(buf[idx * 3 + 0], buf[idx * 3 + 1], buf[idx * 3 + 2]);
+}
+
+float4 sb_load_float4(StructuredBuffer<float> buf, uint idx) {
+    return float4(buf[idx * 4 + 0], buf[idx * 4 + 1], buf[idx * 4 + 2], buf[idx * 4 + 3]);
+}
+
+void sb_store_float3(RWStructuredBuffer<float> buf, uint idx, float3 v) {
+    buf[idx * 3 + 0] = v.x;
+    buf[idx * 3 + 1] = v.y;
+    buf[idx * 3 + 2] = v.z;
+}
+
+void sb_store_float4(RWStructuredBuffer<float> buf, uint idx, float4 v) {
+    buf[idx * 4 + 0] = v.x;
+    buf[idx * 4 + 1] = v.y;
+    buf[idx * 4 + 2] = v.z;
+    buf[idx * 4 + 3] = v.w;
+}
+
+// =============================================================================
 // Data Structures
 // =============================================================================
 
@@ -75,34 +102,34 @@ struct HitAttr {
 // Launch Parameters (set by host)
 // =============================================================================
 
-// Output buffers
-RWStructuredBuffer<float4>      image;              // Rendered RGBA output
-RWStructuredBuffer<float>       depth_out;          // Rendered depth output
-RWStructuredBuffer<uint>        iters;              // Iteration count per ray
-RWStructuredBuffer<uint>        last_prim;          // Last primitive hit (for debugging)
-RWStructuredBuffer<uint>        prim_hits; // Hit count per primitive
-RWStructuredBuffer<float4>      last_delta_contrib; // Last sample delta contribution
-RWStructuredBuffer<IntegratorState> last_state;         // Final volume state per ray
-RWStructuredBuffer<int>         hit_collection;     // Collected hit IDs for backward pass
+// Output buffers (scalar float for safe torch tensor interop)
+RWStructuredBuffer<float>       image;              // (M, 4) RGBA - use sb_store_float4
+RWStructuredBuffer<float>       depth_out;          // (M,)
+RWStructuredBuffer<uint>        iters;              // (M,)
+RWStructuredBuffer<uint>        last_prim;          // (M,)
+RWStructuredBuffer<uint>        prim_hits;          // (N,)
+RWStructuredBuffer<float>       last_delta_contrib; // (M, 4) - use sb_store_float4
+RWStructuredBuffer<IntegratorState> last_state;     // (M,)
+RWStructuredBuffer<int>         hit_collection;     // (M * max_iters,)
 
-// Input buffers
-StructuredBuffer<float3>        ray_origins;
-StructuredBuffer<float3>        ray_directions;
+// Input buffers (scalar float for safe torch tensor interop)
+StructuredBuffer<float>         ray_origins;        // (M, 3) - use sb_load_float3
+StructuredBuffer<float>         ray_directions;     // (M, 3) - use sb_load_float3
 Camera                          camera;
 
-// Primitive data
-RWStructuredBuffer<float3>      means;      // Ellipsoid centers
-RWStructuredBuffer<float3>      scales;     // Ellipsoid radii
-RWStructuredBuffer<float4>      quats;      // Ellipsoid rotations (quaternion wxyz)
-RWStructuredBuffer<float>       densities;  // Ellipsoid densities
-RWStructuredBuffer<float>       features;   // SH coefficients for color
+// Primitive data (scalar float for safe torch tensor interop)
+StructuredBuffer<float>         means;              // (N, 3) - use sb_load_float3
+StructuredBuffer<float>         scales;             // (N, 3) - use sb_load_float3
+StructuredBuffer<float>         quats;              // (N, 4) - use sb_load_float4
+StructuredBuffer<float>         densities;          // (N,)
+StructuredBuffer<float>         features;           // (N, C, 3)
 
 // Rendering parameters
 size_t sh_degree;                           // Spherical harmonics degree
 size_t max_iters;                           // Maximum iterations per ray
 float tmin;                                 // Minimum ray t
-StructuredBuffer<float>         tmax;       // Maximum ray t (per-ray)
-RWStructuredBuffer<float4>      initial_contrib;  // Initial accumulated contribution
+StructuredBuffer<float>         tmax;       // (M,)
+StructuredBuffer<float>         initial_contrib;    // (M, 4) - use sb_load_float4
 float max_prim_size;                        // Maximum primitive size (for acceleration)
 RaytracingAccelerationStructure traversable; // BVH acceleration structure
 
@@ -155,9 +182,9 @@ void intersect_ellipsoid() {
     float3 rayd = WorldRayDirection();
     float3 rayo = WorldRayOrigin();
 
-    let mean = means[prim_index];
-    let scale = scales[prim_index];
-    let quat = quats[prim_index];
+    let mean = sb_load_float3(means, prim_index);
+    let scale = sb_load_float3(scales, prim_index);
+    let quat = sb_load_float4(quats, prim_index);
     float2 t_entry_exit = ray_intersect_ellipsoid(rayo - mean, rayd, scale, quat);
 
     float cur_t = RayTMin();
@@ -263,15 +290,17 @@ void render_volume()
     const uint3 idx = DispatchRaysIndex();
     const uint3 dim = DispatchRaysDimensions();
 
-    // Initialize ray
-    float3 direction = l2_normalize(ray_directions[idx.x]);
-    float3 origin = ray_origins[idx.x] + tmin * ray_directions[idx.x];
+    // Initialize ray (using safe scalar float access)
+    float3 ray_dir_raw = sb_load_float3(ray_directions, idx.x);
+    float3 direction = l2_normalize(ray_dir_raw);
+    float3 ray_orig = sb_load_float3(ray_origins, idx.x);
+    float3 origin = ray_orig + tmin * ray_dir_raw;
     float ray_tmax = tmax[idx.x];  // Per-ray tmax
 
     // Initialize volume rendering state
     IntegratorState state = make_initial_state();
     state.t = 0;
-    state.accumulated_contrib = initial_contrib[idx.x];
+    state.accumulated_contrib = sb_load_float4(initial_contrib, idx.x);
 
     SamplePoint sample = {};
     uint last_hit_id = -1;
@@ -325,15 +354,15 @@ void render_volume()
         if (end) break;
     }
 
-    // Extract and output final color (RGBA) and depth
+    // Extract and output final color (RGBA) and depth (using safe scalar float access)
     let output = extract_color(state, tmin);
-    image[idx.x] = {output.C.x, output.C.y, output.C.z, output.alpha};
+    sb_store_float4(image, idx.x, float4(output.C.x, output.C.y, output.C.z, output.alpha));
     depth_out[idx.x] = output.depth;
 
     // Save state for backward pass
     let dual_state = to_dual(state, sample);
     last_state[idx.x] = dual_state;
-    last_delta_contrib[idx.x] = sample.delta_contrib;
+    sb_store_float4(last_delta_contrib, idx.x, sample.delta_contrib);
     last_prim[idx.x] = last_hit_id;
     iters[idx.x] = iter;
 }
