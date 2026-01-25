@@ -229,9 +229,10 @@ void RayTracer::trace_rays(
 
     params_.handle = accel_->handle();
 
-    // Setup ABI check: write magic to abi_check[0], clear error_flag at abi_check[1]
+    // Setup ABI check: head magic at abi_check[0], error_flag at abi_check[1], tail magic at end
     params_.abi_check = {d_abi_check_, 2};
-    uint32_t abi_init[2] = {PARAMS_MAGIC, 0};
+    params_.magic_tail = PARAMS_MAGIC_TAIL;
+    uint32_t abi_init[2] = {PARAMS_MAGIC_HEAD, 0};
     CUDA_CHECK(cudaMemcpy(d_abi_check_, abi_init, sizeof(abi_init), cudaMemcpyHostToDevice));
 
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,

@@ -51,7 +51,8 @@ import spherical_harmonics;
 // ABI Stability Constants
 // =============================================================================
 
-static const uint PARAMS_MAGIC = 0x5052494D;  // ASCII "PRIM" - must match C++
+static const uint PARAMS_MAGIC_HEAD = 0x5052494D;  // ASCII "PRIM" - must match C++
+static const uint PARAMS_MAGIC_TAIL = 0x5441494C;  // ASCII "TAIL" - must match C++
 
 // =============================================================================
 // Data Structures
@@ -115,6 +116,10 @@ float                               max_prim_size;      // Maximum primitive siz
 StructuredBuffer<float>             tmax;               // Maximum ray t (per-ray)
 RWStructuredBuffer<float4>          initial_contrib;    // Initial accumulated contribution
 RaytracingAccelerationStructure     traversable;        // BVH acceleration structure
+
+// Tail magic for detecting field offset errors (must be last)
+uint                                magic_tail;
+uint                                _pad_tail;
 
 // =============================================================================
 // Helper Functions
@@ -279,11 +284,12 @@ void render_volume()
     const uint3 idx = DispatchRaysIndex();
     const uint3 dim = DispatchRaysDimensions();
 
-    // ABI validation: first thread checks magic number
-    // abi_check[0] = magic (written by host), abi_check[1] = error_flag (written by shader)
-    // If magic mismatch, shader writes error_flag=1 and host will abort after launch
+    // ABI validation: first thread checks head and tail magic numbers
+    // - abi_check[0] = head magic (detects wrong first field)
+    // - magic_tail = tail magic (detects field offset errors in middle)
+    // If either mismatch, shader writes error_flag=1 and host will abort after launch
     if (idx.x == 0 && idx.y == 0 && idx.z == 0) {
-        if (abi_check[0] != PARAMS_MAGIC) {
+        if (abi_check[0] != PARAMS_MAGIC_HEAD || magic_tail != PARAMS_MAGIC_TAIL) {
             abi_check[1] = 1;  // Signal ABI mismatch to host
         }
     }

@@ -23,7 +23,9 @@
 // =============================================================================
 
 /// Magic number for binary layout validation (ASCII "PRIM")
-constexpr uint32_t PARAMS_MAGIC = 0x5052494D;
+constexpr uint32_t PARAMS_MAGIC_HEAD = 0x5052494D;
+/// Tail magic for detecting field offset errors (ASCII "TAIL")
+constexpr uint32_t PARAMS_MAGIC_TAIL = 0x5441494C;
 
 // =============================================================================
 // Basic Types
@@ -139,9 +141,13 @@ struct Params {
     StructuredBuffer<float> tmax;
     StructuredBuffer<float4> initial_contrib;
     OptixTraversableHandle handle;
+
+    // Tail magic for detecting field offset errors (must be last)
+    uint32_t magic_tail;
+    uint32_t _pad_tail;  // Align to 8 bytes
 };
 
 // Verify critical field offsets for ABI stability
 static_assert(offsetof(Params, abi_check) == 0);
 static_assert(offsetof(Params, image) == 16);
-static_assert(offsetof(Params, handle) == sizeof(Params) - sizeof(OptixTraversableHandle));
+static_assert(offsetof(Params, magic_tail) == sizeof(Params) - 8);
