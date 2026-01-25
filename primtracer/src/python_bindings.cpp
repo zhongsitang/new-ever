@@ -136,8 +136,9 @@ public:
         torch::Tensor initial_prim_count = torch::zeros({1}, opts_i);
 
         // Setup backward state (use scalar float pointers for safe torch interop)
+        // Note: IntegratorState requires static_cast as PyTorch only supports basic types
         SavedState saved = {
-            .states = states.data_ptr<IntegratorState>(),
+            .states = static_cast<IntegratorState*>(states.data_ptr()),
             .delta_contribs = delta_contribs.data_ptr<float>(),
             .iters = iters.data_ptr<int32_t>(),
             .prim_hits = prim_hits.data_ptr<int32_t>(),
