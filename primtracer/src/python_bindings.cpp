@@ -85,8 +85,8 @@ public:
             .scales = scales.data_ptr<float>(),
             .quats = quats.data_ptr<float>(),
             .densities = densities.data_ptr<float>(),
-            .num_prims = num_prims,
             .features = features.data_ptr<float>(),
+            .num_prims = num_prims,
             .feature_size = feature_size,
         };
         tracer_->update_primitives(prims);
