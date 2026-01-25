@@ -38,10 +38,6 @@ using namespace pybind11::literals;
     CHECK_CUDA(x); CHECK_CONTIGUOUS(x); CHECK_DEVICE(x, dev); CHECK_FLOAT(x); \
     TORCH_CHECK(x.size(-1) == dim, #x " must have last dimension " #dim)
 
-// Helper for casting tensor data pointer to custom types
-template<typename T>
-T* data_ptr(const torch::Tensor& t) { return static_cast<T*>(t.data_ptr()); }
-
 // =============================================================================
 // PyRayTracer - Python wrapper for RayTracer with tensor lifetime management
 // =============================================================================
@@ -85,12 +81,12 @@ public:
 
         // Update tracer (use scalar float pointers for safe torch interop)
         Primitives prims = {
-            .means = data_ptr<float>(means),
-            .scales = data_ptr<float>(scales),
-            .quats = data_ptr<float>(quats),
-            .densities = data_ptr<float>(densities),
+            .means = means.data_ptr<float>(),
+            .scales = scales.data_ptr<float>(),
+            .quats = quats.data_ptr<float>(),
+            .densities = densities.data_ptr<float>(),
             .num_prims = num_prims,
-            .features = data_ptr<float>(features),
+            .features = features.data_ptr<float>(),
             .feature_size = feature_size,
         };
         tracer_->update_primitives(prims);
@@ -143,26 +139,26 @@ public:
 
         // Setup backward state (use scalar float pointers for safe torch interop)
         SavedState saved = {
-            .states = data_ptr<IntegratorState>(states),
-            .delta_contribs = data_ptr<float>(delta_contribs),
-            .iters = data_ptr<int32_t>(iters),
-            .prim_hits = data_ptr<int32_t>(prim_hits),
-            .hit_collection = data_ptr<int32_t>(hit_collection),
-            .initial_contrib = data_ptr<float>(initial_contrib),
-            .initial_prim_indices = data_ptr<int32_t>(initial_prim_indices),
-            .initial_prim_count = data_ptr<int32_t>(initial_prim_count),
+            .states = states.data_ptr<IntegratorState>(),
+            .delta_contribs = delta_contribs.data_ptr<float>(),
+            .iters = iters.data_ptr<int32_t>(),
+            .prim_hits = prim_hits.data_ptr<int32_t>(),
+            .hit_collection = hit_collection.data_ptr<int32_t>(),
+            .initial_contrib = initial_contrib.data_ptr<float>(),
+            .initial_prim_indices = initial_prim_indices.data_ptr<int32_t>(),
+            .initial_prim_count = initial_prim_count.data_ptr<int32_t>(),
         };
 
         // Trace rays (use scalar float pointers for safe torch interop)
         tracer_->trace_rays(
             num_rays,
-            data_ptr<float>(ray_origins),
-            data_ptr<float>(ray_directions),
-            data_ptr<float>(color),
-            data_ptr<float>(depth),
+            ray_origins.data_ptr<float>(),
+            ray_directions.data_ptr<float>(),
+            color.data_ptr<float>(),
+            depth.data_ptr<float>(),
             sh_degree,
             tmin,
-            data_ptr<float>(tmax),
+            tmax.data_ptr<float>(),
             max_iters,
             &saved
         );
