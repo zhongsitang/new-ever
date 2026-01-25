@@ -43,7 +43,6 @@ list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 find_package(pybind11 REQUIRED)
 find_package(CUDAToolkit REQUIRED)
-find_package(glm REQUIRED)
 
 include(FindOptiX)
 include(FindTorch)
@@ -105,7 +104,6 @@ target_link_libraries(sh_kernel PRIVATE Torch::Torch)
 target_link_libraries(ellipsoid_tracer PRIVATE
   OptiX::OptiX
   Torch::Torch
-  glm::glm
 )
 
 target_compile_options(ellipsoid_tracer PRIVATE
