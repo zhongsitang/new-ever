@@ -163,9 +163,9 @@ void RayTracer::update_primitives(const Primitives& prims) {
     prims_ = prims;
     accel_->rebuild(prims);
 
-    // Update params with model data
-    params_.means = {prims_.means, prims_.num_prims};
-    params_.scales = {prims_.scales, prims_.num_prims};
+    // Update params with model data (means/scales use scalar packing: xyzxyz...)
+    params_.means = {reinterpret_cast<float*>(prims_.means), prims_.num_prims * 3};
+    params_.scales = {reinterpret_cast<float*>(prims_.scales), prims_.num_prims * 3};
     params_.quats = {prims_.quats, prims_.num_prims};
     params_.densities = {prims_.densities, prims_.num_prims};
     params_.features = {prims_.features, prims_.num_prims * prims_.feature_size};

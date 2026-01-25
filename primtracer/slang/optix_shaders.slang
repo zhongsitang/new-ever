@@ -100,22 +100,20 @@ StructuredBuffer<float3>            ray_origins;
 StructuredBuffer<float3>            ray_directions;
 Camera                              camera;
 
-// Primitive data
-RWStructuredBuffer<float3>          means;              // Ellipsoid centers
-RWStructuredBuffer<float3>          scales;             // Ellipsoid radii
+// Primitive data (means/scales use scalar packing: xyzxyz... to save VRAM)
+RWStructuredBuffer<float>           means;              // Ellipsoid centers (scalar packed)
+RWStructuredBuffer<float>           scales;             // Ellipsoid radii (scalar packed)
 RWStructuredBuffer<float4>          quats;              // Ellipsoid rotations (quaternion wxyz)
 RWStructuredBuffer<float>           densities;          // Ellipsoid densities
 RWStructuredBuffer<float>           features;           // SH coefficients for color
 
-// Rendering parameters (use uint64 for ABI stability, not size_t)
-uint64_t                            sh_degree;          // Spherical harmonics degree
-uint64_t                            max_iters;          // Maximum iterations per ray
+// Rendering parameters (grouped by size to minimize padding)
+int                                 sh_degree;          // Spherical harmonics degree
+int                                 max_iters;          // Maximum iterations per ray
 float                               tmin;               // Minimum ray t
-float                               _pad0;              // Explicit padding (match C++)
+float                               max_prim_size;      // Maximum primitive size (for acceleration)
 StructuredBuffer<float>             tmax;               // Maximum ray t (per-ray)
 RWStructuredBuffer<float4>          initial_contrib;    // Initial accumulated contribution
-float                               max_prim_size;      // Maximum primitive size (for acceleration)
-uint                                _pad1;              // Explicit padding (match C++)
 RaytracingAccelerationStructure     traversable;        // BVH acceleration structure
 
 // =============================================================================
@@ -156,6 +154,11 @@ SamplePoint create_sample(uint hit_id, float t) {
 // OptiX Shaders
 // =============================================================================
 
+/// Load float3 from scalar-packed buffer (xyzxyz... layout)
+float3 load_float3(RWStructuredBuffer<float> buf, uint idx) {
+    return float3(buf[idx * 3], buf[idx * 3 + 1], buf[idx * 3 + 2]);
+}
+
 /// Intersection shader: computes ray-ellipsoid intersection.
 ///
 /// For each ellipsoid, computes both entry and exit t values.
@@ -167,8 +170,8 @@ void intersect_ellipsoid() {
     float3 rayd = WorldRayDirection();
     float3 rayo = WorldRayOrigin();
 
-    let mean = means[prim_index];
-    let scale = scales[prim_index];
+    let mean = load_float3(means, prim_index);
+    let scale = load_float3(scales, prim_index);
     let quat = quats[prim_index];
     float2 t_entry_exit = ray_intersect_ellipsoid(rayo - mean, rayd, scale, quat);
 

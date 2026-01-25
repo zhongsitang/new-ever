@@ -124,22 +124,20 @@ struct Params {
     StructuredBuffer<float3> ray_directions;
     Camera camera;
 
-    // Primitive data
-    StructuredBuffer<float3> means;
-    StructuredBuffer<float3> scales;
+    // Primitive data (means/scales use scalar packing: xyzxyz... to save VRAM)
+    StructuredBuffer<float> means;
+    StructuredBuffer<float> scales;
     StructuredBuffer<float4> quats;
     StructuredBuffer<float> densities;
     StructuredBuffer<float> features;
 
-    // Render settings
-    uint64_t sh_degree;
-    uint64_t max_iters;
+    // Render settings (grouped by size to minimize padding)
+    int32_t sh_degree;
+    int32_t max_iters;
     float tmin;
-    float _pad0;               // Explicit padding before 8-byte aligned pointer
+    float max_prim_size;
     StructuredBuffer<float> tmax;
     StructuredBuffer<float4> initial_contrib;
-    float max_prim_size;
-    uint32_t _pad1;            // Explicit padding before 8-byte aligned handle
     OptixTraversableHandle handle;
 };
 
