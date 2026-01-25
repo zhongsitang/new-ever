@@ -156,9 +156,9 @@ namespace {
 // Find primitives within tmin distance of ray origin
 __global__ void find_enclosing_primitives_kernel(
     const OptixAabb* __restrict__ aabbs,
+    const float* __restrict__ ray_origins,
     int num_prims,
     float tmin,
-    const float* __restrict__ ray_origins,
     int* __restrict__ hit_indices,
     int* __restrict__ hit_count)
 {
@@ -191,13 +191,13 @@ __global__ void accumulate_initial_samples_kernel(
     const float* __restrict__ quats,
     const float* __restrict__ densities,
     const float* __restrict__ features,
-    int num_rays,
-    float tmin,
     const float* __restrict__ ray_origins,
     const float* __restrict__ ray_directions,
-    float* __restrict__ initial_contrib,
     const int* __restrict__ hit_indices,
-    const int* __restrict__ hit_count)
+    const int* __restrict__ hit_count,
+    int num_rays,
+    float tmin,
+    float* __restrict__ initial_contrib)
 {
     int ray_idx = blockIdx.x * blockDim.x + threadIdx.x;
     int hit_idx = blockIdx.y * blockDim.y + threadIdx.y;
@@ -232,13 +232,14 @@ __global__ void accumulate_initial_samples_kernel(
 
 // Single-ray version: check all primitives directly
 __global__ void accumulate_initial_samples_single_kernel(
+    // Primitive inputs
     const float* __restrict__ means,
     const float* __restrict__ scales,
     const float* __restrict__ quats,
     const float* __restrict__ densities,
     const float* __restrict__ features,
-    int num_prims,
     const float* __restrict__ ray_origin,
+    int num_prims,
     float* __restrict__ initial_contrib)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -267,8 +268,8 @@ __global__ void accumulate_initial_samples_single_kernel(
 // Public API
 // =============================================================================
 
-void init_ray_start_samples(Params* params, OptixAabb* aabbs,
-                            int* d_hit_count, int* d_hit_inds) {
+void init_ray_start_samples(const OptixAabb* aabbs, Params* params,
+                            int* d_hit_inds, int* d_hit_count) {
     int num_prims = params->means.size;
     int num_rays  = params->initial_contrib.size;
 
@@ -282,8 +283,8 @@ void init_ray_start_samples(Params* params, OptixAabb* aabbs,
     // Phase 1: find enclosing primitives
     int grid = (num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
     find_enclosing_primitives_kernel<<<grid, BLOCK_SIZE>>>(
-        aabbs, num_prims, params->tmin,
-        params->ray_origins.data,
+        aabbs, params->ray_origins.data,
+        num_prims, params->tmin,
         d_hit_inds, d_hit_count);
 
     int hit_count = 0;
@@ -300,11 +301,11 @@ void init_ray_start_samples(Params* params, OptixAabb* aabbs,
             params->scales.data,
             params->quats.data,
             params->densities.data, params->features.data,
-            num_rays, params->tmin,
             params->ray_origins.data,
             params->ray_directions.data,
-            params->initial_contrib.data,
-            d_hit_inds, d_hit_count);
+            d_hit_inds, d_hit_count,
+            num_rays, params->tmin,
+            params->initial_contrib.data);
         CUDA_SYNC_CHECK();
     }
 
@@ -323,8 +324,8 @@ void init_ray_start_samples_single(Params* params) {
         params->scales.data,
         params->quats.data,
         params->densities.data, params->features.data,
-        num_prims,
         params->ray_origins.data,
+        num_prims,
         params->initial_contrib.data);
     CUDA_SYNC_CHECK();
 }

@@ -66,43 +66,42 @@ struct HitAttr {
 // =============================================================================
 // Launch Parameters (set by host)
 // =============================================================================
-// Memory layout organized for optimal alignment:
-// - All StructuredBuffers grouped together (16-byte aligned each)
-// - Scalar parameters grouped together (4-byte aligned each)
-// - OptixTraversableHandle at end (8-byte aligned)
+//
+// IMPORTANT: Memory layout must match C++ Params struct exactly.
+// Order: Input buffers -> Output buffers -> Scalars -> Handle
 
-// Output buffers (16-byte aligned StructuredBuffers)
+// --- Input buffers (read-only) ----------------------------------------------
+// Ray data
+StructuredBuffer<float>         ray_origins;        // (N, 3) flattened
+StructuredBuffer<float>         ray_directions;     // (N, 3) flattened
+StructuredBuffer<float>         tmax;               // Maximum ray t (per-ray)
+// Primitive data
+StructuredBuffer<float>         means;              // Ellipsoid centers (N, 3) flattened
+StructuredBuffer<float>         scales;             // Ellipsoid radii (N, 3) flattened
+StructuredBuffer<float>         quats;              // Ellipsoid rotations (N, 4) flattened, wxyz
+StructuredBuffer<float>         densities;          // Ellipsoid densities
+StructuredBuffer<float>         features;           // SH coefficients for color
+
+// --- Output buffers ---------------------------------------------------------
+// Primary outputs
 RWStructuredBuffer<float>       image;              // Rendered RGBA output (N, 4) flattened
 RWStructuredBuffer<float>       depth_out;          // Rendered depth output
+// Backward state outputs
+RWStructuredBuffer<IntegratorState> last_state;     // Final volume state per ray
+RWStructuredBuffer<float>       last_delta_contrib; // Last delta contribution (N, 4) flattened
 RWStructuredBuffer<int>         iters;              // Iteration count per ray
 RWStructuredBuffer<int>         last_prim;          // Last primitive hit (for debugging)
 RWStructuredBuffer<int>         prim_hits;          // Hit count per primitive
-RWStructuredBuffer<float>       last_delta_contrib; // Last sample delta contribution (N, 4) flattened
-RWStructuredBuffer<IntegratorState> last_state;     // Final volume state per ray
 RWStructuredBuffer<int>         hit_collection;     // Collected hit IDs for backward pass
+StructuredBuffer<float>         initial_contrib;    // Initial contribution (N, 4) flattened
 
-// Input buffers
-StructuredBuffer<float>         ray_origins;        // (N, 3) flattened
-StructuredBuffer<float>         ray_directions;     // (N, 3) flattened
-
-// Primitive data (read-only in shaders)
-StructuredBuffer<float>         means;      // Ellipsoid centers (N, 3) flattened
-StructuredBuffer<float>         scales;     // Ellipsoid radii (N, 3) flattened
-StructuredBuffer<float>         quats;      // Ellipsoid rotations (N, 4) flattened, quaternion wxyz
-StructuredBuffer<float>         densities;  // Ellipsoid densities
-StructuredBuffer<float>         features;   // SH coefficients for color
-
-// Per-ray parameters (read-only in shaders)
-StructuredBuffer<float>         tmax;               // Maximum ray t (per-ray)
-StructuredBuffer<float>         initial_contrib;    // Initial accumulated contribution (N, 4) flattened
-
-// Scalar parameters (4-byte aligned, grouped for 16-byte alignment)
+// --- Scalar parameters ------------------------------------------------------
 int sh_degree;                              // Spherical harmonics degree
 int max_iters;                              // Maximum iterations per ray
 float tmin;                                 // Minimum ray t
 float max_prim_size;                        // Maximum primitive size (for acceleration)
 
-// Acceleration structure handle (8-byte aligned)
+// --- Acceleration structure -------------------------------------------------
 RaytracingAccelerationStructure traversable; // BVH acceleration structure
 
 // =============================================================================

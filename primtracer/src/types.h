@@ -33,8 +33,8 @@ struct StructuredBuffer {
 // Primitive Data
 // =============================================================================
 
-/// Ellipsoid primitive geometry (GPU pointers)
-/// All vector data stored as scalar float arrays for safe torch tensor interop
+/// Ellipsoid primitive geometry (GPU pointers).
+/// All vector data stored as scalar float arrays for safe torch tensor interop.
 struct Primitives {
     float* means;         // (N, 3) flattened
     float* scales;        // (N, 3) flattened
@@ -48,8 +48,8 @@ struct Primitives {
 // Volume Rendering State
 // =============================================================================
 
-/// Per-ray volume integrator state (48 bytes, 16-byte aligned)
-/// Using float4 for C to avoid float3 alignment issues with Slang
+/// Per-ray volume integrator state (48 bytes, 16-byte aligned).
+/// Using float4 for C to avoid float3 alignment issues with Slang.
 struct IntegratorState {
     float4 accumulated_contrib;  // (density, r*d, g*d, b*d)
     float4 C;                    // accumulated color RGB (w unused, for alignment)
@@ -62,42 +62,38 @@ struct IntegratorState {
 static_assert(sizeof(IntegratorState) == 48);
 static_assert(alignof(IntegratorState) == 16);
 
-/// State saved for backward gradient computation
-/// All vector data stored as scalar float arrays for safe torch tensor interop
+/// State saved for backward gradient computation.
+/// All vector data stored as scalar float arrays for safe torch tensor interop.
 struct SavedState {
-    IntegratorState* states;     // (M,) per-ray integrator state
-    float* delta_contribs;       // (M, 4) flattened, last delta contribution
-    int32_t* iters;              // (M,) iteration count per ray
-    int32_t* prim_hits;          // (N,) hit count per primitive
-    int32_t* hit_collection;     // (M * max_iters,) hit primitive indices
-    float* initial_contrib;      // (M, 4) flattened, contribution for rays starting inside
+    IntegratorState* states;       // (M,) per-ray integrator state
+    float* delta_contribs;         // (M, 4) flattened, last delta contribution
+    int32_t* iters;                // (M,) iteration count per ray
+    int32_t* last_prim;            // (M,) last primitive hit per ray
+    int32_t* prim_hits;            // (N,) hit count per primitive
+    int32_t* hit_collection;       // (M * max_iters,) hit primitive indices
+    float* initial_contrib;        // (M, 4) flattened, contribution for rays starting inside
     int32_t* initial_prim_indices; // (N,) primitives containing ray origins
-    int32_t* initial_prim_count; // (1,) count of initial_prim_indices
+    int32_t* initial_prim_count;   // (1,) count of initial_prim_indices
 };
 
 // =============================================================================
-// OptiX Launch Parameters (must match slang layout exactly)
+// OptiX Launch Parameters
 // =============================================================================
-// Memory layout organized for optimal alignment:
-// - All StructuredBuffers grouped together (16-byte aligned each)
-// - Scalar parameters grouped together (4-byte aligned each)
-// - OptixTraversableHandle at end (8-byte aligned)
+//
+// IMPORTANT: Memory layout must match Slang shader global variables exactly.
+// Order: Input buffers -> Output buffers -> Scalars -> Handle
+//
+// Alignment rules:
+//   - StructuredBuffers: 16-byte aligned each
+//   - Scalar parameters: 4-byte aligned, grouped for 16-byte alignment
+//   - OptixTraversableHandle: 8-byte aligned
 
 struct Params {
-    // Output buffers (16-byte aligned StructuredBuffers)
-    StructuredBuffer<float> image;
-    StructuredBuffer<float> depth_out;
-    StructuredBuffer<int32_t> iters;
-    StructuredBuffer<int32_t> last_prim;
-    StructuredBuffer<int32_t> prim_hits;
-    StructuredBuffer<float> last_delta_contrib;
-    StructuredBuffer<IntegratorState> last_state;
-    StructuredBuffer<int32_t> hit_collection;
-
-    // Input buffers
+    // --- Input buffers (read-only) ------------------------------------------
+    // Ray data
     StructuredBuffer<float> ray_origins;
     StructuredBuffer<float> ray_directions;
-
+    StructuredBuffer<float> tmax;
     // Primitive data
     StructuredBuffer<float> means;
     StructuredBuffer<float> scales;
@@ -105,16 +101,25 @@ struct Params {
     StructuredBuffer<float> densities;
     StructuredBuffer<float> features;
 
-    // Per-ray parameters (StructuredBuffers grouped for alignment)
-    StructuredBuffer<float> tmax;
+    // --- Output buffers -----------------------------------------------------
+    // Primary outputs
+    StructuredBuffer<float> image;
+    StructuredBuffer<float> depth_out;
+    // Backward state outputs
+    StructuredBuffer<IntegratorState> last_state;
+    StructuredBuffer<float> last_delta_contrib;
+    StructuredBuffer<int32_t> iters;
+    StructuredBuffer<int32_t> last_prim;
+    StructuredBuffer<int32_t> prim_hits;
+    StructuredBuffer<int32_t> hit_collection;
     StructuredBuffer<float> initial_contrib;
 
-    // Scalar parameters (4-byte aligned, grouped for 16-byte alignment)
+    // --- Scalar parameters --------------------------------------------------
     int32_t sh_degree;
     int32_t max_iters;
     float tmin;
     float max_prim_size;
 
-    // Acceleration structure handle (8-byte aligned)
+    // --- Acceleration structure ---------------------------------------------
     OptixTraversableHandle handle;
 };

@@ -121,18 +121,19 @@ public:
         auto opts_f = torch::device(device_).dtype(torch::kFloat32);
         auto opts_i = torch::device(device_).dtype(torch::kInt32);
 
-        torch::Tensor color = torch::zeros({(long)num_rays, 4}, opts_f);
-        torch::Tensor depth = torch::zeros({(long)num_rays}, opts_f);
+        torch::Tensor color = torch::zeros({num_rays, 4}, opts_f);
+        torch::Tensor depth = torch::zeros({num_rays}, opts_f);
 
         // Allocate backward state tensors
         constexpr size_t state_floats = sizeof(IntegratorState) / sizeof(float);
-        torch::Tensor states = torch::zeros({(long)num_rays, (long)state_floats}, opts_f);
-        torch::Tensor delta_contribs = torch::zeros({(long)num_rays, 4}, opts_f);
-        torch::Tensor iters = torch::zeros({(long)num_rays}, opts_i);
-        torch::Tensor prim_hits = torch::zeros({(long)num_prims}, opts_i);
-        torch::Tensor hit_collection = torch::zeros({(long)(num_rays * max_iters)}, opts_i);
-        torch::Tensor initial_contrib = torch::zeros({(long)num_rays, 4}, opts_f);
-        torch::Tensor initial_prim_indices = torch::zeros({(long)num_prims}, opts_i);
+        torch::Tensor states = torch::zeros({num_rays, state_floats}, opts_f);
+        torch::Tensor delta_contribs = torch::zeros({num_rays, 4}, opts_f);
+        torch::Tensor iters = torch::zeros({num_rays}, opts_i);
+        torch::Tensor last_prim = torch::zeros({num_rays}, opts_i);
+        torch::Tensor prim_hits = torch::zeros({num_prims}, opts_i);
+        torch::Tensor hit_collection = torch::zeros({(num_rays * max_iters)}, opts_i);
+        torch::Tensor initial_contrib = torch::zeros({num_rays, 4}, opts_f);
+        torch::Tensor initial_prim_indices = torch::zeros({num_prims}, opts_i);
         torch::Tensor initial_prim_count = torch::zeros({1}, opts_i);
 
         // Setup backward state (use scalar float pointers for safe torch interop)
@@ -141,6 +142,7 @@ public:
             .states = static_cast<IntegratorState*>(states.data_ptr()),
             .delta_contribs = delta_contribs.data_ptr<float>(),
             .iters = iters.data_ptr<int32_t>(),
+            .last_prim = last_prim.data_ptr<int32_t>(),
             .prim_hits = prim_hits.data_ptr<int32_t>(),
             .hit_collection = hit_collection.data_ptr<int32_t>(),
             .initial_contrib = initial_contrib.data_ptr<float>(),
@@ -150,16 +152,16 @@ public:
 
         // Trace rays (use scalar float pointers for safe torch interop)
         tracer_->trace_rays(
-            num_rays,
             ray_origins.data_ptr<float>(),
             ray_directions.data_ptr<float>(),
+            tmax.data_ptr<float>(),
+            tmin,
+            num_rays,
+            sh_degree,
+            max_iters,
             color.data_ptr<float>(),
             depth.data_ptr<float>(),
-            sh_degree,
-            tmin,
-            tmax.data_ptr<float>(),
-            max_iters,
-            &saved
+            saved
         );
 
         return py::dict(

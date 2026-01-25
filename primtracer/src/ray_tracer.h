@@ -79,9 +79,9 @@ inline void optix_log_cb(unsigned int, const char*, const char*, void*) {}
 void compute_primitive_aabbs(const Primitives& prims, OptixAabb* aabbs);
 
 /// Initialize contributions for rays starting inside primitives.
-void init_ray_start_samples(Params* params, OptixAabb* aabbs,
-                            int* d_hit_count = nullptr,
-                            int* d_hit_inds = nullptr);
+void init_ray_start_samples(const OptixAabb* aabbs, Params* params,
+                            int* d_hit_inds = nullptr,
+                            int* d_hit_count = nullptr);
 
 // =============================================================================
 // DeviceContext - Per-device OptiX context (globally cached)
@@ -311,16 +311,16 @@ public:
     /// Requires update_primitives() to be called first.
     /// All vector parameters use scalar float arrays for safe torch tensor interop.
     void trace_rays(
-        int32_t num_rays,
-        float* ray_origins,      // (num_rays, 3) flattened
-        float* ray_directions,   // (num_rays, 3) flattened
-        float* color_out,        // (num_rays, 4) flattened
-        float* depth_out,
-        int32_t sh_degree,
+        const float* ray_origins,      // (num_rays, 3) flattened
+        const float* ray_directions,   // (num_rays, 3) flattened
+        const float* tmax,             // (num_rays,) per-ray max distance
         float tmin,
-        float* tmax,
+        int32_t num_rays,
+        int32_t sh_degree,
         int32_t max_iters,
-        SavedState* saved
+        float* color_out,              // (num_rays, 4) flattened
+        float* depth_out,              // (num_rays,) depth values
+        SavedState& saved
     );
 
     bool has_primitives() const { return prims_.num_prims > 0; }
