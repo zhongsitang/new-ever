@@ -50,13 +50,14 @@ struct Primitives {
 // =============================================================================
 
 /// Per-ray volume integrator state (48 bytes, 16-byte aligned)
+/// Using float4 for C to avoid float3 alignment issues with Slang
 struct IntegratorState {
     float4 accumulated_contrib;  // (density, r*d, g*d, b*d)
-    float3 C;                    // accumulated color RGB
+    float4 C;                    // accumulated color RGB (w unused, for alignment)
     float logT;                  // log transmittance
     float depth_accum;           // accumulated depth
     float t;                     // current ray parameter
-    float _pad[2];
+    float _pad;                  // padding to 48 bytes
 };
 
 static_assert(sizeof(IntegratorState) == 48);
@@ -76,11 +77,15 @@ struct SavedState {
 };
 
 // =============================================================================
-// OptiX Launch Parameters (must match slang layout)
+// OptiX Launch Parameters (must match slang layout exactly)
 // =============================================================================
+// Memory layout organized for optimal alignment:
+// - All StructuredBuffers grouped together (16-byte aligned each)
+// - Scalar parameters grouped together (4-byte aligned each)
+// - OptixTraversableHandle at end (8-byte aligned)
 
 struct Params {
-    // Output buffers (float4 stored as float* with size = num_rays * 4)
+    // Output buffers (16-byte aligned StructuredBuffers)
     StructuredBuffer<float> image;
     StructuredBuffer<float> depth_out;
     StructuredBuffer<int32_t> iters;
@@ -90,23 +95,27 @@ struct Params {
     StructuredBuffer<IntegratorState> last_state;
     StructuredBuffer<int32_t> hit_collection;
 
-    // Ray data (float3 stored as float* with size = num_rays * 3)
+    // Input buffers
     StructuredBuffer<float> ray_origins;
     StructuredBuffer<float> ray_directions;
 
-    // Primitive data (float3/float4 stored as float*)
+    // Primitive data
     StructuredBuffer<float> means;
     StructuredBuffer<float> scales;
     StructuredBuffer<float> quats;
     StructuredBuffer<float> densities;
     StructuredBuffer<float> features;
 
-    // Render settings (using int32_t for stable Slang interop)
+    // Per-ray parameters (StructuredBuffers grouped for alignment)
+    StructuredBuffer<float> tmax;
+    StructuredBuffer<float> initial_contrib;
+
+    // Scalar parameters (4-byte aligned, grouped for 16-byte alignment)
     int32_t sh_degree;
     int32_t max_iters;
     float tmin;
-    StructuredBuffer<float> tmax;
-    StructuredBuffer<float> initial_contrib;
     float max_prim_size;
+
+    // Acceleration structure handle (8-byte aligned)
     OptixTraversableHandle handle;
 };

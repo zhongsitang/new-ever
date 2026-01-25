@@ -66,8 +66,12 @@ struct HitAttr {
 // =============================================================================
 // Launch Parameters (set by host)
 // =============================================================================
+// Memory layout organized for optimal alignment:
+// - All StructuredBuffers grouped together (16-byte aligned each)
+// - Scalar parameters grouped together (4-byte aligned each)
+// - OptixTraversableHandle at end (8-byte aligned)
 
-// Output buffers (float4 stored as flattened float arrays)
+// Output buffers (16-byte aligned StructuredBuffers)
 RWStructuredBuffer<float>       image;              // Rendered RGBA output (N, 4) flattened
 RWStructuredBuffer<float>       depth_out;          // Rendered depth output
 RWStructuredBuffer<int>         iters;              // Iteration count per ray
@@ -77,24 +81,28 @@ RWStructuredBuffer<float>       last_delta_contrib; // Last sample delta contrib
 RWStructuredBuffer<IntegratorState> last_state;     // Final volume state per ray
 RWStructuredBuffer<int>         hit_collection;     // Collected hit IDs for backward pass
 
-// Input buffers (float3 stored as flattened float arrays)
+// Input buffers
 StructuredBuffer<float>         ray_origins;        // (N, 3) flattened
 StructuredBuffer<float>         ray_directions;     // (N, 3) flattened
 
-// Primitive data (float3/float4 stored as flattened float arrays)
+// Primitive data
 RWStructuredBuffer<float>       means;      // Ellipsoid centers (N, 3) flattened
 RWStructuredBuffer<float>       scales;     // Ellipsoid radii (N, 3) flattened
 RWStructuredBuffer<float>       quats;      // Ellipsoid rotations (N, 4) flattened, quaternion wxyz
 RWStructuredBuffer<float>       densities;  // Ellipsoid densities
 RWStructuredBuffer<float>       features;   // SH coefficients for color
 
-// Rendering parameters (using int for stable cross-platform ABI)
+// Per-ray parameters (StructuredBuffers moved here for alignment)
+StructuredBuffer<float>         tmax;               // Maximum ray t (per-ray)
+RWStructuredBuffer<float>       initial_contrib;    // Initial accumulated contribution (N, 4) flattened
+
+// Scalar parameters (4-byte aligned, grouped for 16-byte alignment)
 int sh_degree;                              // Spherical harmonics degree
 int max_iters;                              // Maximum iterations per ray
 float tmin;                                 // Minimum ray t
-StructuredBuffer<float>         tmax;       // Maximum ray t (per-ray)
-RWStructuredBuffer<float>       initial_contrib;  // Initial accumulated contribution (N, 4) flattened
 float max_prim_size;                        // Maximum primitive size (for acceleration)
+
+// Acceleration structure handle (8-byte aligned)
 RaytracingAccelerationStructure traversable; // BVH acceleration structure
 
 // =============================================================================
