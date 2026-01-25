@@ -274,10 +274,18 @@ __global__ void accumulate_initial_samples_single_kernel(
 // Public API
 // =============================================================================
 
-void init_ray_start_samples(Params* params, OptixAabb* aabbs,
-                            int* d_hit_count, int* d_hit_inds) {
-    int num_prims = params->means.size;
-    int num_rays  = params->initial_contrib.size;
+void init_ray_start_samples(
+    const Primitives& prims,
+    size_t num_rays,
+    float tmin,
+    const float* ray_origins,
+    const float* ray_directions,
+    float* initial_contrib,
+    OptixAabb* aabbs,
+    int* d_hit_count,
+    int* d_hit_inds)
+{
+    size_t num_prims = prims.num_prims;
 
     bool alloc_temp = (d_hit_count == nullptr);
     if (alloc_temp) {
@@ -289,8 +297,8 @@ void init_ray_start_samples(Params* params, OptixAabb* aabbs,
     // Phase 1: find enclosing primitives
     size_t grid = (num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
     find_enclosing_primitives_kernel<<<grid, BLOCK_SIZE>>>(
-        aabbs, (size_t)num_prims, params->tmin,
-        params->ray_origins.data,
+        aabbs, num_prims, tmin,
+        ray_origins,
         d_hit_inds, d_hit_count);
 
     int hit_count = 0;
@@ -303,11 +311,11 @@ void init_ray_start_samples(Params* params, OptixAabb* aabbs,
         dim3 block(RAY_BLOCK, HIT_BLOCK);
 
         accumulate_initial_samples_kernel<<<grid2, block>>>(
-            params->means.data, params->scales.data, params->quats.data,
-            params->densities.data, params->features.data,
-            (size_t)num_rays, params->tmin,
-            params->ray_origins.data, params->ray_directions.data,
-            params->initial_contrib.data,
+            prims.means, prims.scales, prims.quats,
+            prims.densities, prims.features,
+            num_rays, tmin,
+            ray_origins, ray_directions,
+            initial_contrib,
             d_hit_inds, d_hit_count);
         CUDA_SYNC_CHECK();
     }
@@ -316,20 +324,4 @@ void init_ray_start_samples(Params* params, OptixAabb* aabbs,
         cudaFree(d_hit_inds);
         cudaFree(d_hit_count);
     }
-}
-
-void init_ray_start_samples_single(Params* params) {
-    int num_prims = params->means.size;
-    size_t grid = (num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
-
-    accumulate_initial_samples_single_kernel<<<grid, BLOCK_SIZE>>>(
-        params->means.data, params->scales.data, params->quats.data,
-        params->densities.data, params->features.data,
-        (size_t)num_prims,
-        params->ray_origins.data, params->initial_contrib.data);
-    CUDA_SYNC_CHECK();
-}
-
-void init_ray_start_samples_zero(Params* params) {
-    (void)params;  // no-op placeholder
 }

@@ -212,9 +212,13 @@ void RayTracer::trace_rays(
         CUDA_CHECK(cudaMemset(saved->initial_contrib, 0, num_rays * 4 * sizeof(float)));
         params_.initial_contrib = {saved->initial_contrib, num_rays * 4}; // (M, 4)
 
-        init_ray_start_samples(&params_, accel_->aabbs(),
-                               saved->initial_prim_count,
-                               saved->initial_prim_indices);
+        init_ray_start_samples(
+            prims_, num_rays, tmin,
+            ray_origins, ray_directions,
+            saved->initial_contrib,
+            accel_->aabbs(),
+            saved->initial_prim_count,
+            saved->initial_prim_indices);
     } else {
         params_.last_state = {nullptr, 0};
         params_.last_delta_contrib = {nullptr, 0};  // (M, 4)

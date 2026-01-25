@@ -79,9 +79,28 @@ inline void optix_log_cb(unsigned int, const char*, const char*, void*) {}
 void compute_primitive_aabbs(const Primitives& prims, OptixAabb* aabbs);
 
 /// Initialize contributions for rays starting inside primitives.
-void init_ray_start_samples(Params* params, OptixAabb* aabbs,
-                            int* d_hit_count = nullptr,
-                            int* d_hit_inds = nullptr);
+/// Finds primitives whose AABBs are within tmin distance of ray origins,
+/// then accumulates their contributions to initial_contrib.
+///
+/// @param prims          Primitive geometry data
+/// @param num_rays       Number of rays
+/// @param tmin           Minimum ray parameter (rays start at origin + tmin * direction)
+/// @param ray_origins    Ray origins, shape (num_rays, 3) flattened
+/// @param ray_directions Ray directions, shape (num_rays, 3) flattened
+/// @param initial_contrib Output contributions, shape (num_rays, 4) flattened, must be zeroed
+/// @param aabbs          Precomputed AABBs for primitives
+/// @param d_hit_count    Optional preallocated device buffer for hit count
+/// @param d_hit_inds     Optional preallocated device buffer for hit indices
+void init_ray_start_samples(
+    const Primitives& prims,
+    size_t num_rays,
+    float tmin,
+    const float* ray_origins,
+    const float* ray_directions,
+    float* initial_contrib,
+    OptixAabb* aabbs,
+    int* d_hit_count = nullptr,
+    int* d_hit_inds = nullptr);
 
 // =============================================================================
 // DeviceContext - Per-device OptiX context (globally cached)
