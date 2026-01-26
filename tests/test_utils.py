@@ -124,6 +124,7 @@ def quat_to_mat3_jax(q: jnp.ndarray) -> jnp.ndarray:
 def create_primitives(
     n: int,
     density_scale: float = 1.0,
+    sh_degree: int = 3,
     seed: int = 42,
     device: torch.device | None = None,
 ) -> Dict[str, torch.Tensor]:
@@ -132,13 +133,14 @@ def create_primitives(
     np.random.seed(seed)
 
     device = device or get_device()
+    num_sh_coeff = (sh_degree + 1) ** 2
 
     return {
         "mean": torch.rand(n, 3, device=device) * 2 - 1,
         "scale": 0.1 + 0.4 * torch.rand(n, 3, device=device),
         "quat": l2_normalize(2 * torch.rand(n, 4, device=device) - 1),
         "density": density_scale * torch.rand(n, 1, device=device),
-        "features": torch.rand(n, 1, 3, device=device),
+        "features": torch.rand(n, num_sh_coeff, 3, device=device),
     }
 
 
@@ -290,9 +292,39 @@ def render_quadrature(
         return color_rgba, depth
 
 
-def sh_to_rgb(sh: torch.Tensor) -> torch.Tensor:
-    """Convert SH(0th) to rgb-like values (kept as your original behavior)."""
-    return sh * C0 + 0.5
+def eval_sh_jax(deg: int, sh: jnp.ndarray, dirs: jnp.ndarray) -> jnp.ndarray:
+    """Evaluate spherical harmonics (JAX reference)."""
+    result = C0 * sh[..., 0]
+
+    if deg > 0:
+        x, y, z = dirs[..., 0:1], dirs[..., 1:2], dirs[..., 2:3]
+        result = result - C1 * y * sh[..., 1] + C1 * z * sh[..., 2] - C1 * x * sh[..., 3]
+
+        if deg > 1:
+            xx, yy, zz = x * x, y * y, z * z
+            xy, yz, xz = x * y, y * z, x * z
+            result = (
+                result
+                + C2[0] * xy * sh[..., 4]
+                + C2[1] * yz * sh[..., 5]
+                + C2[2] * (2 * zz - xx - yy) * sh[..., 6]
+                + C2[3] * xz * sh[..., 7]
+                + C2[4] * (xx - yy) * sh[..., 8]
+            )
+
+            if deg > 2:
+                result = (
+                    result
+                    + C3[0] * y * (3 * xx - yy) * sh[..., 9]
+                    + C3[1] * xy * z * sh[..., 10]
+                    + C3[2] * y * (4 * zz - xx - yy) * sh[..., 11]
+                    + C3[3] * z * (2 * zz - 3 * xx - 3 * yy) * sh[..., 12]
+                    + C3[4] * x * (4 * zz - xx - yy) * sh[..., 13]
+                    + C3[5] * z * (xx - yy) * sh[..., 14]
+                    + C3[6] * x * (xx - 3 * yy) * sh[..., 15]
+                )
+
+    return result + 0.5
 
 
 def query_ellipsoid(
@@ -314,7 +346,10 @@ def query_ellipsoid(
 
     inside = d < 1.0
     densities = jnp.where(inside, params["density"], 0.0)
-    colors = jnp.where(inside, params["density"] * params["features"].reshape(1, 3), 0.0)
+    # Evaluate SH color using ray direction
+    sh_deg = params["sh_degree"]
+    color = eval_sh_jax(sh_deg, params["features"], rayd.reshape(1, 3))
+    colors = jnp.where(inside, params["density"] * color, 0.0)
     return densities, colors
 
 
@@ -339,6 +374,9 @@ def trace_rays_reference(
         If return_extras=False: (color_rgba, depth)
         If return_extras=True: (color_rgba, depth, extras)
     """
+    # Infer SH degree from features shape: (N, num_coeff, 3) -> deg = sqrt(num_coeff) - 1
+    num_coeff = features.shape[1]
+    sh_degree = int(np.sqrt(num_coeff)) - 1
 
     vquery_ellipsoid = jax.vmap(
         query_ellipsoid,
@@ -352,6 +390,7 @@ def trace_rays_reference(
                 "density": 0,
                 "scale": 0,
                 "features": 0,
+                "sh_degree": None,
             },
         ),
     )
@@ -364,12 +403,17 @@ def trace_rays_reference(
 
     tdist = jnp.linspace(tmin, tmax, num_samples + 1)
 
+    # features shape: (N, num_coeff, 3) -> transpose to (N, 3, num_coeff) for SH eval
+    features_np = features.detach().cpu().numpy().astype(np.float64)
+    features_transposed = features_np.transpose(0, 2, 1)  # (N, 3, num_coeff)
+
     params = {
         "mean": mean.detach().cpu().numpy().astype(np.float64).reshape(-1, 3),
         "scale": scale.detach().cpu().numpy().astype(np.float64).reshape(-1, 3),
         "quat": quat.detach().cpu().numpy().astype(np.float64).reshape(-1, 4),
         "density": density.detach().cpu().numpy().astype(np.float64).reshape(-1, 1),
-        "features": sh_to_rgb(features).detach().cpu().numpy().astype(np.float64).reshape(-1, 3),
+        "features": features_transposed,
+        "sh_degree": sh_degree,
     }
     ray_o = rayo.detach().cpu().numpy().astype(np.float64)
     ray_d = rayd.detach().cpu().numpy().astype(np.float64)
@@ -446,7 +490,7 @@ def eval_sh_torch(
     features: torch.Tensor,
     rayo: torch.Tensor,
     sh_degree: int,
-    apply_clip: bool = False,
+    apply_clip: bool = True,
 ) -> torch.Tensor:
     """
     Evaluate SH for primitives (torch reference).

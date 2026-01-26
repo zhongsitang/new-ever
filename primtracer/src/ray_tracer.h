@@ -14,11 +14,6 @@
 
 #pragma once
 
-// Prevent Windows min/max macro pollution
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <optix.h>

@@ -30,91 +30,42 @@ static const float SH_C3[] = {
 };
 
 // =============================================================================
-// SH Features for StructuredBuffer (forward pass)
+// SH Feature Storage
 // =============================================================================
 
-/// SH feature accessor for StructuredBuffer.
-struct SHFeatures {
-    uint idx;
-    uint sh_degree;
-    StructuredBuffer<float> shs;
-};
-
-/// Load single SH coefficient from StructuredBuffer.
-float3 get_sh(in SHFeatures feats, uint coeff_idx) {
-    let num_coeff = (feats.sh_degree + 1) * (feats.sh_degree + 1);
-    let offset = feats.idx * num_coeff * 3 + coeff_idx * 3;
-    return { feats.shs[offset], feats.shs[offset + 1], feats.shs[offset + 2] };
-}
-
-/// Evaluate SH color directly from StructuredBuffer (fused load + eval).
-float3 eval_color(float3 dir, SHFeatures feats) {
-    float3 color = SH_C0 * get_sh(feats, 0) + 0.5f;
-
-    if (feats.sh_degree > 0) {
-        float x = dir.x, y = dir.y, z = dir.z;
-        color += -SH_C1 * y * get_sh(feats, 1)
-               +  SH_C1 * z * get_sh(feats, 2)
-               -  SH_C1 * x * get_sh(feats, 3);
-
-        if (feats.sh_degree > 1) {
-            float xx = x * x, yy = y * y, zz = z * z;
-            float xy = x * y, yz = y * z, xz = x * z;
-            color += SH_C2[0] * xy * get_sh(feats, 4)
-                   + SH_C2[1] * yz * get_sh(feats, 5)
-                   + SH_C2[2] * (2.0f * zz - xx - yy) * get_sh(feats, 6)
-                   + SH_C2[3] * xz * get_sh(feats, 7)
-                   + SH_C2[4] * (xx - yy) * get_sh(feats, 8);
-
-            if (feats.sh_degree > 2) {
-                color += SH_C3[0] * y * (3.0f * xx - yy) * get_sh(feats, 9)
-                       + SH_C3[1] * x * y * z * get_sh(feats, 10)
-                       + SH_C3[2] * y * (4.0f * zz - xx - yy) * get_sh(feats, 11)
-                       + SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * get_sh(feats, 12)
-                       + SH_C3[4] * x * (4.0f * zz - xx - yy) * get_sh(feats, 13)
-                       + SH_C3[5] * z * (xx - yy) * get_sh(feats, 14)
-                       + SH_C3[6] * x * (xx - 3.0f * yy) * get_sh(feats, 15);
-            }
-        }
-    }
-    return color;
-}
-
-// =============================================================================
-// SH Features for TensorView (backward pass with autodiff)
-// =============================================================================
-
-/// SH feature storage for up to degree 3 (differentiable).
+/// SH feature storage for up to degree 3 (16 coefficients, differentiable).
 struct Features : IDifferentiable {
-    float3 f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15;
+    float3 c[16];
+    no_diff uint degree;  // SH degree (0-3), excluded from differentiation
 };
 
 /// Evaluate SH color from Features struct (differentiable).
 [Differentiable]
-float3 eval_color(float3 dir, Features feat, no_diff uint sh_degree) {
-    float3 color = SH_C0 * feat.f0 + 0.5f;
+float3 eval_color(float3 dir, Features feat) {
+    float3 color = SH_C0 * feat.c[0] + 0.5f;
 
-    if (sh_degree > 0) {
+    if (feat.degree > 0) {
         float x = dir.x, y = dir.y, z = dir.z;
-        color += -SH_C1 * y * feat.f1 + SH_C1 * z * feat.f2 - SH_C1 * x * feat.f3;
+        color += -SH_C1 * y * feat.c[1] + SH_C1 * z * feat.c[2] - SH_C1 * x * feat.c[3];
 
-        if (sh_degree > 1) {
+        if (feat.degree > 1) {
             float xx = x * x, yy = y * y, zz = z * z;
             float xy = x * y, yz = y * z, xz = x * z;
-            color += SH_C2[0] * xy * feat.f4 + SH_C2[1] * yz * feat.f5 +
-                     SH_C2[2] * (2.0f * zz - xx - yy) * feat.f6 +
-                     SH_C2[3] * xz * feat.f7 + SH_C2[4] * (xx - yy) * feat.f8;
+            color += SH_C2[0] * xy * feat.c[4] + SH_C2[1] * yz * feat.c[5] +
+                     SH_C2[2] * (2.0f * zz - xx - yy) * feat.c[6] +
+                     SH_C2[3] * xz * feat.c[7] + SH_C2[4] * (xx - yy) * feat.c[8];
 
-            if (sh_degree > 2) {
-                color += SH_C3[0] * y * (3.0f * xx - yy) * feat.f9 +
-                         SH_C3[1] * x * y * z * feat.f10 +
-                         SH_C3[2] * y * (4.0f * zz - xx - yy) * feat.f11 +
-                         SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * feat.f12 +
-                         SH_C3[4] * x * (4.0f * zz - xx - yy) * feat.f13 +
-                         SH_C3[5] * z * (xx - yy) * feat.f14 +
-                         SH_C3[6] * x * (xx - 3.0f * yy) * feat.f15;
+            if (feat.degree > 2) {
+                color += SH_C3[0] * y * (3.0f * xx - yy) * feat.c[9] +
+                         SH_C3[1] * x * y * z * feat.c[10] +
+                         SH_C3[2] * y * (4.0f * zz - xx - yy) * feat.c[11] +
+                         SH_C3[3] * z * (2.0f * zz - 3.0f * xx - 3.0f * yy) * feat.c[12] +
+                         SH_C3[4] * x * (4.0f * zz - xx - yy) * feat.c[13] +
+                         SH_C3[5] * z * (xx - yy) * feat.c[14] +
+                         SH_C3[6] * x * (xx - 3.0f * yy) * feat.c[15];
             }
         }
     }
-    return color;
+    // Clip to non-negative: SH evaluation can produce negative values
+    return max(color, 0.0f);
 }

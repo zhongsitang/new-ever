@@ -196,11 +196,11 @@ void RayTracer::trace_rays(
     params_.depth = {depth_out, num_rays};
 
     // Backward state buffers
-    params_.last_state = {saved.states, num_rays};
-    params_.last_contrib = {saved.delta_contribs, num_rays};
-    params_.iters = {saved.iters, num_rays};
+    params_.last_state = {saved.last_state, num_rays};
+    params_.last_contrib = {saved.last_contrib, num_rays};
     params_.last_prim = {saved.last_prim, num_rays};
     params_.prim_hits = {saved.prim_hits, prims_.num_prims};
+    params_.iters = {saved.iters, num_rays};
     params_.hit_collection = {saved.hit_collection, num_rays * max_iters};
 
     // Scalar parameters

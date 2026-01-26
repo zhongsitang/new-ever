@@ -70,11 +70,11 @@ static_assert(alignof(IntegratorState) == 16);
 
 /// State saved for backward gradient computation.
 struct SavedState {
-    IntegratorState* states;       // (M,) per-ray integrator state
-    float* delta_contribs;         // (M, 4) flattened, last delta contribution
-    int32_t* iters;                // (M,) iteration count per ray
+    IntegratorState* last_state;   // (M,) per-ray integrator state
+    float* last_contrib;           // (M, 4) flattened, last contribution
     int32_t* last_prim;            // (M,) last primitive hit per ray
     int32_t* prim_hits;            // (N,) hit count per primitive
+    int32_t* iters;                // (M,) iteration count per ray
     int32_t* hit_collection;       // (M * max_iters,) hit primitive indices
 };
 
@@ -110,9 +110,9 @@ struct LaunchParams {
     // Backward state outputs
     StructuredBuffer<IntegratorState> last_state;
     StructuredBuffer<float> last_contrib;
-    StructuredBuffer<int32_t> iters;
     StructuredBuffer<int32_t> last_prim;
     StructuredBuffer<int32_t> prim_hits;
+    StructuredBuffer<int32_t> iters;
     StructuredBuffer<int32_t> hit_collection;
 
     // --- Scalar parameters --------------------------------------------------

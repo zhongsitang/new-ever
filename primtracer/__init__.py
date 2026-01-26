@@ -19,9 +19,9 @@ from typing import Any
 import torch
 from torch.autograd import Function
 
-from . import ellipsoid_tracer as _C
-from . import backwards_kernel as _bw
-from . import sh_kernel as _sh
+from . import optix_tracer as _C
+from . import slang_backward as _bw
+from . import slang_sh as _sh
 
 __all__ = ["trace_rays", "eval_sh", "RayTracer"]
 
@@ -53,68 +53,57 @@ class _PrimTracerFn(Function):
     @staticmethod
     def forward(ctx: Any, mean, scale, quat, density, features, rayo, rayd, tmin, tmax, max_iters):
         tracer = _get_tracer(mean.device.index or 0)
-        tracer.update_primitives(
-            mean.contiguous(), scale.contiguous(), quat.contiguous(),
-            density.contiguous(), features.contiguous()
-        )
-        out = tracer.trace_rays(
-            rayo.contiguous(), rayd.contiguous(), tmin, tmax.contiguous(), max_iters
-        )
+        tracer.update_primitives(mean, scale, quat, density, features)
+        out = tracer.trace_rays(rayo, rayd, tmin, tmax, max_iters)
 
         ctx.tmin, ctx.max_iters = tmin, max_iters
         ctx.save_for_backward(
-            mean, scale, quat, density, features, rayo, rayd, tmax,
-            out["states"], out["delta_contribs"], out["iters"],
-            out["hit_collection"],
+            mean, scale, quat, density, features,
+            rayo, rayd, tmax,
+            out["last_state"], out["last_contrib"], out["iters"], out["hit_collection"],
         )
         return out["color"], out["depth"], out["iters"], out["hit_collection"], out["prim_hits"]
 
     @staticmethod
     def backward(ctx, dL_color, dL_depth, *_):
-        mean, scale, quat, density, features, rayo, rayd, tmax, \
-            states, delta_contribs, iters, hit_collection = ctx.saved_tensors
+        (mean, scale, quat, density, features,
+         rayo, rayd, tmax,
+         last_state, last_contrib, iters, hit_collection) = ctx.saved_tensors
 
         N, M = mean.shape[0], rayo.shape[0]
         dev = mean.device
 
-        # Allocate gradients
-        dL = {
-            "mean": torch.zeros(N, 3, device=dev),
-            "scale": torch.zeros(N, 3, device=dev),
-            "quat": torch.zeros(N, 4, device=dev),
-            "density": torch.zeros(N, device=dev),
-            "features": torch.zeros_like(features),
-            "rayo": torch.zeros(M, 3, device=dev),
-            "rayd": torch.zeros(M, 3, device=dev),
-        }
-        prim_hits = torch.zeros(N, dtype=torch.int32, device=dev)
-        grad = torch.cat([dL_color, dL_depth.view(-1, 1)], dim=1).contiguous()
+        # Allocate gradient tensors
+        dL_mean = torch.zeros(N, 3, device=dev)
+        dL_scale = torch.zeros(N, 3, device=dev)
+        dL_quat = torch.zeros(N, 4, device=dev)
+        dL_density = torch.zeros(N, device=dev)
+        dL_features = torch.zeros_like(features)
+        dL_rayo = torch.zeros(M, 3, device=dev)
+        dL_rayd = torch.zeros(M, 3, device=dev)
 
         if iters.sum() > 0:
-            dual = (mean.contiguous(), scale.contiguous(), quat.contiguous(),
-                    density.contiguous(), features.contiguous(),
-                    dL["mean"], dL["scale"], dL["quat"], dL["density"], dL["features"],
-                    dL["rayo"], dL["rayd"])
+            dL_out = torch.cat([dL_color, dL_depth.unsqueeze(-1)], dim=-1).contiguous()
 
-            # Unified backward pass - handles both normal hits and virtual entry hits
-            # for rays starting inside primitives
-            _bw.backwards_kernel(
+            _bw.bw_trace_rays(
                 (16, 1, 1), (_div_up(M, 16), 1, 1),
-                states, delta_contribs, iters, hit_collection, rayo, rayd,
-                dual, prim_hits,
-                grad, ctx.tmin, tmax, 3.0, ctx.max_iters
+                (mean, scale, quat, density, features,
+                 dL_mean, dL_scale, dL_quat, dL_density, dL_features),
+                (rayo, rayd, tmax, ctx.tmin, dL_rayo, dL_rayd),
+                (last_state, last_contrib, iters, hit_collection),
+                dL_out, ctx.max_iters,
             )
 
         clip = 1e3
         return (
-            dL["mean"].clamp(-clip, clip),
-            dL["scale"].clamp(-clip, clip),
-            dL["quat"].clamp(-clip, clip),
-            dL["density"].clamp(-clip, clip),
-            dL["features"].clamp(-clip, clip),
-            dL["rayo"].clamp(-clip, clip),
-            dL["rayd"].clamp(-clip, clip),
-            None, None, None  # tmin, tmax, max_iters
+            dL_mean.clamp(-clip, clip),
+            dL_scale.clamp(-clip, clip),
+            dL_quat.clamp(-clip, clip),
+            dL_density.clamp(-clip, clip),
+            dL_features.clamp(-clip, clip),
+            dL_rayo.clamp(-clip, clip),
+            dL_rayd.clamp(-clip, clip),
+            None, None, None,
         )
 
 
@@ -151,7 +140,6 @@ def trace_rays(
         (color, depth) or (color, depth, extras) if return_extras=True
     """
     M = rayo.shape[0]
-    density = density.view(-1)
 
     if isinstance(tmax, (int, float)):
         tmax = torch.full((M,), tmax, dtype=torch.float32, device=rayo.device)
@@ -161,11 +149,21 @@ def trace_rays(
             tmax = tmax.expand(M).contiguous()
 
     color, depth, iters, hit_collection, prim_hits = _PrimTracerFn.apply(
-        mean, scale, quat, density, features, rayo, rayd, tmin, tmax, max_iters
+        mean.contiguous(),
+        scale.contiguous(),
+        quat.contiguous(),
+        density.view(-1).contiguous(),
+        features.contiguous(),
+        rayo.contiguous(),
+        rayd.contiguous(),
+        tmin,
+        tmax,
+        max_iters,
     )
 
     if return_extras:
-        return color, depth, {"iters": iters, "hit_collection": hit_collection, "prim_hits": prim_hits}
+        extras = {"iters": iters, "hit_collection": hit_collection, "prim_hits": prim_hits}
+        return color, depth, extras
     return color, depth
 
 

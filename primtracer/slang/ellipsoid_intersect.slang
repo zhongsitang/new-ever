@@ -47,44 +47,14 @@ float2 eliIntersect(in float3 ro, in float3 rd, in float3 ra)
 float2 ray_intersect_ellipsoid(
     in float3 rayo,
     in float3 rayd,
+    in float3 mean,
     in float3 scales,
     in float4 quat)
 {
-    float3 localDir = l2_normalize(rotate_vector(rayd, quat));
-    float3 localOrigin = rotate_vector(rayo, quat);
+    float3 local_dir = l2_normalize(rotate_vector(rayd, quat));
+    float3 local_origin = rotate_vector(rayo - mean, quat);
 
-    float2 t = eliIntersect(localOrigin, localDir, scales);
+    float2 t = eliIntersect(local_origin, local_dir, scales);
 
     return float2(min(t.x, t.y), max(t.x, t.y));
-}
-
-// =============================================================================
-// Sample Point Generation
-// =============================================================================
-
-/// Compute intersection sample point with t-clamping for rays starting inside.
-/// Ensures consistent behavior between forward pass (OptiX) and backward pass.
-[Differentiable]
-SamplePoint intersect_clamped(
-    float3 rayo, float3 rayd, float3 scales, float3 mean, float4 quat,
-    float3 color, float density, uint hit_type, no_diff float t_clamp)
-{
-    float2 t_range = ray_intersect_ellipsoid(rayo - mean, rayd, scales, quat);
-
-    bool is_entry = (hit_type == 1);
-    float raw_t = is_entry ? t_range.x : t_range.y;
-
-    // Clamp entry hits to handle rays starting inside primitives
-    float t = is_entry ? max(raw_t, t_clamp) : raw_t;
-
-    // Entry: +density, Exit: -density
-    float signed_density = is_entry ? density : -density;
-
-    return {
-        t,
-        signed_density,
-        signed_density * color.x,
-        signed_density * color.y,
-        signed_density * color.z
-    };
 }

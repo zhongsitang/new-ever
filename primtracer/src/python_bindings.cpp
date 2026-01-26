@@ -130,21 +130,21 @@ public:
 
         // Allocate backward state tensors
         constexpr size_t state_floats = sizeof(IntegratorState) / sizeof(float);
-        torch::Tensor states = torch::zeros({num_rays, state_floats}, opts_f);
-        torch::Tensor delta_contribs = torch::zeros({num_rays, 4}, opts_f);
-        torch::Tensor iters = torch::zeros({num_rays}, opts_i);
+        torch::Tensor last_state = torch::zeros({num_rays, state_floats}, opts_f);
+        torch::Tensor last_contrib = torch::zeros({num_rays, 4}, opts_f);
         torch::Tensor last_prim = torch::zeros({num_rays}, opts_i);
         torch::Tensor prim_hits = torch::zeros({num_prims}, opts_i);
+        torch::Tensor iters = torch::zeros({num_rays}, opts_i);
         torch::Tensor hit_collection = torch::zeros({(num_rays * max_iters)}, opts_i);
 
         // Setup backward state
         // IntegratorState requires static_cast as PyTorch only supports basic types
         SavedState saved = {
-            .states = static_cast<IntegratorState*>(states.data_ptr()),
-            .delta_contribs = delta_contribs.data_ptr<float>(),
-            .iters = iters.data_ptr<int32_t>(),
+            .last_state = static_cast<IntegratorState*>(last_state.data_ptr()),
+            .last_contrib = last_contrib.data_ptr<float>(),
             .last_prim = last_prim.data_ptr<int32_t>(),
             .prim_hits = prim_hits.data_ptr<int32_t>(),
+            .iters = iters.data_ptr<int32_t>(),
             .hit_collection = hit_collection.data_ptr<int32_t>(),
         };
 
@@ -165,10 +165,10 @@ public:
             "color"_a = color,
             "depth"_a = depth,
             // Backward state
-            "states"_a = states,
-            "delta_contribs"_a = delta_contribs,
-            "iters"_a = iters,
+            "last_state"_a = last_state,
+            "last_contrib"_a = last_contrib,
             "prim_hits"_a = prim_hits,
+            "iters"_a = iters,
             "hit_collection"_a = hit_collection
         );
     }
@@ -193,7 +193,7 @@ private:
 // Python module definition
 // =============================================================================
 
-PYBIND11_MODULE(ellipsoid_tracer, m) {
+PYBIND11_MODULE(optix_tracer, m) {
     m.doc() = "Differentiable volume rendering for ellipsoid primitives";
 
     py::class_<PyRayTracer>(m, "RayTracer")
@@ -248,7 +248,7 @@ Returns:
     Dictionary containing:
         - color: RGBA output, shape (M, 4)
         - depth: Expected depth, shape (M,)
-        - states, delta_contribs, iters, prim_hits: Volume integrator state
+        - states, last_contrib, iters, prim_hits: Volume integrator state
         - hit_collection: Collected hit IDs for backward pass
 )doc")
         .def("has_primitives", &PyRayTracer::has_primitives,

@@ -36,7 +36,7 @@ void sh_kernel(
     // First, check
     float3 dir_pp = normalize(mean - rayo);
     Features feat = get_feats(features, prim_ind, sh_degree);
-    float3 color = eval_color(dir_pp, feat, sh_degree);
+    float3 color = eval_color(dir_pp, feat);
     colors[prim_ind, 0] = color.x;
     colors[prim_ind, 1] = color.y;
     colors[prim_ind, 2] = color.z;
@@ -72,28 +72,10 @@ void bw_sh_kernel(
 
     var deriv_direction = diffPair(dir_pp, {});
     var d_feat = diffPair(feat, {});
-    bwd_diff(eval_color)(deriv_direction, d_feat, sh_degree, deriv_color);
+    bwd_diff(eval_color)(deriv_direction, d_feat, deriv_color);
 
-    add_float3(dL_dfeatures, prim_ind, 0u, d_feat.d.f0);
-    if (sh_degree > 0) {
-        add_float3(dL_dfeatures, prim_ind, 1u, d_feat.d.f1);
-        add_float3(dL_dfeatures, prim_ind, 2u, d_feat.d.f2);
-        add_float3(dL_dfeatures, prim_ind, 3u, d_feat.d.f3);
-        if (sh_degree > 1) {
-            add_float3(dL_dfeatures, prim_ind, 4u, d_feat.d.f4);
-            add_float3(dL_dfeatures, prim_ind, 5u, d_feat.d.f5);
-            add_float3(dL_dfeatures, prim_ind, 6u, d_feat.d.f6);
-            add_float3(dL_dfeatures, prim_ind, 7u, d_feat.d.f7);
-            add_float3(dL_dfeatures, prim_ind, 8u, d_feat.d.f8);
-            if (sh_degree > 2) {
-                add_float3(dL_dfeatures, prim_ind, 9u, d_feat.d.f9);
-                add_float3(dL_dfeatures, prim_ind, 10u, d_feat.d.f10);
-                add_float3(dL_dfeatures, prim_ind, 11u, d_feat.d.f11);
-                add_float3(dL_dfeatures, prim_ind, 12u, d_feat.d.f12);
-                add_float3(dL_dfeatures, prim_ind, 13u, d_feat.d.f13);
-                add_float3(dL_dfeatures, prim_ind, 14u, d_feat.d.f14);
-                add_float3(dL_dfeatures, prim_ind, 15u, d_feat.d.f15);
-            }
-        }
+    uint num_coeff = (feat.degree + 1) * (feat.degree + 1);
+    for (uint i = 0; i < num_coeff; i++) {
+        add_float3(dL_dfeatures, prim_ind, i, d_feat.d.c[i]);
     }
 }

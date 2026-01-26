@@ -44,7 +44,7 @@ class TestEvalSHCorrectness:
         means = l2_normalize(2 * torch.rand(n, 3, device=DEVICE) - 1)
         rayo = torch.tensor([[0, 0, -2]], dtype=torch.float32, device=DEVICE)
 
-        rgb_ref = eval_sh_torch(means, features, rayo, sh_degree)
+        rgb_ref = eval_sh_torch(means, features, rayo, sh_degree, apply_clip=True)
         rgb = primtracer.eval_sh(means, features, rayo, sh_degree)
 
         torch.testing.assert_close(rgb, rgb_ref, atol=1e-5, rtol=1e-5)
@@ -61,7 +61,7 @@ class TestEvalSHCorrectness:
         features = torch.rand(6, n_coeffs, 3, device=DEVICE)
         rayo = torch.tensor([[0, 0, 0]], dtype=torch.float32, device=DEVICE)
 
-        rgb_ref = eval_sh_torch(means, features, rayo, sh_degree)
+        rgb_ref = eval_sh_torch(means, features, rayo, sh_degree, apply_clip=True)
         rgb = primtracer.eval_sh(means, features, rayo, sh_degree)
 
         torch.testing.assert_close(rgb, rgb_ref, atol=1e-5, rtol=1e-5)
@@ -102,7 +102,7 @@ class TestEvalSHGradient:
                 lambda f: primtracer.eval_sh(means, f, rayo, sh_degree), features_param, grad
             )
             _, vjp_ref = torch.autograd.functional.vjp(
-                lambda f: eval_sh_torch(means, f, rayo, sh_degree), features_param, grad
+                lambda f: eval_sh_torch(means, f, rayo, sh_degree, apply_clip=True), features_param, grad
             )
             np.testing.assert_allclose(
                 vjp_impl.cpu().numpy(), vjp_ref.cpu().numpy(), atol=1e-6, rtol=1e-6

@@ -1,263 +1,230 @@
-// Copyright 2024 Google LLC
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-// =============================================================================
 // Backward Pass for Ellipsoid Volume Rendering
-// =============================================================================
-//
-// This module implements the backward pass (gradient computation) for
-// differentiable volume rendering of ellipsoid primitives.
-//
-// Hit ID encoding: hit_id = prim_idx * 2 + hit_type (exit=0, entry=1)
-// =============================================================================
+// Optimizations: per-ray context caching, ping-pong hit buffer, pure backward step
 
 import tensor_utils;
 import ellipsoid_intersect;
 import volume_integrator;
 import spherical_harmonics;
 
-// =============================================================================
-// Parameters
-// =============================================================================
+// -----------------------------------------------------------------------------
+// Data Structures
+// -----------------------------------------------------------------------------
 
-/// Container for primitive parameters and their gradient outputs.
-struct Params {
-    // Forward parameters
-    TensorView<float> means;
-    TensorView<float> scales;
-    TensorView<float> quats;
-    TensorView<float> densities;
-    TensorView<float> features;
-
-    // Gradient outputs
-    TensorView<float> dL_dmeans;
-    TensorView<float> dL_dscales;
-    TensorView<float> dL_dquats;
-    TensorView<float> dL_ddensities;
-    TensorView<float> dL_dfeatures;
-    TensorView<float> dL_drayos;
-    TensorView<float> dL_drayds;
+struct Primitives
+{
+    TensorView<float> means, scales, quats, densities, features;
+    TensorView<float> dL_dmeans, dL_dscales, dL_dquats, dL_ddensities, dL_dfeatures;
 };
 
-// =============================================================================
-// Backward Pass Core Functions
-// =============================================================================
-
-/// Run backward pass for a single volume update step.
-///
-/// Uses intersect_clamped with t_clamp = tmin to handle rays starting inside primitives.
-/// The clamping ensures forward/backward consistency and naturally zeros geometry gradients
-/// for virtual entry hits.
-DifferentialPair<IntegratorState>
-run_update(in IntegratorState prev_state,
-           in SamplePoint prev_sample,
-           in SamplePoint sample,
-           in uint prim_index,
-           in uint hit_type,
-           in uint ray_ind,
-           in DifferentialPair<IntegratorState> deriv_state,
-           in float3 origin,
-           in float3 direction,
-           in float tmin,
-           in float tmax,
-           in uint sh_degree,
-           inout Params params)
+struct Rays
 {
-    var prev_deriv_state = diffPair(prev_state, {});
-    var deriv_sample = diffPair(sample, {});
+    TensorView<float> origins, directions, tmax;
+    float tmin;
+    TensorView<float> dL_drayos, dL_drayds;
+};
 
-    bwd_diff(integrate_step)(prev_deriv_state, deriv_sample, deriv_state.d);
+struct SavedState
+{
+    TensorView<float> last_state, last_contrib;
+    TensorView<int> iters, hit_collection;
+};
 
-    // Propagate gradients to primitive parameters
-    let mean = get_float3(params.means, prim_index);
-    let scale = get_float3(params.scales, prim_index);
-    let quat = get_float4(params.quats, prim_index);
-    let density = params.densities[prim_index];
-    Features feat = get_feats(params.features, prim_index, sh_degree);
-    float3 color = eval_color(direction, feat, sh_degree);
+struct RayCtx
+{
+    float3 rayo, rayd;
+    float tmin, tmax;
+    int sh_deg;
+};
 
-    var deriv_origin = diffPair(origin, {});
-    var deriv_direction = diffPair(direction, {});
-    var deriv_scales = diffPair(scale, {});
-    var deriv_mean = diffPair(mean, {});
-    var deriv_quat = diffPair(quat, {});
-    var deriv_color = diffPair(color, {});
-    var deriv_density = diffPair(density, {});
+struct HitCache
+{
+    int prim_idx, hit_type;
+    float3 mean, scale;
+    float4 quat;
+    float density;
+    Features feat;
+};
 
-    // Use t_clamp = tmin to match forward pass behavior for rays starting inside primitives
-    float t_clamp = tmin;
-    bwd_diff(intersect_clamped)(deriv_origin, deriv_direction,
-        deriv_scales, deriv_mean, deriv_quat, deriv_color, deriv_density, hit_type, t_clamp, deriv_sample.d);
+// -----------------------------------------------------------------------------
+// Utility Functions
+// -----------------------------------------------------------------------------
 
-    atomic_add_float3(params.dL_dmeans, prim_index, deriv_mean.d);
-    atomic_add_float3(params.dL_dscales, prim_index, deriv_scales.d);
-    atomic_add_float4(params.dL_dquats, prim_index, deriv_quat.d);
-    float temp;
-    params.dL_ddensities.InterlockedAdd(prim_index, deriv_density.d, temp);
-
-    float3 d_rayd = deriv_direction.d;
-    deriv_direction = diffPair(direction, {});
-    var d_feat = diffPair(feat, {});
-    bwd_diff(eval_color)(deriv_direction, d_feat, sh_degree, deriv_color.d);
-    d_rayd += deriv_direction.d;
-
-    atomic_add_float3(params.dL_dfeatures, prim_index, 0u, d_feat.d.f0);
-    if (sh_degree > 0) {
-        atomic_add_float3(params.dL_dfeatures, prim_index, 1u, d_feat.d.f1);
-        atomic_add_float3(params.dL_dfeatures, prim_index, 2u, d_feat.d.f2);
-        atomic_add_float3(params.dL_dfeatures, prim_index, 3u, d_feat.d.f3);
-        if (sh_degree > 1) {
-            atomic_add_float3(params.dL_dfeatures, prim_index, 4u, d_feat.d.f4);
-            atomic_add_float3(params.dL_dfeatures, prim_index, 5u, d_feat.d.f5);
-            atomic_add_float3(params.dL_dfeatures, prim_index, 6u, d_feat.d.f6);
-            atomic_add_float3(params.dL_dfeatures, prim_index, 7u, d_feat.d.f7);
-            atomic_add_float3(params.dL_dfeatures, prim_index, 8u, d_feat.d.f8);
-            if (sh_degree > 2) {
-                atomic_add_float3(params.dL_dfeatures, prim_index, 9u, d_feat.d.f9);
-                atomic_add_float3(params.dL_dfeatures, prim_index, 10u, d_feat.d.f10);
-                atomic_add_float3(params.dL_dfeatures, prim_index, 11u, d_feat.d.f11);
-                atomic_add_float3(params.dL_dfeatures, prim_index, 12u, d_feat.d.f12);
-                atomic_add_float3(params.dL_dfeatures, prim_index, 13u, d_feat.d.f13);
-                atomic_add_float3(params.dL_dfeatures, prim_index, 14u, d_feat.d.f14);
-                atomic_add_float3(params.dL_dfeatures, prim_index, 15u, d_feat.d.f15);
-            }
-        }
-    }
-
-    atomic_add_float3(params.dL_drayos, ray_ind, deriv_origin.d);
-    atomic_add_float3(params.dL_drayds, ray_ind, d_rayd);
-
-    return prev_deriv_state;
+inline int compute_sh_deg(in Primitives prims)
+{
+    return int(sqrt(float(prims.features.size(1)))) - 1;
 }
 
-/// Load sample point from a hit ID with t clamping for rays starting inside primitives.
-///
-/// The t_clamp parameter ensures consistency between forward (OptiX) and backward passes:
-/// - Forward: OptiX reports virtual entry hits at t = tmin for rays starting inside
-/// - Backward: intersect_clamped uses max(t_entry, tmin) to match this behavior
-///
-/// This unified approach handles both normal hits and "inside" hits correctly,
-/// with the max operation naturally zeroing gradients for geometry parameters
-/// when the ray starts inside a primitive.
-SamplePoint load_sample_clamped(in uint hit_id, in Params params, in float3 origin, float3 direction, uint sh_degree, float t_clamp)
+// -----------------------------------------------------------------------------
+// Sample Computation
+// -----------------------------------------------------------------------------
+// Hit encoding: hit_id = prim_idx * 2 + hit_type (exit=0, entry=1)
+// Clamp rule: entry -> max(t, tmin), exit -> min(t, tmax)
+
+[Differentiable]
+SamplePoint compute_sample(
+    float3 rayo, float3 rayd,
+    float3 mean, float3 scale, float4 quat,
+    float density, Features feat,
+    no_diff int hit_type, no_diff float tmin, no_diff float tmax)
 {
-    let prim_index = hit_id >> 1;
-    let hit_type = hit_id & 1;
+    float3 color = eval_color(rayd, feat);
+    float2 t_range = ray_intersect_ellipsoid(rayo, rayd, mean, scale, quat);
 
-    let mean = get_float3(params.means, prim_index);
-    let scale = get_float3(params.scales, prim_index);
-    let quat = get_float4(params.quats, prim_index);
-    let density = params.densities[prim_index];
+    bool is_entry = (hit_type == 1);
+    float t = is_entry ? max(t_range.x, tmin) : min(t_range.y, tmax);
+    float signed_density = is_entry ? density : -density;
 
-    Features feat = get_feats(params.features, prim_index, sh_degree);
-    float3 color = eval_color(direction, feat, sh_degree);
-
-    return intersect_clamped(origin, direction,
-        scale, mean, quat, color, density, hit_type, t_clamp);
+    return { t, float4(signed_density, signed_density * color) };
 }
 
-// =============================================================================
-// CUDA Kernels
-// =============================================================================
+// -----------------------------------------------------------------------------
+// Hit Cache Loading
+// -----------------------------------------------------------------------------
 
-/// Main backward pass kernel.
-///
-/// This unified kernel handles all hits including rays starting inside primitives.
-/// Virtual entry hits (rays starting inside) are processed the same as normal hits,
-/// with intersect_clamped ensuring correct gradient behavior.
+inline void load_hit_cache(
+    in Primitives prims, in RayCtx ray, int hit_id,
+    out HitCache hit, out SamplePoint sample)
+{
+    hit.prim_idx = hit_id >> 1;
+    hit.hit_type = hit_id & 1;
+
+    hit.mean = get_float3(prims.means, hit.prim_idx);
+    hit.scale = get_float3(prims.scales, hit.prim_idx);
+    hit.quat = get_float4(prims.quats, hit.prim_idx);
+    hit.density = prims.densities[hit.prim_idx];
+    hit.feat = get_feats(prims.features, hit.prim_idx, ray.sh_deg);
+
+    sample = compute_sample(
+        ray.rayo, ray.rayd,
+        hit.mean, hit.scale, hit.quat,
+        hit.density, hit.feat,
+        hit.hit_type, ray.tmin, ray.tmax);
+}
+
+// -----------------------------------------------------------------------------
+// Backward Step
+// -----------------------------------------------------------------------------
+
+inline IntegratorState.Differential backward_step(
+    inout Primitives prims, inout Rays rays,
+    IntegratorState prev_state, SamplePoint prev_sample, SamplePoint sample,
+    in RayCtx ray, in HitCache hit,
+    IntegratorState.Differential d_out, int ray_idx)
+{
+    // Backward: integrate_step
+    var dp_prev = diffPair(prev_state, {});
+    var dp_sample = diffPair(sample, {});
+    bwd_diff(integrate_step)(dp_prev, dp_sample, d_out);
+
+    // Backward: compute_sample
+    var dp_origin = diffPair(ray.rayo, {});
+    var dp_dir = diffPair(ray.rayd, {});
+    var dp_mean = diffPair(hit.mean, {});
+    var dp_scale = diffPair(hit.scale, {});
+    var dp_quat = diffPair(hit.quat, {});
+    var dp_density = diffPair(hit.density, {});
+    var dp_feat = diffPair(hit.feat, {});
+
+    bwd_diff(compute_sample)(
+        dp_origin, dp_dir,
+        dp_mean, dp_scale, dp_quat,
+        dp_density, dp_feat,
+        hit.hit_type, ray.tmin, ray.tmax,
+        dp_sample.d);
+
+    // Accumulate gradients
+    atomic_add_float3(prims.dL_dmeans, hit.prim_idx, dp_mean.d);
+    atomic_add_float3(prims.dL_dscales, hit.prim_idx, dp_scale.d);
+    atomic_add_float4(prims.dL_dquats, hit.prim_idx, dp_quat.d);
+    atomic_add_float(prims.dL_ddensities, hit.prim_idx, dp_density.d);
+
+    uint num_coeff = (hit.feat.degree + 1) * (hit.feat.degree + 1);
+    for (uint i = 0; i < num_coeff; i++)
+        atomic_add_float3(prims.dL_dfeatures, hit.prim_idx, i, dp_feat.d.c[i]);
+
+    atomic_add_float3(rays.dL_drayos, ray_idx, dp_origin.d);
+    atomic_add_float3(rays.dL_drayds, ray_idx, dp_dir.d);
+
+    return dp_prev.d;
+}
+
+// -----------------------------------------------------------------------------
+// CUDA Kernel
+// -----------------------------------------------------------------------------
+
 [AutoPyBindCUDA]
 [CUDAKernel]
-void backwards_kernel(
-    TensorView<float> last_state,
-    TensorView<float> last_contrib,
-    TensorView<int> iters,
-    TensorView<int> hit_collection,
-
-    TensorView<float> ray_origins,
-    TensorView<float> ray_directions,
-    Params params,
-    TensorView<int32_t> prim_hits,
-
-    TensorView<float> dL_doutputs,  // (R, G, B, A, depth)
-
-    float tmin,
-    TensorView<float> tmax,  // Per-ray tmax
-    uint max_iters)
+void bw_trace_rays(
+    Primitives prims, Rays rays, SavedState saved,
+    TensorView<float> dL_doutputs, int max_iters)
 {
-    uint3 dispatchIdx = cudaThreadIdx() + cudaBlockIdx() * cudaBlockDim();
-    uint ray_ind = dispatchIdx.x;
-    if (ray_ind >= ray_origins.size(0)) {
+    int ray_idx = int(cudaThreadIdx().x + cudaBlockIdx().x * cudaBlockDim().x);
+    if (ray_idx >= rays.origins.size(0))
         return;
-    }
-    var state = get_state(last_state, ray_ind);
-    let direction = get_float3(ray_directions, ray_ind);
-    let origin = get_float3(ray_origins, ray_ind);
-    let ray_tmax = tmax[ray_ind];
 
-    var deriv_state = diffPair(state, {});
+    int num_iters = saved.iters[ray_idx];
+    if (num_iters >= max_iters - 1 || num_iters <= 0)
+        return;
 
-    // dL_doutputs format: (R, G, B, A, depth)
-    RenderOutput.Differential dL_doutput;
-    dL_doutput.C = {dL_doutputs[ray_ind, 0], dL_doutputs[ray_ind, 1], dL_doutputs[ray_ind, 2]};
-    dL_doutput.alpha = dL_doutputs[ray_ind, 3];
-    dL_doutput.depth = dL_doutputs[ray_ind, 4];
+    int hit_stride = rays.origins.size(0);
 
-    uint num_iters = max(min(iters[ray_ind], max_iters), 0);
-    if (iters[ray_ind] >= max_iters-1 || iters[ray_ind] <= 0) return;
-    bwd_diff(extract_output)(deriv_state, dL_doutput);
+    // Load per-ray context
+    RayCtx ray;
+    ray.rayo = get_float3(rays.origins, ray_idx);
+    ray.rayd = get_float3(rays.directions, ray_idx);
+    ray.tmin = rays.tmin;
+    ray.tmax = rays.tmax[ray_idx];
+    ray.sh_deg = compute_sh_deg(prims);
 
-    let feature_size = params.features.size(1);
-    let sh_degree = int(sqrt(feature_size))-1;
+    // Initialize state and output gradients
+    var state = get_state(saved.last_state, ray_idx);
+    var dp_state = diffPair(state, {});
 
-    // t_clamp = tmin to match forward pass behavior for rays starting inside primitives
-    float t_clamp = tmin;
+    RenderOutput.Differential dL_out;
+    dL_out.C = float3(dL_doutputs[ray_idx, 0], dL_doutputs[ray_idx, 1], dL_doutputs[ray_idx, 2]);
+    dL_out.alpha = dL_doutputs[ray_idx, 3];
+    dL_out.depth = dL_doutputs[ray_idx, 4];
+    bwd_diff(extract_output)(dp_state, dL_out);
 
-    uint hit_id = hit_collection[ray_ind + max(num_iters-1, 0) * ray_origins.size(0)];
-    SamplePoint sample = load_sample_clamped(hit_id, params, origin, direction, sh_degree, t_clamp);
+    IntegratorState.Differential d_state = dp_state.d;
 
-    // Iterate backward through hits
-    for (int i=num_iters; i-->0; )
+    // Ping-pong buffers
+    HitCache hitBuf[2];
+    SamplePoint sampBuf[2];
+
+    // Load last hit into slot 0
+    int last_hit_id = saved.hit_collection[ray_idx + (num_iters - 1) * hit_stride];
+    load_hit_cache(prims, ray, last_hit_id, hitBuf[0], sampBuf[0]);
+    int cur = 0;
+
+    // Backward iteration
+    for (int i = num_iters; i-- > 0;)
     {
-        uint prev_hit_id;
-        SamplePoint prev_sample;
-        if (i-1 >= 0) {
-            prev_hit_id = hit_collection[ray_ind + (i-1) * ray_origins.size(0)];
-            prev_sample = load_sample_clamped(prev_hit_id, params, origin, direction, sh_degree, t_clamp);
-        } else {
-            prev_sample.t = tmin;
-            prev_sample.contrib = {0.f, 0.f, 0.f, 0.f};
+        int prev = cur ^ 1;
+
+        // Prefetch previous hit into alternate slot
+        if (i > 0)
+        {
+            int prev_hit_id = saved.hit_collection[ray_idx + (i - 1) * hit_stride];
+            load_hit_cache(prims, ray, prev_hit_id, hitBuf[prev], sampBuf[prev]);
+        }
+        else
+        {
+            sampBuf[prev].t = ray.tmin;
+            sampBuf[prev].contrib = float4(0.f);
         }
 
-        IntegratorState prev_state = invert_step(state, sample, prev_sample);
+        // Compute previous state and run backward step
+        IntegratorState prev_state = invert_step(state, sampBuf[cur], sampBuf[prev]);
 
-        let prev_deriv_state = run_update(
-                prev_state,
-                prev_sample,
-                sample,
-                hit_id >> 1,  // prim_index
-                hit_id & 1,   // hit_type
-                ray_ind,
-                deriv_state,
-                origin, direction, tmin, ray_tmax, sh_degree,
-                params);
-        int itemp;
-        prim_hits.InterlockedAdd(hit_id >> 1, 1, itemp);
+        d_state = backward_step(
+            prims, rays,
+            prev_state, sampBuf[prev], sampBuf[cur],
+            ray, hitBuf[cur],
+            d_state, ray_idx);
 
-        hit_id = prev_hit_id;
         state = prev_state;
-        sample = prev_sample;
-
-        deriv_state = diffPair(prev_state, prev_deriv_state.d);
+        if (i > 0)
+            cur = prev;
     }
 }

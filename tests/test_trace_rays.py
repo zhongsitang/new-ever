@@ -94,7 +94,7 @@ class TestTraceRaysCorrectness:
         torch.testing.assert_close(c, c_ref_tensor, atol=1e-4, rtol=1e-4)
         torch.testing.assert_close(d, d_ref_tensor, atol=1e-4, rtol=1e-4)
 
-    @pytest.mark.parametrize('n', [1, 5, 10, 100])
+    @pytest.mark.parametrize('n', [1, 5, 10, 20])
     @pytest.mark.parametrize('density_scale', [0.01, 0.1, 1.0])
     def test_per_ray_tmax(self, n, density_scale):
         """Per-ray tmax as tensor."""

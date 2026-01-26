@@ -78,9 +78,9 @@ RWStructuredBuffer<float> image;
 RWStructuredBuffer<float> depth;
 RWStructuredBuffer<IntegratorState> last_state;
 RWStructuredBuffer<float> last_contrib;
-RWStructuredBuffer<int> iters;
 RWStructuredBuffer<int> last_prim;
 RWStructuredBuffer<int> prim_hits;
+RWStructuredBuffer<int> iters;
 RWStructuredBuffer<int> hit_collection;
 
 // Scalars (order must match C++ LaunchParams)
@@ -103,6 +103,18 @@ float3 load_float3(StructuredBuffer<float> buf, uint idx)
 float4 load_float4(StructuredBuffer<float> buf, uint idx)
 {
     return float4(buf[idx * 4], buf[idx * 4 + 1], buf[idx * 4 + 2], buf[idx * 4 + 3]);
+}
+
+Features get_feats(StructuredBuffer<float> shs, uint prim_idx, uint sh_degree) {
+    Features feat;
+    feat.degree = sh_degree;
+    uint num_coeff = (sh_degree + 1) * (sh_degree + 1);
+    uint base = prim_idx * num_coeff * 3;
+    for (uint i = 0; i < num_coeff; i++) {
+        uint offset = base + i * 3;
+        feat.c[i] = float3(shs[offset], shs[offset + 1], shs[offset + 2]);
+    }
+    return feat;
 }
 
 void store_float4(RWStructuredBuffer<float> buf, uint idx, float4 val)
@@ -131,7 +143,7 @@ SamplePoint create_sample(uint hit_id, float t, float3 ray_dir)
     uint prim_idx = hit_id >> 1;
     float density = densities[prim_idx];
     float signed_density = ((hit_id & 1) != 0) ? density : -density;  // entry=+, exit=-
-    float3 color = eval_color(ray_dir, { prim_idx, sh_degree, features });
+    float3 color = eval_color(ray_dir, get_feats(features, prim_idx, sh_degree));
     return { t, float4(signed_density, signed_density * color) };
 }
 
@@ -167,7 +179,7 @@ void intersect_ellipsoid()
     float3 scale = load_float3(scales, prim_idx);
     float4 quat = load_float4(quats, prim_idx);
 
-    float2 t = ray_intersect_ellipsoid(ray_origin - mean, ray_dir, scale, quat);
+    float2 t = ray_intersect_ellipsoid(ray_origin, ray_dir, mean, scale, quat);
 
     // Clamp entry to global tmin (for rays starting inside ellipsoid)
     float t_entry = max(t.x, max(tmin, 0.0f));

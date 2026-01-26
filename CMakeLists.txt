@@ -57,7 +57,7 @@ set(SLANG_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/primtracer/slang")
 # -----------------------------------------------------------------------------
 # Main pybind11 extension module
 # -----------------------------------------------------------------------------
-pybind11_add_module(ellipsoid_tracer MODULE
+pybind11_add_module(optix_tracer MODULE
   ${TRACER_DIR}/ray_tracer.cpp
   ${TRACER_DIR}/ray_tracer.h
   ${TRACER_DIR}/python_bindings.cpp
@@ -65,16 +65,11 @@ pybind11_add_module(ellipsoid_tracer MODULE
   ${TRACER_DIR}/primitive_kernels.cu
 )
 
-set_source_files_properties(
-  ${TRACER_DIR}/primitive_kernels.cu
-  PROPERTIES LANGUAGE CUDA
-)
-
 # -----------------------------------------------------------------------------
 # Shader embedding (Slang -> PTX -> C++ string)
 # -----------------------------------------------------------------------------
 slang_ptx_embed(
-  TARGET       ellipsoid_tracer
+  TARGET       optix_tracer
   NAME         shaders_ptx
   SLANG_FILE   ${SLANG_DIR}/optix_shaders.slang
   INCLUDE_DIRS ${SLANG_DIR}
@@ -84,29 +79,29 @@ slang_ptx_embed(
 # -----------------------------------------------------------------------------
 # Slang PyTorch modules
 # -----------------------------------------------------------------------------
-slang_add_py_module(backwards_kernel
+slang_add_py_module(slang_backward
   SLANG_FILES  ${SLANG_DIR}/backward_pass.slang
   INCLUDE_DIRS ${SLANG_DIR}
   NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS}
 )
-target_link_libraries(backwards_kernel PRIVATE Torch::Torch)
+target_link_libraries(slang_backward PRIVATE Torch::Torch)
 
-slang_add_py_module(sh_kernel
+slang_add_py_module(slang_sh
   SLANG_FILES  ${SLANG_DIR}/sh_evaluation.slang
   INCLUDE_DIRS ${SLANG_DIR}
   NVRTC_DIRS   ${CUDAToolkit_INCLUDE_DIRS}
 )
-target_link_libraries(sh_kernel PRIVATE Torch::Torch)
+target_link_libraries(slang_sh PRIVATE Torch::Torch)
 
 # -----------------------------------------------------------------------------
 # Linking and compile options
 # -----------------------------------------------------------------------------
-target_link_libraries(ellipsoid_tracer PRIVATE
+target_link_libraries(optix_tracer PRIVATE
   OptiX::OptiX
   Torch::Torch
 )
 
-target_compile_options(ellipsoid_tracer PRIVATE
+target_compile_options(optix_tracer PRIVATE
   $<$<COMPILE_LANGUAGE:CUDA>:--diag-suppress=20012,177,550>
 )
 
@@ -114,12 +109,12 @@ if(MSVC)
   # Prevent Windows.h from defining min/max macros
   add_compile_definitions(NOMINMAX)
 
-  set_target_properties(ellipsoid_tracer PROPERTIES
+  set_target_properties(optix_tracer PROPERTIES
     MSVC_RUNTIME_LIBRARY "MultiThreadedDLL"
     CUDA_RUNTIME_LIBRARY Shared
   )
 else()
-  target_compile_options(ellipsoid_tracer PRIVATE
+  target_compile_options(optix_tracer PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--compiler-options=-fPIC>
     $<$<COMPILE_LANGUAGE:CXX>:-Wno-deprecated-declarations>
   )
