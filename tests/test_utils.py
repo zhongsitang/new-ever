@@ -28,6 +28,9 @@ TINY = np.float32(np.finfo(np.float32).tiny)
 MIN_VAL = np.float32(np.finfo(np.float32).min)
 MAX_VAL = np.float32(np.finfo(np.float32).max)
 
+# Threshold for alpha below which depth is considered undefined (no absorption)
+ALPHA_THRESHOLD = 1e-6
+
 # Spherical harmonics coefficients (kept for completeness / potential use)
 C0 = 0.28209479177387814
 C1 = 0.4886025119029199
@@ -264,10 +267,16 @@ def render_quadrature(
 
     rendered_color = jnp.sum(weights[..., None] * avg_colors, axis=-2)
     alpha = jnp.sum(weights, axis=-1).reshape(-1, 1)
-    expected_termination = jnp.sum(weights * t_avg, axis=-1)
+    depth_num = jnp.sum(weights * t_avg, axis=-1)
+    # When alpha < ALPHA_THRESHOLD, depth is meaningless (no absorption occurred)
+    expected_depth = jnp.where(
+        alpha.reshape(-1) < ALPHA_THRESHOLD,
+        0.0,
+        safe_div(depth_num, alpha.reshape(-1))
+    )
 
     color_rgba = jnp.concatenate([rendered_color.reshape(-1, 3), alpha], axis=1)
-    depth = expected_termination.reshape(-1)
+    depth = expected_depth.reshape(-1)
 
     if return_extras:
         extras: Dict[str, jnp.ndarray] = {
@@ -319,7 +328,7 @@ def trace_rays_reference(
     rayd: torch.Tensor,
     tmin: float = 0.0,
     tmax: float = 1000.0,
-    num_samples: int = 2**16,
+    num_samples: int = 2**18,
     return_extras: bool = False,
 ):
     """

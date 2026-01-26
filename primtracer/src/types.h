@@ -57,10 +57,10 @@ struct Primitives {
 /// Per-ray volume integrator state (48 bytes, 16-byte aligned).
 /// Using float4 for C to avoid float3 alignment issues with Slang.
 struct IntegratorState {
-    float4 accumulated_contrib;  // (density, r*d, g*d, b*d)
+    float4 contrib;  // (density, r*d, g*d, b*d)
     float4 C;                    // accumulated color RGB (w unused, for alignment)
-    float logT;                  // log transmittance
-    float depth_accum;           // accumulated depth
+    float logT;                  // log(T) = -τ_total, always ≤ 0
+    float depth_num;             // depth numerator (divide by alpha for expected depth)
     float t;                     // current ray parameter
     float _pad;                  // padding to 48 bytes
 };
@@ -109,19 +109,16 @@ struct LaunchParams {
     StructuredBuffer<float> depth;
     // Backward state outputs
     StructuredBuffer<IntegratorState> last_state;
-    StructuredBuffer<float> last_delta_contrib;
+    StructuredBuffer<float> last_contrib;
     StructuredBuffer<int32_t> iters;
     StructuredBuffer<int32_t> last_prim;
     StructuredBuffer<int32_t> prim_hits;
     StructuredBuffer<int32_t> hit_collection;
 
     // --- Scalar parameters --------------------------------------------------
-    int32_t num_prims;
-    int32_t num_rays;
     int32_t sh_degree;
     int32_t max_iters;
     float tmin;
-    float max_prim_size;
 
     // --- Acceleration structure ---------------------------------------------
     OptixTraversableHandle handle;

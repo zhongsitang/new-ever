@@ -166,7 +166,6 @@ void RayTracer::update_primitives(const Primitives& prims) {
     params_.quats = {prims_.quats, prims_.num_prims};
     params_.densities = {prims_.densities, prims_.num_prims};
     params_.features = {prims_.features, prims_.feature_count()};
-    params_.num_prims = prims_.num_prims;
     params_.sh_degree = prims_.sh_degree;
 }
 
@@ -198,17 +197,15 @@ void RayTracer::trace_rays(
 
     // Backward state buffers
     params_.last_state = {saved.states, num_rays};
-    params_.last_delta_contrib = {saved.delta_contribs, num_rays};
+    params_.last_contrib = {saved.delta_contribs, num_rays};
     params_.iters = {saved.iters, num_rays};
     params_.last_prim = {saved.last_prim, num_rays};
     params_.prim_hits = {saved.prim_hits, prims_.num_prims};
     params_.hit_collection = {saved.hit_collection, num_rays * max_iters};
 
     // Scalar parameters
-    params_.num_rays = num_rays;
     params_.tmin = tmin;
     params_.max_iters = max_iters;
-    params_.max_prim_size = 3.0f;
 
     params_.handle = accel_->handle();
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,

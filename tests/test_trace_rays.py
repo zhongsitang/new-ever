@@ -65,7 +65,7 @@ class TestTraceRaysCorrectness:
         c_ref_tensor = to_tensor(c_ref, DEVICE).float()
         d_ref_tensor = to_tensor(d_ref, DEVICE).float()
         torch.testing.assert_close(c, c_ref_tensor, atol=1e-4, rtol=1e-4)
-        # torch.testing.assert_close(d, d_ref_tensor, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(d, d_ref_tensor, atol=1e-4, rtol=1e-4)
 
     @pytest.mark.parametrize('n', [1, 5, 10, 100])
     @pytest.mark.parametrize('density_scale', [0.01, 0.1, 1.0])
@@ -92,13 +92,13 @@ class TestTraceRaysCorrectness:
         c_ref_tensor = to_tensor(c_ref, DEVICE).float()
         d_ref_tensor = to_tensor(d_ref, DEVICE).float()
         torch.testing.assert_close(c, c_ref_tensor, atol=1e-4, rtol=1e-4)
-        # torch.testing.assert_close(d, d_ref_tensor, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(d, d_ref_tensor, atol=1e-4, rtol=1e-4)
 
-    @pytest.mark.parametrize('n', [1, 5, 10, 50])
+    @pytest.mark.parametrize('n', [1, 5, 10, 100])
     @pytest.mark.parametrize('density_scale', [0.01, 0.1, 1.0])
     def test_per_ray_tmax(self, n, density_scale):
         """Per-ray tmax as tensor."""
-        num_rays = 4
+        num_rays = 20
         p = create_primitives(n, density_scale, device=DEVICE)
         p['mean'][:, 2] += 0.5
 
@@ -129,7 +129,7 @@ class TestTraceRaysCorrectness:
         )
 
         torch.testing.assert_close(color, color_ref, atol=1e-4, rtol=1e-4)
-        # torch.testing.assert_close(depth, depth_ref, atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(depth, depth_ref, atol=1e-4, rtol=1e-4)
 
 
 class TestTraceRaysGradient:
@@ -161,7 +161,7 @@ class TestTraceRaysGradient:
         torch.autograd.gradcheck(
             loss,
             (mean, scale, quat, density, features),
-            eps=1e-3, atol=1e-3, rtol=1e-3,
+            eps=1e-3, atol=1e-4, rtol=1e-4,
         )
 
     @pytest.mark.parametrize('n', [1, 5, 10, 100])
@@ -182,6 +182,6 @@ class TestTraceRaysGradient:
         torch.autograd.gradcheck(
             loss,
             (mean, scale, quat, density, features),
-            eps=1e-3, atol=1e-3, rtol=1e-3,
+            eps=1e-3, atol=1e-4, rtol=1e-4,
         )
 

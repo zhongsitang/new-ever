@@ -24,9 +24,8 @@
 //   - When buffer fills, ray is re-traced from last processed t
 //
 // Hit ID Encoding:
-//   hit_id = (hit_type << 28) | prim_idx
-//   - Exit (type=0) sorts before Entry (type=1) at same t
-//   - This ensures correct density accumulation order
+//   hit_id = prim_idx * 2 + hit_type (exit=0, entry=1)
+//   Exit sorts before Entry at same t
 //
 // =============================================================================
 
@@ -39,38 +38,25 @@ import spherical_harmonics;
 // Constants
 // =============================================================================
 
-#define HIT_TYPE_EXIT 0
-#define HIT_TYPE_ENTRY 1
-#define HIT_TYPE_VIRTUAL_ENTRY 2  // Entry clamped to cur_t (ray inside ellipsoid)
 #define HIT_BUFFER_SIZE 16
 
-static const float LOG_CUTOFF = 5.54f;      // Transmittance cutoff: -log(0.004)
-static const float EPS_T = 1e-5f;           // Epsilon for "same t" comparisons
-static const float MIN_THICKNESS = 1e-6f;   // Filter grazing intersections
-
-// Hit ID encoding
-static const uint HIT_ID_TYPE_SHIFT = 28;
-static const uint HIT_ID_PRIM_MASK = (1u << HIT_ID_TYPE_SHIFT) - 1;
-
-uint make_hit_id(uint prim_idx, uint hit_type) {
-    return (hit_type << HIT_ID_TYPE_SHIFT) | prim_idx;
-}
-
-uint get_prim_idx(uint hit_id) { return hit_id & HIT_ID_PRIM_MASK; }
-uint get_hit_type(uint hit_id) { return hit_id >> HIT_ID_TYPE_SHIFT; }
+static const float LOG_CUTOFF = -5.54f; // Transmittance cutoff: log(0.004)
+static const float T_SENTINEL = 1e10f; // Marks empty buffer slots
 
 // =============================================================================
 // Data Structures
 // =============================================================================
 
-struct HitBuffer {
+struct HitBuffer
+{
     float t[HIT_BUFFER_SIZE];
     uint hit_id[HIT_BUFFER_SIZE];
-    uint skip_threshold;  // Skip hits at trace_t with hit_id < threshold
+    uint next_id; // Next hit_id to process at RayTMin()
 };
 
-struct HitAttr {
-    uint exit_t;  // Bit-cast float via asuint/asfloat
+struct HitAttr
+{
+    uint entry_t; // Bit-cast float via asuint/asfloat
 };
 
 // =============================================================================
@@ -91,19 +77,16 @@ StructuredBuffer<float> features;
 RWStructuredBuffer<float> image;
 RWStructuredBuffer<float> depth;
 RWStructuredBuffer<IntegratorState> last_state;
-RWStructuredBuffer<float> last_delta_contrib;
+RWStructuredBuffer<float> last_contrib;
 RWStructuredBuffer<int> iters;
 RWStructuredBuffer<int> last_prim;
 RWStructuredBuffer<int> prim_hits;
 RWStructuredBuffer<int> hit_collection;
 
-// Scalars
-int num_prims;
-int num_rays;
+// Scalars (order must match C++ LaunchParams)
 int sh_degree;
 int max_iters;
 float tmin;
-float max_prim_size;
 
 // Acceleration structure
 RaytracingAccelerationStructure traversable;
@@ -112,50 +95,60 @@ RaytracingAccelerationStructure traversable;
 // Helper Functions
 // =============================================================================
 
-float3 load_float3(StructuredBuffer<float> buf, uint idx) {
+float3 load_float3(StructuredBuffer<float> buf, uint idx)
+{
     return float3(buf[idx * 3], buf[idx * 3 + 1], buf[idx * 3 + 2]);
 }
 
-float4 load_float4(StructuredBuffer<float> buf, uint idx) {
+float4 load_float4(StructuredBuffer<float> buf, uint idx)
+{
     return float4(buf[idx * 4], buf[idx * 4 + 1], buf[idx * 4 + 2], buf[idx * 4 + 3]);
 }
 
-void store_float4(RWStructuredBuffer<float> buf, uint idx, float4 val) {
+void store_float4(RWStructuredBuffer<float> buf, uint idx, float4 val)
+{
     buf[idx * 4 + 0] = val.x;
     buf[idx * 4 + 1] = val.y;
     buf[idx * 4 + 2] = val.z;
     buf[idx * 4 + 3] = val.w;
 }
 
-HitBuffer init_hit_buffer(uint skip_threshold) {
+HitBuffer init_hit_buffer(uint next_id)
+{
     HitBuffer buf;
-    buf.skip_threshold = skip_threshold;
-    [ForceUnroll] for (int i = 0; i < HIT_BUFFER_SIZE; i++) {
-        buf.t[i] = 1e10f;
+    buf.next_id = next_id;
+    [ForceUnroll]
+    for (int i = 0; i < HIT_BUFFER_SIZE; i++)
+    {
+        buf.t[i] = T_SENTINEL;
         buf.hit_id[i] = 0;
     }
     return buf;
 }
 
-SamplePoint create_sample(uint hit_id, float t, float3 ray_dir) {
-    uint prim_idx = get_prim_idx(hit_id);
-    uint hit_type = get_hit_type(hit_id);
+SamplePoint create_sample(uint hit_id, float t, float3 ray_dir)
+{
+    uint prim_idx = hit_id >> 1;
     float density = densities[prim_idx];
-    float signed_density = (hit_type == HIT_TYPE_ENTRY) ? density : -density;
+    float signed_density = ((hit_id & 1) != 0) ? density : -density;  // entry=+, exit=-
     float3 color = eval_color(ray_dir, { prim_idx, sh_degree, features });
     return { t, float4(signed_density, signed_density * color) };
 }
 
-/// Insert hit maintaining (t, hit_id) order. Uses EPS_T for same-layer grouping.
-void insert_hit(inout HitBuffer buf, float t, uint hit_id) {
-    [ForceUnroll] for (int i = 0; i < HIT_BUFFER_SIZE; i++) {
-        bool same_t = abs(t - buf.t[i]) <= EPS_T;
-        bool should_swap = (t < buf.t[i] - EPS_T) || (same_t && hit_id < buf.hit_id[i]);
-        if (should_swap) {
-            float tmp_t = buf.t[i]; buf.t[i] = t; t = tmp_t;
-            uint tmp_id = buf.hit_id[i]; buf.hit_id[i] = hit_id; hit_id = tmp_id;
+/// Insert hit maintaining (t, hit_id) order.
+void insert_hit(inout HitBuffer buf, float t, uint hit_id)
+{
+    [ForceUnroll]
+    for (int i = 0; i < HIT_BUFFER_SIZE; i++)
+        if (t < buf.t[i] || (t == buf.t[i] && hit_id < buf.hit_id[i]))
+        {
+            float tmp_t = buf.t[i];
+            buf.t[i] = t;
+            t = tmp_t;
+            uint tmp_id = buf.hit_id[i];
+            buf.hit_id[i] = hit_id;
+            hit_id = tmp_id;
         }
-    }
 }
 
 // =============================================================================
@@ -163,10 +156,11 @@ void insert_hit(inout HitBuffer buf, float t, uint hit_id) {
 // =============================================================================
 
 [shader("intersection")]
-void intersect_ellipsoid() {
+void intersect_ellipsoid()
+{
     uint prim_idx = PrimitiveIndex();
-    float3 ray_dir = WorldRayDirection();
     float3 ray_origin = WorldRayOrigin();
+    float3 ray_dir = WorldRayDirection();
     float cur_t = RayTMin();
 
     float3 mean = load_float3(means, prim_idx);
@@ -175,47 +169,40 @@ void intersect_ellipsoid() {
 
     float2 t = ray_intersect_ellipsoid(ray_origin - mean, ray_dir, scale, quat);
 
-    // Skip if exit is behind cur_t (use < to allow exit at exactly cur_t)
-    if (t.y < cur_t) return;
+    // Clamp entry to global tmin (for rays starting inside ellipsoid)
+    float t_entry = max(t.x, max(tmin, 0.0f));
+    float t_exit = min(t.y, RayTCurrent());
+    
+    // Skip if exit behind cur_t
+    if (t_exit < cur_t)
+        return;
 
-    // Filter grazing hits by TRUE thickness (not clamped)
-    if (t.y - t.x < MIN_THICKNESS) return;
-
-    // Determine if this is a real entry or virtual entry (ray inside ellipsoid)
-    // Virtual entries are skipped during retrace to avoid double-counting density
-    bool is_virtual = (t.x < cur_t);
-    float t_entry = is_virtual ? cur_t : t.x;
-    uint hit_kind = is_virtual ? HIT_TYPE_VIRTUAL_ENTRY : HIT_TYPE_ENTRY;
-
-    ReportHitOptix(t_entry, hit_kind, asuint(t.y));
+    // Report entry hit
+    ReportHitOptix(t_exit, 0, asuint(t_entry));
 }
 
 [shader("closesthit")]
-void closest_hit(inout HitBuffer buf, in HitAttr attr) {}
+void closest_hit(inout HitBuffer buf, in HitAttr attr)
+{
+}
 
 [shader("anyhit")]
-void collect_hits(inout HitBuffer buf, in HitAttr attr) {
+void collect_hits(inout HitBuffer buf, in HitAttr attr)
+{
     uint prim_idx = PrimitiveIndex();
     float cur_t = RayTMin();
-    float t_entry = RayTCurrent();
-    float t_exit = asfloat(attr.exit_t);
-    uint hit_kind = HitKind();
+    float t_exit = RayTCurrent();
+    float t_entry = asfloat(attr.entry_t);
 
-    uint id_entry = make_hit_id(prim_idx, HIT_TYPE_ENTRY);
-    uint id_exit = make_hit_id(prim_idx, HIT_TYPE_EXIT);
+    uint id_entry = prim_idx * 2 + 1;
+    uint id_exit = prim_idx * 2;
 
-    // Skip entry only if already processed (at cur_t with hit_id < skip_threshold)
-    // Virtual entries NOT processed in first trace (buffer overflow) will have
-    // hit_id >= skip_threshold and will be collected in retrace
-    bool at_cur_entry = (t_entry <= cur_t + EPS_T);
-    bool skip_entry = (at_cur_entry && id_entry < buf.skip_threshold);
+    // Skip hits already processed in previous trace
+    bool skip_entry = (t_entry == cur_t && id_entry < buf.next_id);
+    bool skip_exit = (t_exit == cur_t && id_exit < buf.next_id);
 
-    if (!skip_entry)
+    if (t_entry >= cur_t && !skip_entry)
         insert_hit(buf, t_entry, id_entry);
-
-    // Exit is always collected (if not already processed)
-    bool at_cur_exit = (t_exit <= cur_t + EPS_T);
-    bool skip_exit = (at_cur_exit && id_exit < buf.skip_threshold);
 
     if (t_exit >= cur_t && !skip_exit)
         insert_hit(buf, t_exit, id_exit);
@@ -224,72 +211,71 @@ void collect_hits(inout HitBuffer buf, in HitAttr attr) {
 }
 
 [shader("miss")]
-void miss(inout HitBuffer buf) {}
+void miss(inout HitBuffer buf)
+{
+}
 
 [shader("raygeneration")]
-void render_volume() {
-    const uint3 idx = DispatchRaysIndex();
-    const uint3 dim = DispatchRaysDimensions();
-    const uint ray_idx = idx.x;
+void render_volume()
+{
+    uint ray_idx = DispatchRaysIndex().x;
+    uint num_rays_dim = DispatchRaysDimensions().x;
 
-    float3 ray_dir = l2_normalize(load_float3(ray_directions, ray_idx));
     float3 ray_origin = load_float3(ray_origins, ray_idx);
+    float3 ray_dir = l2_normalize(load_float3(ray_directions, ray_idx));
+    float ray_tmin = max(tmin, 0.0f);
     float ray_tmax = tmax[ray_idx];
 
     IntegratorState state = {};
-    state.t = max(tmin, 0.0f);
+    state.t = ray_tmin;
 
     SamplePoint sample = {};
-    uint hit_id = 0;
     int iter = 0;
+    uint hit_id = 0;
+    uint next_id = 0;
 
-    // trace_t: current layer's t value (used as TraceRay tmin)
-    // skip_threshold: skip hit_id < threshold at trace_t
-    float trace_t = state.t;
-    uint skip_threshold = 0;
-
-    while (state.logT < LOG_CUTOFF && iter < max_iters) {
-        HitBuffer buf = init_hit_buffer(skip_threshold);
+    while (state.logT > LOG_CUTOFF && iter < max_iters)
+    {
+        HitBuffer buf = init_hit_buffer(next_id);
         TraceRay(traversable, RAY_FLAG_NONE, 0xff, 0, 0, 0,
-                 { ray_origin, trace_t, ray_dir, ray_tmax }, buf);
+                 { ray_origin, state.t, ray_dir, ray_tmax }, buf);
 
         bool done = false;
-        for (int i = 0; i < HIT_BUFFER_SIZE; i++) {
+        for (int i = 0; i < HIT_BUFFER_SIZE; i++)
+        {
             float hit_t = buf.t[i];
-            if (hit_t > 1e9f) { done = true; break; }
-
-            hit_id = buf.hit_id[i];
-
-            // Layer transition: update trace_t BEFORE creating sample
-            if (hit_t > trace_t + EPS_T) {
-                trace_t = hit_t;
-                skip_threshold = hit_id + 1;
-            } else {
-                skip_threshold = max(skip_threshold, hit_id + 1);
+            if (hit_t >= T_SENTINEL)
+            {
+                done = true;
+                break;
             }
 
-            // Quantize sample.t to trace_t (same-layer hits share t)
-            sample = create_sample(hit_id, trace_t, ray_dir);
-            state = integrate_step(state, sample, tmin, ray_tmax, max_prim_size);
+            hit_id = buf.hit_id[i];
+            next_id = hit_id + 1;
+
+            sample = create_sample(hit_id, hit_t, ray_dir);
+            state = integrate_step(state, sample);
 
             // Record for backward pass
-            prim_hits[get_prim_idx(hit_id)]++;
-            hit_collection[ray_idx + iter * dim.x] = hit_id;
+            prim_hits[hit_id >> 1]++;
+            hit_collection[ray_idx + iter * num_rays_dim] = hit_id;
             iter++;
 
-            if (!(state.logT < LOG_CUTOFF && iter < max_iters)) break;
+            if (!(state.logT > LOG_CUTOFF && iter < max_iters))
+                break;
         }
-        if (done) break;
+        if (done)
+            break;
     }
 
     // Output
-    let output = extract_color(state, tmin);
+    let output = extract_output(state);
     store_float4(image, ray_idx, float4(output.C, output.alpha));
     depth[ray_idx] = output.depth;
 
     // Save for backward pass
     last_state[ray_idx] = state;
-    store_float4(last_delta_contrib, ray_idx, sample.delta_contrib);
+    store_float4(last_contrib, ray_idx, sample.contrib);
     last_prim[ray_idx] = hit_id;
     iters[ray_idx] = iter;
 }

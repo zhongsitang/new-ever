@@ -16,9 +16,14 @@
 // Safe Math Utilities
 // =============================================================================
 
-static const float TINY_VAL = 1.0754944e-20;
-static const float MIN_VAL = -1e+20;
-static const float MAX_VAL = 1e+20;
+// TINY_VAL: threshold for "effectively zero" in divisions
+// When denominator < TINY_VAL, the ratio is undefined and we return 0
+// This is semantically correct for volume rendering where color = contrib/sigma
+// and when sigma ≈ 0, the contribution should also be ≈ 0
+static const float TINY_VAL = 1e-7f;
+
+// EXP_LIMIT: clamp exp() input to avoid overflow (exp(88) ≈ 1.6e38 ≈ FLT_MAX)
+static const float EXP_LIMIT = 87.0f;
 
 // =============================================================================
 // Clipping
@@ -51,28 +56,33 @@ float4 clip(float4 v, float minv, float maxv) {
 // =============================================================================
 // Safe Division
 // =============================================================================
+//
+// Semantics: when denominator ≈ 0, the ratio is undefined → return 0
+// This is correct for volume rendering where color = contrib/sigma:
+// - when sigma ≈ 0, contrib ≈ 0 too, so color contribution is negligible
+// - returning 0 instead of a/TINY_VAL avoids gradient explosion in backward pass
+//
+// Backward: when |b| < TINY_VAL, forward returns 0 (independent of a,b)
+// so gradients w.r.t. a and b are both 0
 
 void bw_safe_div(inout DifferentialPair<float> a, inout DifferentialPair<float> b, float.Differential R) {
     if (abs(b.p) < TINY_VAL) {
-        a = DifferentialPair<float>(a.p, clip(R / TINY_VAL, MIN_VAL, MAX_VAL));
+        // Forward returned 0, so no gradient flows
+        a = DifferentialPair<float>(a.p, 0.0f);
+        b = DifferentialPair<float>(b.p, 0.0f);
     } else {
-        a = DifferentialPair<float>(a.p, clip(R / b.p, MIN_VAL, MAX_VAL));
-    }
-    let b2 = b.p * b.p;
-    if (b2 < TINY_VAL) {
-        b = DifferentialPair<float>(b.p, clip(-a.p / TINY_VAL * R, MIN_VAL, MAX_VAL));
-    } else {
-        b = DifferentialPair<float>(b.p, clip(-a.p / b2 * R, MIN_VAL, MAX_VAL));
+        // Normal case: d(a/b)/da = 1/b, d(a/b)/db = -a/b²
+        a = DifferentialPair<float>(a.p, R / b.p);
+        b = DifferentialPair<float>(b.p, -a.p / (b.p * b.p) * R);
     }
 }
 
 [BackwardDerivative(bw_safe_div)]
 float safe_div(in float a, in float b) {
     if (abs(b) < TINY_VAL) {
-        return clip(a / TINY_VAL, MIN_VAL, MAX_VAL);
-    } else {
-        return clip(a / b, MIN_VAL, MAX_VAL);
+        return 0.0f;  // Ratio undefined → return 0
     }
+    return a / b;  // No clip: let caller handle extreme values if needed
 }
 
 [Differentiable]
@@ -121,9 +131,11 @@ float3 l2_normalize(float3 x) {
 // Safe Exponential/Logarithm
 // =============================================================================
 
+// safe_exp: clamp INPUT only to avoid overflow, don't clamp output
+// This preserves gradient flow while preventing inf/nan
 [Differentiable]
 float safe_exp(float v) {
-    return exp(clip(v, MIN_VAL, log(MAX_VAL)));
+    return exp(clamp(v, -EXP_LIMIT, EXP_LIMIT));
 }
 
 void bw_log1p(inout DifferentialPair<float> v, float.Differential R) {
@@ -136,12 +148,18 @@ float _log1p(float v) {
 }
 
 void bw_log(inout DifferentialPair<float> v, float.Differential R) {
-    v = DifferentialPair<float>(v.p, R / clip(v.p, MIN_VAL, MAX_VAL));
+    // d(log(v))/dv = 1/v, protect against v ≈ 0
+    if (abs(v.p) < TINY_VAL) {
+        v = DifferentialPair<float>(v.p, 0.0f);
+    } else {
+        v = DifferentialPair<float>(v.p, R / v.p);
+    }
 }
 
 [BackwardDerivative(bw_log)]
 float safe_log(float v) {
-    return log(clip(v, MIN_VAL, MAX_VAL));
+    // Protect against log(≤0), but don't clip output
+    return log(max(v, TINY_VAL));
 }
 
 void bw_expm1(inout DifferentialPair<float> v, float.Differential R) {
@@ -154,15 +172,23 @@ float safe_expm1(float v) {
 }
 
 void bw_log1mexp(inout DifferentialPair<float> v, float.Differential R) {
-    v = DifferentialPair<float>(v.p, safe_div(R, safe_exp(v.p) - 1));
+    v = DifferentialPair<float>(v.p, safe_div(R, safe_expm1(v.p)));
 }
 
+// log1mexp(x) = log(1 - exp(-x)) for x > 0
+// Uses different formulas for numerical stability:
+// - x > log(2): use log1p(-exp(-x)) to avoid 1 - (value close to 1)
+// - x ≤ log(2): use log(-expm1(-x)) since expm1 is accurate for small args
 [BackwardDerivative(bw_log1mexp)]
 float log1mexp(float x) {
-    if (x > 0.30102999566) {
-        return _log1p(max(-exp(-x), -1 + 1e-5));
+    if (x > 0.6931471805599453) {  // log(2)
+        // For large x: exp(-x) is small, so 1-exp(-x) ≈ 1, use log1p for accuracy
+        return _log1p(-exp(-x));
     } else {
-        return log(max(-safe_expm1(-x), 1e-20));
+        // For small x: use expm1 which is accurate, then take log
+        // expm1(-x) = exp(-x) - 1, so -expm1(-x) = 1 - exp(-x)
+        float arg = -safe_expm1(-x);
+        return log(max(arg, TINY_VAL));
     }
 }
 

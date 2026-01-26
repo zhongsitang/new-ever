@@ -19,20 +19,8 @@
 // This module implements the backward pass (gradient computation) for
 // differentiable volume rendering of ellipsoid primitives.
 //
-// Hit ID encoding (same as forward pass):
-//   hit_id = (hit_type << HIT_ID_TYPE_SHIFT) | prim_index
-//   where hit_type: 1 = entry, 0 = exit
-// This encoding ensures exit sorts before entry at same t
+// Hit ID encoding: hit_id = prim_idx * 2 + hit_type (exit=0, entry=1)
 // =============================================================================
-
-#define HIT_TYPE_EXIT 0
-#define HIT_TYPE_ENTRY 1
-
-static const uint HIT_ID_TYPE_SHIFT = 28;
-static const uint HIT_ID_PRIM_MASK = (1u << HIT_ID_TYPE_SHIFT) - 1;
-
-uint get_prim_idx(uint hit_id) { return hit_id & HIT_ID_PRIM_MASK; }
-uint get_hit_type(uint hit_id) { return hit_id >> HIT_ID_TYPE_SHIFT; }
 
 import tensor_utils;
 import ellipsoid_intersect;
@@ -84,13 +72,12 @@ run_update(in IntegratorState prev_state,
            in float tmin,
            in float tmax,
            in uint sh_degree,
-           in float max_prim_size,
            inout Params params)
 {
     var prev_deriv_state = diffPair(prev_state, {});
     var deriv_sample = diffPair(sample, {});
 
-    bwd_diff(integrate_step)(prev_deriv_state, deriv_sample, tmin, tmax, max_prim_size, deriv_state.d);
+    bwd_diff(integrate_step)(prev_deriv_state, deriv_sample, deriv_state.d);
 
     // Propagate gradients to primitive parameters
     let mean = get_float3(params.means, prim_index);
@@ -165,8 +152,8 @@ run_update(in IntegratorState prev_state,
 /// when the ray starts inside a primitive.
 SamplePoint load_sample_clamped(in uint hit_id, in Params params, in float3 origin, float3 direction, uint sh_degree, float t_clamp)
 {
-    let prim_index = get_prim_idx(hit_id);
-    let hit_type = get_hit_type(hit_id);
+    let prim_index = hit_id >> 1;
+    let hit_type = hit_id & 1;
 
     let mean = get_float3(params.means, prim_index);
     let scale = get_float3(params.scales, prim_index);
@@ -193,7 +180,7 @@ SamplePoint load_sample_clamped(in uint hit_id, in Params params, in float3 orig
 [CUDAKernel]
 void backwards_kernel(
     TensorView<float> last_state,
-    TensorView<float> last_delta_contrib,
+    TensorView<float> last_contrib,
     TensorView<int> iters,
     TensorView<int> hit_collection,
 
@@ -206,7 +193,6 @@ void backwards_kernel(
 
     float tmin,
     TensorView<float> tmax,  // Per-ray tmax
-    float max_prim_size,
     uint max_iters)
 {
     uint3 dispatchIdx = cudaThreadIdx() + cudaBlockIdx() * cudaBlockDim();
@@ -229,8 +215,7 @@ void backwards_kernel(
 
     uint num_iters = max(min(iters[ray_ind], max_iters), 0);
     if (iters[ray_ind] >= max_iters-1 || iters[ray_ind] <= 0) return;
-    var dtmin = diffPair(tmin, {});
-    bwd_diff(extract_color)(deriv_state, dtmin, dL_doutput);
+    bwd_diff(extract_output)(deriv_state, dL_doutput);
 
     let feature_size = params.features.size(1);
     let sh_degree = int(sqrt(feature_size))-1;
@@ -251,23 +236,23 @@ void backwards_kernel(
             prev_sample = load_sample_clamped(prev_hit_id, params, origin, direction, sh_degree, t_clamp);
         } else {
             prev_sample.t = tmin;
-            prev_sample.delta_contrib = {0.f, 0.f, 0.f, 0.f};
+            prev_sample.contrib = {0.f, 0.f, 0.f, 0.f};
         }
 
-        IntegratorState prev_state = inverse_update(state, sample, prev_sample, tmin, ray_tmax);
+        IntegratorState prev_state = invert_step(state, sample, prev_sample);
 
         let prev_deriv_state = run_update(
                 prev_state,
                 prev_sample,
                 sample,
-                get_prim_idx(hit_id),
-                get_hit_type(hit_id),
+                hit_id >> 1,  // prim_index
+                hit_id & 1,   // hit_type
                 ray_ind,
                 deriv_state,
-                origin, direction, tmin, ray_tmax, sh_degree, max_prim_size,
+                origin, direction, tmin, ray_tmax, sh_degree,
                 params);
         int itemp;
-        prim_hits.InterlockedAdd(get_prim_idx(hit_id), 1, itemp);
+        prim_hits.InterlockedAdd(hit_id >> 1, 1, itemp);
 
         hit_id = prev_hit_id;
         state = prev_state;
