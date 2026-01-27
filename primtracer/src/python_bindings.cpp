@@ -101,7 +101,7 @@ public:
         const torch::Tensor& ray_directions,
         float tmin,
         const torch::Tensor& tmax,
-        int32_t max_iters)
+        int32_t max_hits)
     {
         torch::AutoGradMode enable_grad(false);
 
@@ -134,8 +134,8 @@ public:
         torch::Tensor last_contrib = torch::zeros({num_rays, 4}, opts_f);
         torch::Tensor last_prim = torch::zeros({num_rays}, opts_i);
         torch::Tensor prim_hits = torch::zeros({num_prims}, opts_i);
-        torch::Tensor iters = torch::zeros({num_rays}, opts_i);
-        torch::Tensor hit_collection = torch::zeros({(num_rays * max_iters)}, opts_i);
+        torch::Tensor ray_hits = torch::zeros({num_rays}, opts_i);
+        torch::Tensor hit_collection = torch::zeros({(num_rays * max_hits)}, opts_i);
 
         // Setup backward state
         // IntegratorState requires static_cast as PyTorch only supports basic types
@@ -144,7 +144,7 @@ public:
             .last_contrib = last_contrib.data_ptr<float>(),
             .last_prim = last_prim.data_ptr<int32_t>(),
             .prim_hits = prim_hits.data_ptr<int32_t>(),
-            .iters = iters.data_ptr<int32_t>(),
+            .ray_hits = ray_hits.data_ptr<int32_t>(),
             .hit_collection = hit_collection.data_ptr<int32_t>(),
         };
 
@@ -155,7 +155,7 @@ public:
             tmax.data_ptr<float>(),
             tmin,
             num_rays,
-            max_iters,
+            max_hits,
             color.data_ptr<float>(),
             depth.data_ptr<float>(),
             saved
@@ -168,7 +168,7 @@ public:
             "last_state"_a = last_state,
             "last_contrib"_a = last_contrib,
             "prim_hits"_a = prim_hits,
-            "iters"_a = iters,
+            "ray_hits"_a = ray_hits,
             "hit_collection"_a = hit_collection
         );
     }
@@ -231,7 +231,7 @@ Args:
              py::arg("ray_directions"),
              py::arg("tmin"),
              py::arg("tmax"),
-             py::arg("max_iters"),
+             py::arg("max_hits"),
              R"doc(
 Trace rays through the scene.
 
@@ -242,13 +242,13 @@ Args:
     ray_directions: Ray directions (normalized), shape (M, 3)
     tmin: Minimum ray parameter (scalar)
     tmax: Maximum ray parameter per ray, shape (M,)
-    max_iters: Maximum hit iterations per ray
+    max_hits: Maximum number of hits per ray
 
 Returns:
     Dictionary containing:
         - color: RGBA output, shape (M, 4)
         - depth: Expected depth, shape (M,)
-        - states, last_contrib, iters, prim_hits: Volume integrator state
+        - states, last_contrib, ray_hits, prim_hits: Volume integrator state
         - hit_collection: Collected hit IDs for backward pass
 )doc")
         .def("has_primitives", &PyRayTracer::has_primitives,

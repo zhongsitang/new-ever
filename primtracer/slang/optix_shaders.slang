@@ -80,12 +80,12 @@ RWStructuredBuffer<IntegratorState> last_state;
 RWStructuredBuffer<float> last_contrib;
 RWStructuredBuffer<int> last_prim;
 RWStructuredBuffer<int> prim_hits;
-RWStructuredBuffer<int> iters;
+RWStructuredBuffer<int> ray_hits;
 RWStructuredBuffer<int> hit_collection;
 
 // Scalars (order must match C++ LaunchParams)
 int sh_degree;
-int max_iters;
+int max_hits;
 float tmin;
 
 // Acceleration structure
@@ -246,7 +246,7 @@ void render_volume()
     uint hit_id = 0;
     uint next_id = 0;
 
-    while (state.logT > LOG_CUTOFF && iter < max_iters)
+    while (state.logT > LOG_CUTOFF && iter < max_hits)
     {
         HitBuffer buf = init_hit_buffer(next_id);
         TraceRay(traversable, RAY_FLAG_NONE, 0xff, 0, 0, 0,
@@ -273,7 +273,7 @@ void render_volume()
             hit_collection[ray_idx + iter * num_rays_dim] = hit_id;
             iter++;
 
-            if (!(state.logT > LOG_CUTOFF && iter < max_iters))
+            if (!(state.logT > LOG_CUTOFF && iter < max_hits))
                 break;
         }
         if (done)
@@ -287,7 +287,7 @@ void render_volume()
 
     // Save for backward pass
     last_state[ray_idx] = state;
-    store_float4(last_contrib, ray_idx, sample.contrib);
     last_prim[ray_idx] = hit_id;
-    iters[ray_idx] = iter;
+    ray_hits[ray_idx] = iter;
+    store_float4(last_contrib, ray_idx, sample.contrib);
 }

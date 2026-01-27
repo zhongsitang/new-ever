@@ -306,7 +306,7 @@ public:
         const float* tmax,             // (num_rays,) per-ray max distance
         float tmin,
         int32_t num_rays,
-        int32_t max_iters,
+        int32_t max_hits,
         float* color_out,              // (num_rays, 4) flattened
         float* depth_out,              // (num_rays,) depth values
         SavedState& saved

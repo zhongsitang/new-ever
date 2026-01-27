@@ -74,8 +74,8 @@ struct SavedState {
     float* last_contrib;           // (M, 4) flattened, last contribution
     int32_t* last_prim;            // (M,) last primitive hit per ray
     int32_t* prim_hits;            // (N,) hit count per primitive
-    int32_t* iters;                // (M,) iteration count per ray
-    int32_t* hit_collection;       // (M * max_iters,) hit primitive indices
+    int32_t* ray_hits;             // (M,) number of primitive hits per ray
+    int32_t* hit_collection;       // (M * max_hits,) hit primitive indices
 };
 
 // =============================================================================
@@ -112,12 +112,12 @@ struct LaunchParams {
     StructuredBuffer<float> last_contrib;
     StructuredBuffer<int32_t> last_prim;
     StructuredBuffer<int32_t> prim_hits;
-    StructuredBuffer<int32_t> iters;
+    StructuredBuffer<int32_t> ray_hits;
     StructuredBuffer<int32_t> hit_collection;
 
     // --- Scalar parameters --------------------------------------------------
     int32_t sh_degree;
-    int32_t max_iters;
+    int32_t max_hits;
     float tmin;
 
     // --- Acceleration structure ---------------------------------------------

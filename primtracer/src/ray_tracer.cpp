@@ -175,7 +175,7 @@ void RayTracer::trace_rays(
     const float* tmax,
     float tmin,
     int32_t num_rays,
-    int32_t max_iters,
+    int32_t max_hits,
     float* color_out,
     float* depth_out,
     SavedState& saved)
@@ -200,12 +200,12 @@ void RayTracer::trace_rays(
     params_.last_contrib = {saved.last_contrib, num_rays};
     params_.last_prim = {saved.last_prim, num_rays};
     params_.prim_hits = {saved.prim_hits, prims_.num_prims};
-    params_.iters = {saved.iters, num_rays};
-    params_.hit_collection = {saved.hit_collection, num_rays * max_iters};
+    params_.ray_hits = {saved.ray_hits, num_rays};
+    params_.hit_collection = {saved.hit_collection, num_rays * max_hits};
 
     // Scalar parameters
     params_.tmin = tmin;
-    params_.max_iters = max_iters;
+    params_.max_hits = max_hits;
 
     params_.handle = accel_->handle();
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,

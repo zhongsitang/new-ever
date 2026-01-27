@@ -51,24 +51,24 @@ def _div_up(n: int, d: int) -> int:
 
 class _PrimTracerFn(Function):
     @staticmethod
-    def forward(ctx: Any, mean, scale, quat, density, features, rayo, rayd, tmin, tmax, max_iters):
+    def forward(ctx: Any, mean, scale, quat, density, features, rayo, rayd, tmin, tmax, max_hits):
         tracer = _get_tracer(mean.device.index or 0)
         tracer.update_primitives(mean, scale, quat, density, features)
-        out = tracer.trace_rays(rayo, rayd, tmin, tmax, max_iters)
+        out = tracer.trace_rays(rayo, rayd, tmin, tmax, max_hits)
 
-        ctx.tmin, ctx.max_iters = tmin, max_iters
+        ctx.tmin, ctx.max_hits = tmin, max_hits
         ctx.save_for_backward(
             mean, scale, quat, density, features,
             rayo, rayd, tmax,
-            out["last_state"], out["last_contrib"], out["iters"], out["hit_collection"],
+            out["last_state"], out["last_contrib"], out["ray_hits"], out["hit_collection"],
         )
-        return out["color"], out["depth"], out["iters"], out["hit_collection"], out["prim_hits"]
+        return out["color"], out["depth"], out["ray_hits"], out["hit_collection"], out["prim_hits"]
 
     @staticmethod
     def backward(ctx, dL_color, dL_depth, *_):
         (mean, scale, quat, density, features,
          rayo, rayd, tmax,
-         last_state, last_contrib, iters, hit_collection) = ctx.saved_tensors
+         last_state, last_contrib, ray_hits, hit_collection) = ctx.saved_tensors
 
         N, M = mean.shape[0], rayo.shape[0]
         dev = mean.device
@@ -82,7 +82,7 @@ class _PrimTracerFn(Function):
         dL_rayo = torch.zeros(M, 3, device=dev)
         dL_rayd = torch.zeros(M, 3, device=dev)
 
-        if iters.sum() > 0:
+        if ray_hits.sum() > 0:
             dL_out = torch.cat([dL_color, dL_depth.unsqueeze(-1)], dim=-1).contiguous()
 
             _bw.bw_trace_rays(
@@ -90,8 +90,8 @@ class _PrimTracerFn(Function):
                 (mean, scale, quat, density, features,
                  dL_mean, dL_scale, dL_quat, dL_density, dL_features),
                 (rayo, rayd, tmax, ctx.tmin, dL_rayo, dL_rayd),
-                (last_state, last_contrib, iters, hit_collection),
-                dL_out, ctx.max_iters,
+                (last_state, last_contrib, ray_hits, hit_collection),
+                dL_out, ctx.max_hits,
             )
 
         clip = 1e3
@@ -117,7 +117,7 @@ def trace_rays(
     rayd: torch.Tensor,
     tmin: float = 0.0,
     tmax: torch.Tensor | float = 1000.0,
-    max_iters: int = 500,
+    max_hits: int = 500,
     return_extras: bool = False,
 ):
     """
@@ -133,7 +133,7 @@ def trace_rays(
         rayd: Ray directions (normalized), shape (M, 3)
         tmin: Minimum ray t
         tmax: Maximum ray t (scalar or per-ray tensor)
-        max_iters: Maximum hit iterations per ray
+        max_hits: Maximum number of hits per ray
         return_extras: Return additional hit info
 
     Returns:
@@ -148,7 +148,7 @@ def trace_rays(
         if tmax.numel() == 1:
             tmax = tmax.expand(M).contiguous()
 
-    color, depth, iters, hit_collection, prim_hits = _PrimTracerFn.apply(
+    color, depth, ray_hits, hit_collection, prim_hits = _PrimTracerFn.apply(
         mean.contiguous(),
         scale.contiguous(),
         quat.contiguous(),
@@ -158,11 +158,11 @@ def trace_rays(
         rayd.contiguous(),
         tmin,
         tmax,
-        max_iters,
+        max_hits,
     )
 
     if return_extras:
-        extras = {"iters": iters, "hit_collection": hit_collection, "prim_hits": prim_hits}
+        extras = {"ray_hits": ray_hits, "hit_collection": hit_collection, "prim_hits": prim_hits}
         return color, depth, extras
     return color, depth
 

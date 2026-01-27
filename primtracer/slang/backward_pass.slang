@@ -26,7 +26,7 @@ struct Rays
 struct SavedState
 {
     TensorView<float> last_state, last_contrib;
-    TensorView<int> iters, hit_collection;
+    TensorView<int> ray_hits, hit_collection;
 };
 
 struct RayCtx
@@ -156,14 +156,14 @@ inline IntegratorState.Differential backward_step(
 [CUDAKernel]
 void bw_trace_rays(
     Primitives prims, Rays rays, SavedState saved,
-    TensorView<float> dL_doutputs, int max_iters)
+    TensorView<float> dL_doutputs, int max_hits)
 {
     int ray_idx = int(cudaThreadIdx().x + cudaBlockIdx().x * cudaBlockDim().x);
     if (ray_idx >= rays.origins.size(0))
         return;
 
-    int num_iters = saved.iters[ray_idx];
-    if (num_iters >= max_iters - 1 || num_iters <= 0)
+    int num_hits = saved.ray_hits[ray_idx];
+    if (num_hits > max_hits - 1 || num_hits <= 0)
         return;
 
     int hit_stride = rays.origins.size(0);
@@ -193,12 +193,12 @@ void bw_trace_rays(
     SamplePoint sampBuf[2];
 
     // Load last hit into slot 0
-    int last_hit_id = saved.hit_collection[ray_idx + (num_iters - 1) * hit_stride];
+    int last_hit_id = saved.hit_collection[ray_idx + (num_hits - 1) * hit_stride];
     load_hit_cache(prims, ray, last_hit_id, hitBuf[0], sampBuf[0]);
     int cur = 0;
 
     // Backward iteration
-    for (int i = num_iters; i-- > 0;)
+    for (int i = num_hits; i-- > 0;)
     {
         int prev = cur ^ 1;
 
