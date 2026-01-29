@@ -41,18 +41,30 @@ endmacro()
 
 # Build include arguments for slangc
 #   -I <dir>           for regular includes
-#   -Xnvrtc -I<dir>    for NVRTC includes
 function(_slang_build_include_args out_var prefix)
   set(_args "")
   
   foreach(_dir IN LISTS ${prefix}_INCLUDE_DIRS)
     list(APPEND _args -I "${_dir}")
   endforeach()
-  
+
+  set(${out_var} ${_args} PARENT_SCOPE)
+endfunction()
+
+# Build NVRTC arguments for slangc
+#   -Xnvrtc -I<dir>     for NVRTC includes
+#   -Xnvrtc --gpu-architecture=compute_<arch> when SLANG_NVRTC_ARCH is set
+function(_slang_build_nvrtc_args out_var prefix)
+  set(_args "")
+
   foreach(_dir IN LISTS ${prefix}_NVRTC_DIRS)
     list(APPEND _args -Xnvrtc "-I${_dir}")
   endforeach()
-  
+
+  if(DEFINED SLANG_NVRTC_ARCH AND NOT "${SLANG_NVRTC_ARCH}" STREQUAL "")
+    list(APPEND _args -Xnvrtc "--gpu-architecture=compute_${SLANG_NVRTC_ARCH}")
+  endif()
+
   set(${out_var} ${_args} PARENT_SCOPE)
 endfunction()
 
@@ -101,6 +113,7 @@ function(slang_ptx_embed)
   
   # Build compiler arguments
   _slang_build_include_args(_include_args ARG)
+  _slang_build_nvrtc_args(_nvrtc_args ARG)
 
   # Generate header with embedded PTX
   add_custom_command(
@@ -112,6 +125,7 @@ function(slang_ptx_embed)
       -source-embed-style default
       -source-embed-name "${ARG_NAME}"
       ${_include_args}
+      ${_nvrtc_args}
       ${ARG_SLANG_FLAGS}
     DEPENDS "${ARG_SLANG_FILE}" ${ARG_DEPENDS}
     COMMENT "[slang] ${ARG_NAME}: .slang -> .h (embedded PTX)"
@@ -162,6 +176,7 @@ function(slang_add_py_module _name)
 
   # Build compiler arguments
   _slang_build_include_args(_include_args ARG)
+  _slang_build_nvrtc_args(_nvrtc_args ARG)
 
   # Generate C++ binding file (-target torch)
   add_custom_command(
@@ -171,6 +186,7 @@ function(slang_add_py_module _name)
       -target torch-binding
       -o "${_output_cpp}"
       ${_include_args}
+      ${_nvrtc_args}
       ${ARG_SLANG_FLAGS}
     DEPENDS ${ARG_SLANG_FILES} ${ARG_DEPENDS}
     COMMENT "[slang] ${_name}: .slang -> .cpp (torch binding)"
@@ -186,6 +202,7 @@ function(slang_add_py_module _name)
       -target cuda
       -o "${_output_cu}"
       ${_include_args}
+      ${_nvrtc_args}
       ${ARG_SLANG_FLAGS}
     DEPENDS ${ARG_SLANG_FILES} ${ARG_DEPENDS}
     COMMENT "[slang] ${_name}: .slang -> .cu (cuda impl)"

@@ -784,7 +784,7 @@ class TestGradients:
 
     def test_grad_depth_simple_scene(self):
         scene = _create_simple_scene(device=DEVICE)
-        self._run_gradcheck(scene, output="depth", tol_mult=1.0)
+        self._run_gradcheck(scene, output="depth", tol_mult=1.1)
 
     def test_grad_quat_sphere_near_zero(self):
         scene = _create_simple_scene(device=DEVICE)

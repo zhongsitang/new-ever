@@ -141,12 +141,12 @@ public:
         // Setup backward state
         // IntegratorState requires static_cast as PyTorch only supports basic types
         SavedState saved = {
-            .last_state = static_cast<IntegratorState*>(last_state.data_ptr()),
-            .last_contrib = last_contrib.data_ptr<float>(),
-            .last_prim = last_prim.data_ptr<int32_t>(),
-            .prim_hits = prim_hits.data_ptr<int32_t>(),
-            .ray_hits = ray_hits.data_ptr<int32_t>(),
-            .hit_collection = hit_collection.data_ptr<int32_t>(),
+            static_cast<IntegratorState*>(last_state.data_ptr()),
+            last_contrib.data_ptr<float>(),
+            last_prim.data_ptr<int32_t>(),
+            prim_hits.data_ptr<int32_t>(),
+            ray_hits.data_ptr<int32_t>(),
+            hit_collection.data_ptr<int32_t>(),
         };
 
         // Trace rays (use scalar float pointers for safe torch interop)

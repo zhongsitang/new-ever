@@ -75,7 +75,9 @@ def to_tensor(x, device: torch.device | None = None) -> torch.Tensor:
     """Convert input to torch tensor (optionally move to device)."""
     if isinstance(x, torch.Tensor):
         return x.to(device) if device is not None else x
-    return torch.as_tensor(x, device=device)
+    if isinstance(x, np.ndarray):
+        return torch.tensor(x, device=device)
+    return torch.tensor(np.array(x), device=device)
 
 
 def l2_normalize(x: torch.Tensor, eps: float | None = None) -> torch.Tensor:
