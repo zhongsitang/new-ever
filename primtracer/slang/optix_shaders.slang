@@ -40,7 +40,6 @@ import spherical_harmonics;
 
 #define HIT_BUFFER_SIZE 16
 
-static const float LOG_CUTOFF = -5.54f; // Transmittance cutoff: log(0.004)
 static const float T_SENTINEL = 1e10f; // Marks empty buffer slots
 
 // =============================================================================
@@ -86,6 +85,7 @@ RWStructuredBuffer<int> hit_collection;
 // Scalars (order must match C++ LaunchParams)
 int sh_degree;
 int max_hits;
+float min_logT;
 float tmin;
 
 // Acceleration structure
@@ -246,7 +246,7 @@ void render_volume()
     uint hit_id = 0;
     uint next_id = 0;
 
-    while (state.logT > LOG_CUTOFF && iter < max_hits)
+    while (state.logT > min_logT && iter < max_hits)
     {
         HitBuffer buf = init_hit_buffer(next_id);
         TraceRay(traversable, RAY_FLAG_NONE, 0xff, 0, 0, 0,
@@ -268,12 +268,12 @@ void render_volume()
             sample = create_sample(hit_id, hit_t, ray_dir);
             state = integrate_step(state, sample);
 
-            // Record for backward pass
-            prim_hits[hit_id >> 1]++;
+            int tmp;
+            InterlockedAdd(prim_hits[hit_id >> 1], 1, tmp);
             hit_collection[ray_idx + iter * num_rays_dim] = hit_id;
             iter++;
 
-            if (!(state.logT > LOG_CUTOFF && iter < max_hits))
+            if (!(state.logT > min_logT && iter < max_hits))
                 break;
         }
         if (done)

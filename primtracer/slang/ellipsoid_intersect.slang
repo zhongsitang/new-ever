@@ -37,9 +37,14 @@ float2 eliIntersect(in float3 ro, in float3 rd, in float3 ra)
     if (h < 0.0)
         return float2(-1.0);
 
-    // Numerically stable root finding
-    float q = bp + sign(bp) * safe_sqrt(h);
-    return float2(safe_div(c, q), safe_div(q, a));
+    // Robust root computation. Avoid safe_div here to prevent small-denominator
+    // clamping to 0 (which collapses roots for near-center rays).
+    float sqrt_h = sqrt(max(h, 0.0f));
+    float inv_a = 1.0f / max(a, 1e-12f);
+    float t0 = (bp - sqrt_h) * inv_a;
+    float t1 = (bp + sqrt_h) * inv_a;
+
+    return float2(min(t0, t1), max(t0, t1));
 }
 
 /// Intersect ray with transformed ellipsoid. Returns (t_entry, t_exit) sorted.
@@ -51,8 +56,9 @@ float2 ray_intersect_ellipsoid(
     in float3 scales,
     in float4 quat)
 {
-    float3 local_dir = l2_normalize(rotate_vector(rayd, quat));
-    float3 local_origin = rotate_vector(rayo - mean, quat);
+    float4 qn = l2_normalize(quat);
+    float3 local_dir = l2_normalize(rotate_vector(rayd, qn));
+    float3 local_origin = rotate_vector(rayo - mean, qn);
 
     float2 t = eliIntersect(local_origin, local_dir, scales);
 

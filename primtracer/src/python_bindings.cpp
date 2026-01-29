@@ -101,6 +101,7 @@ public:
         const torch::Tensor& ray_directions,
         float tmin,
         const torch::Tensor& tmax,
+        float min_logT,
         int32_t max_hits)
     {
         torch::AutoGradMode enable_grad(false);
@@ -155,6 +156,7 @@ public:
             tmax.data_ptr<float>(),
             tmin,
             num_rays,
+            min_logT,
             max_hits,
             color.data_ptr<float>(),
             depth.data_ptr<float>(),
@@ -231,6 +233,7 @@ Args:
              py::arg("ray_directions"),
              py::arg("tmin"),
              py::arg("tmax"),
+             py::arg("min_logT"),
              py::arg("max_hits"),
              R"doc(
 Trace rays through the scene.
@@ -242,6 +245,7 @@ Args:
     ray_directions: Ray directions (normalized), shape (M, 3)
     tmin: Minimum ray parameter (scalar)
     tmax: Maximum ray parameter per ray, shape (M,)
+    min_logT: log(T) cutoff (stop when logT <= min_logT)
     max_hits: Maximum number of hits per ray
 
 Returns:

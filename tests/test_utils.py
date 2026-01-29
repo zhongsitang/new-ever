@@ -86,6 +86,27 @@ def l2_normalize(x: torch.Tensor, eps: float | None = None) -> torch.Tensor:
     return x / denom
 
 
+def quat_to_mat3(q: torch.Tensor) -> torch.Tensor:
+    """Quaternion (r,x,y,z) -> rotation matrix (3x3) in torch."""
+    r, x, y, z = q[0], q[1], q[2], q[3]
+    mat = torch.tensor(
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - r * z),
+            2.0 * (x * z + r * y),
+            2.0 * (x * y + r * z),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - r * x),
+            2.0 * (x * z - r * y),
+            2.0 * (y * z + r * x),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+        dtype=q.dtype,
+        device=q.device,
+    ).reshape(3, 3)
+    return mat.T
+
+
 # =============================================================================
 # JAX utilities
 # =============================================================================
@@ -161,6 +182,246 @@ def create_rays(
 
     return rayo, rayd
 
+
+def create_frustum_rays(
+    n: int,
+    origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+    look_dir: Tuple[float, float, float] = (0.0, 0.0, 1.0),
+    fov_deg: float = 6.0,
+    aspect: float = 1.0,
+    seed: int = 42,
+    device: torch.device | None = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Create rays within a small frustum around a look direction."""
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    device = device or get_device()
+    rayo = torch.tensor([origin], dtype=torch.float32, device=device).expand(n, -1)
+
+    look = l2_normalize(torch.tensor(look_dir, dtype=torch.float32, device=device))
+    world_up = torch.tensor([0.0, 1.0, 0.0], dtype=torch.float32, device=device)
+    if torch.abs((look * world_up).sum()) > 0.95:
+        world_up = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float32, device=device)
+
+    right = l2_normalize(torch.cross(look, world_up, dim=0))
+    up = l2_normalize(torch.cross(right, look, dim=0))
+
+    tan_half = float(np.tan(np.deg2rad(fov_deg * 0.5)))
+    xy = (torch.rand(n, 2, device=device) * 2.0 - 1.0)
+    xy[:, 0] *= tan_half * aspect
+    xy[:, 1] *= tan_half
+
+    rayd = l2_normalize(
+        look.reshape(1, 3) + xy[:, 0:1] * right.reshape(1, 3) + xy[:, 1:2] * up.reshape(1, 3)
+    )
+    return rayo.contiguous(), rayd.contiguous()
+
+
+def create_primitives_near_rays(
+    n: int,
+    rayo: torch.Tensor,
+    rayd: torch.Tensor,
+    tmin: float = 0.0,
+    tmax: float = 3.0,
+    density_scale: float = 1.0,
+    sh_degree: int = 3,
+    hit_prob: float = 0.5,
+    overlap_prob: float = 0.1,
+    scale_range: Tuple[float, float] = (0.05, 0.2),
+    seed: int = 42,
+    device: torch.device | None = None,
+) -> Dict[str, torch.Tensor]:
+    """Create primitives distributed near ray paths with controllable hit/overlap rates."""
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+    device = device or get_device()
+    rayo = rayo.to(device)
+    rayd = l2_normalize(rayd.to(device))
+
+    num_sh_coeff = (sh_degree + 1) ** 2
+    num_rays = rayd.shape[0]
+
+    base_scale = scale_range[0] + (scale_range[1] - scale_range[0]) * torch.rand(
+        n, 1, device=device
+    )
+    scale = base_scale * (0.8 + 0.4 * torch.rand(n, 3, device=device))
+
+    ray_idx = torch.randint(0, num_rays, (n,), device=device)
+    t = tmin + (tmax - tmin) * torch.rand(n, 1, device=device)
+    base = rayo[ray_idx] + t * rayd[ray_idx]
+
+    ray = rayd[ray_idx]
+    world_up = torch.tensor([0.0, 1.0, 0.0], dtype=torch.float32, device=device)
+    world_up = world_up.expand_as(ray)
+    alt_up = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float32, device=device).expand_as(ray)
+    near_parallel = torch.abs((ray * world_up).sum(dim=1)) > 0.95
+    up = torch.where(near_parallel.unsqueeze(1), alt_up, world_up)
+    right = l2_normalize(torch.cross(ray, up, dim=1))
+    up2 = l2_normalize(torch.cross(right, ray, dim=1))
+
+    angles = 2.0 * np.pi * torch.rand(n, 1, device=device)
+    dir_perp = torch.cos(angles) * right + torch.sin(angles) * up2
+
+    scale_ref = scale.mean(dim=1, keepdim=True)
+    hit_mask = (torch.rand(n, 1, device=device) < hit_prob)
+    radius_hit = scale_ref * (0.2 + 0.6 * torch.rand(n, 1, device=device))
+    radius_miss = scale_ref * (2.0 + 2.0 * torch.rand(n, 1, device=device))
+    radius = torch.where(hit_mask, radius_hit, radius_miss)
+
+    mean = base + dir_perp * radius
+
+    num_overlap = int(round(n * overlap_prob))
+    if n > 1 and num_overlap > 0:
+        src_idx = torch.randint(0, n, (num_overlap,), device=device)
+        dst_idx = torch.randint(0, n, (num_overlap,), device=device)
+        jitter = (torch.rand(num_overlap, 3, device=device) - 0.5) * scale[src_idx] * 0.5
+        mean[dst_idx] = mean[src_idx] + jitter
+
+    return {
+        "mean": mean,
+        "scale": scale,
+        "quat": l2_normalize(2 * torch.rand(n, 4, device=device) - 1),
+        "density": density_scale * torch.rand(n, 1, device=device),
+        "features": torch.rand(n, num_sh_coeff, 3, device=device),
+    }
+
+
+def create_random_test_scene(
+    n: int,
+    num_rays: int = 8,
+    frustum_origin: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+    frustum_look_dir: Tuple[float, float, float] = (0.0, 0.0, 1.0),
+    frustum_fov_deg: float = 15.0,
+    tmin: float = 0.0,
+    tmax: float = 3.0,
+    density_scale: float = 1.0,
+    sh_degree: int = 3,
+    scale_range: Tuple[float, float] = (0.05, 0.2),
+    hit_prob: float = 0.5,
+    overlap_prob: float = 0.1,
+    seed: int = 42,
+    device: torch.device | None = None,
+) -> Dict[str, torch.Tensor]:
+    """Create a full scene: frustum rays + primitives near rays."""
+    rayo, rayd = create_frustum_rays(
+        n=num_rays,
+        origin=frustum_origin,
+        look_dir=frustum_look_dir,
+        fov_deg=frustum_fov_deg,
+        seed=seed,
+        device=device,
+    )
+    prims = create_primitives_near_rays(
+        n,
+        rayo,
+        rayd,
+        tmin=tmin,
+        tmax=tmax,
+        density_scale=density_scale,
+        sh_degree=sh_degree,
+        hit_prob=hit_prob,
+        overlap_prob=overlap_prob,
+        scale_range=scale_range,
+        seed=seed,
+        device=device,
+    )
+    return {**prims, "rayo": rayo, "rayd": rayd, "tmin": tmin, "tmax": tmax}
+
+
+def export_scene_obj(
+    path: str,
+    scene: Dict[str, torch.Tensor],
+) -> None:
+    """Export a scene as OBJ: ellipsoids -> low-res meshes, rays -> thin quads.
+
+    Density is stored as per-vertex grayscale in the OBJ "v" lines.
+    """
+    means = scene["mean"]
+    scales = scene["scale"]
+    quats = scene["quat"]
+    densities = scene["density"].reshape(-1)
+    rayo = scene["rayo"]
+    rayd = scene["rayd"]
+
+    vertices = []
+    faces = []
+    ray_triangles = []
+    vert_colors = []
+
+    # Low-res unit sphere (lat-long), used as ellipsoid via scale+rotation.
+    lat_segments = 25
+    lon_segments = 50
+    sphere_vertices = []
+    sphere_faces = []
+    for i in range(lat_segments + 1):
+        v = i / lat_segments
+        phi = np.pi * v
+        y = np.cos(phi)
+        r = np.sin(phi)
+        for j in range(lon_segments):
+            u = j / lon_segments
+            theta = 2.0 * np.pi * u
+            x = r * np.cos(theta)
+            z = r * np.sin(theta)
+            sphere_vertices.append([x, y, z])
+    for i in range(lat_segments):
+        for j in range(lon_segments):
+            a = i * lon_segments + j
+            b = i * lon_segments + (j + 1) % lon_segments
+            c = (i + 1) * lon_segments + (j + 1) % lon_segments
+            d = (i + 1) * lon_segments + j
+            if i != 0:
+                sphere_faces.append([a, b, c])
+            if i != lat_segments - 1:
+                sphere_faces.append([a, c, d])
+
+    sphere_vertices_t = torch.tensor(
+        sphere_vertices, dtype=means.dtype, device=means.device
+    )
+    for i in range(means.shape[0]):
+        scale = scales[i].reshape(1, 3)
+        local = sphere_vertices_t * scale
+        R = quat_to_mat3(l2_normalize(quats[i]))
+        world = (local @ R.T) + means[i].reshape(1, 3)
+
+        v_offset = len(vertices) + 1
+        vertices.extend(world.tolist())
+        vert_colors.extend([float(densities[i])] * len(sphere_vertices))
+        for f in sphere_faces:
+            faces.append([v_offset + idx for idx in f])
+
+    ray_length = float(scene["tmax"]) - float(scene["tmin"])
+    for i in range(rayo.shape[0]):
+        start = rayo[i]
+        end = rayo[i] + rayd[i] * ray_length
+        ray = l2_normalize(rayd[i])
+
+        world_up = torch.tensor([0.0, 1.0, 0.0], dtype=ray.dtype, device=ray.device)
+        if torch.abs((ray * world_up).sum()) > 0.95:
+            world_up = torch.tensor([1.0, 0.0, 0.0], dtype=ray.dtype, device=ray.device)
+        right = l2_normalize(torch.cross(ray, world_up, dim=0))
+        offset = right * 0.005
+
+        v_offset = len(vertices) + 1
+        vertices.append((start + offset).tolist())
+        vertices.append((start - offset).tolist())
+        vertices.append((end - offset).tolist())
+        vertices.append((end + offset).tolist())
+        vert_colors.extend([0.0, 0.0, 0.0, 0.0])
+        ray_triangles.append([v_offset, v_offset + 1, v_offset + 2])
+        ray_triangles.append([v_offset, v_offset + 2, v_offset + 3])
+
+    with open(path, "w", encoding="ascii") as f:
+        f.write("# simple scene export\n")
+        for v, c in zip(vertices, vert_colors):
+            f.write(f"v {v[0]} {v[1]} {v[2]} {c} {c} {c}\n")
+        for face in faces:
+            f.write(f"f {' '.join(str(idx) for idx in face)}\n")
+        if ray_triangles:
+            for tri in ray_triangles:
+                f.write(f"f {' '.join(str(idx) for idx in tri)}\n")
 
 # =============================================================================
 # JAX safe math (no NaNs in forward/backward)

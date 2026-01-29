@@ -175,6 +175,7 @@ void RayTracer::trace_rays(
     const float* tmax,
     float tmin,
     int32_t num_rays,
+    float min_logT,
     int32_t max_hits,
     float* color_out,
     float* depth_out,
@@ -204,8 +205,9 @@ void RayTracer::trace_rays(
     params_.hit_collection = {saved.hit_collection, num_rays * max_hits};
 
     // Scalar parameters
-    params_.tmin = tmin;
     params_.max_hits = max_hits;
+    params_.min_logT = min_logT;
+    params_.tmin = tmin;
 
     params_.handle = accel_->handle();
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_param_), &params_,

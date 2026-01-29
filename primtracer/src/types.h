@@ -118,6 +118,7 @@ struct LaunchParams {
     // --- Scalar parameters --------------------------------------------------
     int32_t sh_degree;
     int32_t max_hits;
+    float min_logT;
     float tmin;
 
     // --- Acceleration structure ---------------------------------------------

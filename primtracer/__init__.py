@@ -15,6 +15,7 @@
 """PrimTracer: Differentiable volume rendering for ellipsoid primitives."""
 
 from typing import Any
+import math
 
 import torch
 from torch.autograd import Function
@@ -51,10 +52,10 @@ def _div_up(n: int, d: int) -> int:
 
 class _PrimTracerFn(Function):
     @staticmethod
-    def forward(ctx: Any, mean, scale, quat, density, features, rayo, rayd, tmin, tmax, max_hits):
+    def forward(ctx: Any, mean, scale, quat, density, features, rayo, rayd, tmin, tmax, min_logT, max_hits):
         tracer = _get_tracer(mean.device.index or 0)
         tracer.update_primitives(mean, scale, quat, density, features)
-        out = tracer.trace_rays(rayo, rayd, tmin, tmax, max_hits)
+        out = tracer.trace_rays(rayo, rayd, tmin, tmax, min_logT, max_hits)
 
         ctx.tmin, ctx.max_hits = tmin, max_hits
         ctx.save_for_backward(
@@ -103,7 +104,7 @@ class _PrimTracerFn(Function):
             dL_features.clamp(-clip, clip),
             dL_rayo.clamp(-clip, clip),
             dL_rayd.clamp(-clip, clip),
-            None, None, None,
+            None, None, None, None,
         )
 
 
@@ -117,6 +118,7 @@ def trace_rays(
     rayd: torch.Tensor,
     tmin: float = 0.0,
     tmax: torch.Tensor | float = 1e7,
+    min_logT: float = math.log(1e-3),
     max_hits: int = 500,
     return_extras: bool = False,
 ):
@@ -133,6 +135,7 @@ def trace_rays(
         rayd: Ray directions (normalized), shape (M, 3)
         tmin: Minimum ray t
         tmax: Maximum ray t (scalar or per-ray tensor)
+        min_logT: log(T) cutoff (stop when logT <= min_logT)
         max_hits: Maximum number of hits per ray
         return_extras: Return additional hit info
 
@@ -158,6 +161,7 @@ def trace_rays(
         rayd.contiguous(),
         tmin,
         tmax,
+        min_logT,
         max_hits,
     )
 
