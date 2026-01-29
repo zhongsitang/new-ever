@@ -4,3 +4,4 @@ __pycache__/
 .pixi
 .claude
 *.pyd
+*.so

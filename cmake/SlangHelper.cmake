@@ -204,4 +204,8 @@ function(slang_add_py_module _name)
   target_compile_options(${_name} PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--diag-suppress=20012,177,550>
   )
+  target_link_options(${_name} PRIVATE
+    $<$<LINK_LANG_AND_ID:CXX,GNU>:-flto=auto>
+  )
+
 endfunction()
