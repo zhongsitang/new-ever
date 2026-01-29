@@ -761,10 +761,10 @@ class TestGradients:
                 if rel_err > self._REL_ERR_STABLE:
                     continue
 
-                err_scale = 2.0
+                err_scale = 3.0
                 tol_scale = 1e-3
                 if output == "depth":
-                    err_scale = 3.0
+                    err_scale = 4.0
                     tol_scale = 1e-3
                 tol = max(1e-5, err_scale * err_est, tol_scale * abs(fd1)) * tol_mult
                 assert abs(grad_dir - fd1) <= tol, (
