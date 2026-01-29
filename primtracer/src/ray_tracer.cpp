@@ -35,7 +35,7 @@ RayTracer::RayTracer(int device_index)
     pipeline_options_.usesMotionBlur = false;
     pipeline_options_.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
     pipeline_options_.numPayloadValues = 32;
-    pipeline_options_.numAttributeValues = 1;
+    pipeline_options_.numAttributeValues = 2;
     pipeline_options_.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
     pipeline_options_.pipelineLaunchParamsVariableName = "SLANG_globalParams";
     pipeline_options_.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_CUSTOM;

@@ -38,7 +38,7 @@ import spherical_harmonics;
 // Constants
 // =============================================================================
 
-#define HIT_BUFFER_SIZE 16
+#define HIT_BUFFER_SIZE 15
 
 static const float T_SENTINEL = 1e10f; // Marks empty buffer slots
 

@@ -53,14 +53,14 @@ float2 ray_intersect_ellipsoid(
     in float3 rayo,
     in float3 rayd,
     in float3 mean,
-    in float3 scales,
+    in float3 scale,
     in float4 quat)
 {
     float4 qn = l2_normalize(quat);
     float3 local_dir = l2_normalize(rotate_vector(rayd, qn));
     float3 local_origin = rotate_vector(rayo - mean, qn);
 
-    float2 t = eliIntersect(local_origin, local_dir, scales);
+    float2 t = eliIntersect(local_origin, local_dir, scale);
 
     return float2(min(t.x, t.y), max(t.x, t.y));
 }
