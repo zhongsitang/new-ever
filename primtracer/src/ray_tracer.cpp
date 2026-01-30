@@ -24,12 +24,12 @@
 // =============================================================================
 
 RayTracer::RayTracer(int device_index)
-    : ctx_(DeviceContext::get(device_index))
+    : device_(device_index)
 {
-    CUDA_CHECK(cudaSetDevice(ctx_.device()));
+    CUDA_CHECK(cudaSetDevice(device_));
 
     // Create acceleration structure (empty, will be populated by update_primitives)
-    accel_ = std::make_unique<AccelStructure>(ctx_);
+    accel_ = std::make_unique<AccelStructure>(device_);
 
     // Setup pipeline compile options
     pipeline_options_.usesMotionBlur = false;
@@ -50,12 +50,13 @@ RayTracer::RayTracer(int device_index)
 }
 
 void RayTracer::create_module(const char* ptx) {
+    OptixDeviceContext optix_ctx = OptixContextCache::get(device_);
     OptixModuleCompileOptions module_options = {};
     module_options.optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_3;
     module_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
 
     OPTIX_CHECK_LOG(optixModuleCreate(
-        ctx_.context(),
+        optix_ctx,
         &module_options,
         &pipeline_options_,
         ptx,
@@ -66,6 +67,7 @@ void RayTracer::create_module(const char* ptx) {
 }
 
 void RayTracer::create_program_groups() {
+    OptixDeviceContext optix_ctx = OptixContextCache::get(device_);
     OptixProgramGroupOptions pg_options = {};
 
     // Raygen
@@ -74,7 +76,7 @@ void RayTracer::create_program_groups() {
     raygen_desc.raygen.module = module_;
     raygen_desc.raygen.entryFunctionName = "__raygen__render_volume";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
-        ctx_.context(), &raygen_desc, 1, &pg_options, log_, &log_sz_, &raygen_pg_
+        optix_ctx, &raygen_desc, 1, &pg_options, log_, &log_sz_, &raygen_pg_
     ));
 
     // Miss
@@ -83,7 +85,7 @@ void RayTracer::create_program_groups() {
     miss_desc.miss.module = module_;
     miss_desc.miss.entryFunctionName = "__miss__miss";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
-        ctx_.context(), &miss_desc, 1, &pg_options, log_, &log_sz_, &miss_pg_
+        optix_ctx, &miss_desc, 1, &pg_options, log_, &log_sz_, &miss_pg_
     ));
 
     // Hitgroup
@@ -94,7 +96,7 @@ void RayTracer::create_program_groups() {
     hitgroup_desc.hitgroup.moduleIS = module_;
     hitgroup_desc.hitgroup.entryFunctionNameIS = "__intersection__intersect_ellipsoid";
     OPTIX_CHECK_LOG(optixProgramGroupCreate(
-        ctx_.context(), &hitgroup_desc, 1, &pg_options, log_, &log_sz_, &hitgroup_pg_
+        optix_ctx, &hitgroup_desc, 1, &pg_options, log_, &log_sz_, &hitgroup_pg_
     ));
 }
 
@@ -106,8 +108,9 @@ void RayTracer::create_pipeline() {
     OptixPipelineLinkOptions link_options = {};
     link_options.maxTraceDepth = max_trace_depth;
 
+    OptixDeviceContext optix_ctx = OptixContextCache::get(device_);
     OPTIX_CHECK_LOG(optixPipelineCreate(
-        ctx_.context(),
+        optix_ctx,
         &pipeline_options_,
         &link_options,
         program_groups,
@@ -155,7 +158,7 @@ void RayTracer::create_sbt() {
 }
 
 void RayTracer::update_primitives(const Primitives& prims) {
-    CUDA_CHECK(cudaSetDevice(ctx_.device()));
+    CUDA_CHECK(cudaSetDevice(device_));
 
     prims_ = prims;
     accel_->rebuild(prims);
@@ -185,7 +188,7 @@ void RayTracer::trace_rays(
         throw Exception("Must call update_primitives() before trace_rays()");
     }
 
-    CUDA_CHECK(cudaSetDevice(ctx_.device()));
+    CUDA_CHECK(cudaSetDevice(device_));
 
     // Ray buffers
     params_.ray_origins = {const_cast<float*>(ray_origins), num_rays};

@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -74,57 +75,64 @@ inline void optix_log_cb(unsigned int, const char*, const char*, void*) {}
 void compute_primitive_aabbs(const Primitives& prims, OptixAabb* aabbs);
 
 // =============================================================================
-// DeviceContext - Per-device OptiX context (globally cached)
+// OptixContextCache - Per-device OptiX context (globally cached)
 // =============================================================================
 
 /// Manages per-device OptiX context. Cached globally and shared across RayTracers.
-class DeviceContext {
+class OptixContextCache {
 public:
     /// Get or create context for a specific device (cached globally)
-    static DeviceContext& get(int device_index) {
-        auto it = contexts().find(device_index);
-        if (it != contexts().end()) {
-            return *it->second;
+    static OptixDeviceContext get(int device_index) {
+        std::lock_guard<std::mutex> lock(contexts_mutex());
+        auto& ctxs = contexts();
+        auto it = ctxs.find(device_index);
+        if (it != ctxs.end()) {
+            return it->second;
         }
 
-        auto ctx = std::unique_ptr<DeviceContext>(new DeviceContext(device_index));
-        auto& ref = *ctx;
-        contexts()[device_index] = std::move(ctx);
-        return ref;
-    }
-
-    OptixDeviceContext context() const { return context_; }
-    int device() const { return device_; }
-
-    // Non-copyable
-    DeviceContext(const DeviceContext&) = delete;
-    DeviceContext& operator=(const DeviceContext&) = delete;
-
-    ~DeviceContext() {
-        if (context_) optixDeviceContextDestroy(context_);
-    }
-
-private:
-    explicit DeviceContext(int device_index) : device_(device_index) {
-        CUDA_CHECK(cudaSetDevice(device_));
+        CUDA_CHECK(cudaSetDevice(device_index));
         CUDA_CHECK(cudaFree(0));  // Initialize CUDA context
-        OPTIX_CHECK(optixInit());
+        init_optix_once();
 
         OptixDeviceContextOptions options = {};
         options.logCallbackFunction = &optix_log_cb;
         options.logCallbackLevel = 4;
 
         CUcontext cuCtx = 0;
-        OPTIX_CHECK(optixDeviceContextCreate(cuCtx, &options, &context_));
+        OptixDeviceContext ctx = nullptr;
+        OPTIX_CHECK(optixDeviceContextCreate(cuCtx, &options, &ctx));
+
+        ctxs[device_index] = ctx;
+        return ctx;
     }
 
-    static std::unordered_map<int, std::unique_ptr<DeviceContext>>& contexts() {
-        static std::unordered_map<int, std::unique_ptr<DeviceContext>> g_contexts;
+    /// Optional manual cleanup (not called automatically).
+    static void clear_all() {
+        std::lock_guard<std::mutex> lock(contexts_mutex());
+        auto& ctxs = contexts();
+        for (auto& kv : ctxs) {
+            if (kv.second) {
+                optixDeviceContextDestroy(kv.second);
+            }
+        }
+        ctxs.clear();
+    }
+
+private:
+    static void init_optix_once() {
+        static std::once_flag once;
+        std::call_once(once, []() { OPTIX_CHECK(optixInit()); });
+    }
+
+    static std::unordered_map<int, OptixDeviceContext>& contexts() {
+        static std::unordered_map<int, OptixDeviceContext> g_contexts;
         return g_contexts;
     }
 
-    int device_ = -1;
-    OptixDeviceContext context_ = nullptr;
+    static std::mutex& contexts_mutex() {
+        static std::mutex g_mutex;
+        return g_mutex;
+    }
 };
 
 // =============================================================================
@@ -135,7 +143,7 @@ private:
 /// Supports efficient rebuilding with buffer capacity tracking to avoid repeated allocations.
 class AccelStructure {
 public:
-    explicit AccelStructure(DeviceContext& ctx) : ctx_(ctx) {}
+    explicit AccelStructure(int device_index) : device_(device_index) {}
 
     ~AccelStructure() {
         if (gas_compact_) cudaFree(reinterpret_cast<void*>(gas_compact_));
@@ -151,7 +159,7 @@ public:
     /// Rebuild acceleration structure for new primitives.
     /// Reuses existing buffers when capacity is sufficient.
     void rebuild(const Primitives& prims) {
-        CUDA_CHECK(cudaSetDevice(ctx_.device()));
+        CUDA_CHECK(cudaSetDevice(device_));
         num_prims_ = prims.num_prims;
 
         ensure_aabb_capacity(num_prims_);
@@ -193,6 +201,7 @@ private:
     }
 
     void build_gas(size_t num_prims) {
+        OptixDeviceContext optix_ctx = OptixContextCache::get(device_);
         OptixAccelBuildOptions accel_options = {};
         accel_options.buildFlags = OPTIX_BUILD_FLAG_PREFER_FAST_TRACE | OPTIX_BUILD_FLAG_ALLOW_COMPACTION;
         accel_options.operation = OPTIX_BUILD_OPERATION_BUILD;
@@ -208,7 +217,7 @@ private:
         input.customPrimitiveArray.numSbtRecords = 1;
 
         OptixAccelBufferSizes sizes;
-        OPTIX_CHECK(optixAccelComputeMemoryUsage(ctx_.context(), &accel_options, &input, 1, &sizes));
+        OPTIX_CHECK(optixAccelComputeMemoryUsage(optix_ctx, &accel_options, &input, 1, &sizes));
 
         ensure_gas_capacity(sizes.outputSizeInBytes, sizes.tempSizeInBytes);
 
@@ -220,7 +229,7 @@ private:
         emit.result = reinterpret_cast<CUdeviceptr>(d_compacted_size);
 
         OPTIX_CHECK(optixAccelBuild(
-            ctx_.context(), 0, &accel_options, &input, 1,
+            optix_ctx, 0, &accel_options, &input, 1,
             gas_temp_, sizes.tempSizeInBytes,
             gas_output_, sizes.outputSizeInBytes,
             &gas_handle_, &emit, 1
@@ -238,11 +247,11 @@ private:
                 CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&gas_compact_), compacted_size));
                 gas_compact_capacity_ = compacted_size;
             }
-            OPTIX_CHECK(optixAccelCompact(ctx_.context(), 0, gas_handle_, gas_compact_, compacted_size, &gas_handle_));
+            OPTIX_CHECK(optixAccelCompact(optix_ctx, 0, gas_handle_, gas_compact_, compacted_size, &gas_handle_));
         }
     }
 
-    DeviceContext& ctx_;
+    int device_ = -1;
     OptixTraversableHandle gas_handle_ = 0;
     size_t num_prims_ = 0;
 
@@ -315,7 +324,7 @@ public:
 
     bool has_primitives() const { return prims_.num_prims > 0; }
     int32_t num_prims() const { return prims_.num_prims; }
-    int device_index() const { return ctx_.device(); }
+    int device_index() const { return device_; }
 
 private:
     void create_module(const char* ptx);
@@ -323,7 +332,7 @@ private:
     void create_pipeline();
     void create_sbt();
 
-    DeviceContext& ctx_;
+    int device_ = -1;
     std::unique_ptr<AccelStructure> accel_;
     Primitives prims_ = {};
 
