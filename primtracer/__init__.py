@@ -142,7 +142,25 @@ def trace_rays(
     Returns:
         (color, depth) or (color, depth, extras) if return_extras=True
     """
+    INT32_MAX = 2**31 - 1
+    MAX_HIT_COLLECTION = 128 * 1024 * 1024  # 128M elements (~512MB for int32)
+
+    N = mean.shape[0]
     M = rayo.shape[0]
+    sh_count = features.shape[1]
+
+    # Check: feature_count = num_prims * sh_count must fit in int32
+    max_primitives = INT32_MAX // sh_count
+    if N > max_primitives:
+        raise ValueError(
+            f"num_primitives ({N}) exceeds maximum ({max_primitives}) "
+            f"for sh_count={sh_count}"
+        )
+    if M * max_hits > MAX_HIT_COLLECTION:
+        raise ValueError(
+            f"num_rays * max_hits ({M} * {max_hits} = {M * max_hits}) "
+            f"exceeds maximum ({MAX_HIT_COLLECTION})"
+        )
 
     if isinstance(tmax, (int, float)):
         tmax = torch.full((M,), tmax, dtype=torch.float32, device=rayo.device)
