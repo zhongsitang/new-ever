@@ -117,7 +117,7 @@ def trace_rays(
     rayo: torch.Tensor,
     rayd: torch.Tensor,
     tmin: float = 0.0,
-    tmax: torch.Tensor | float = 1e7,
+    tmax: torch.Tensor | float = 1e6,
     min_logT: float = math.log(1e-3),
     max_hits: int = 500,
     return_extras: bool = False,

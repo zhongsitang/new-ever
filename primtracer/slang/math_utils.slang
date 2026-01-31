@@ -13,20 +13,22 @@
 // limitations under the License.
 
 // =============================================================================
-// Safe Math Utilities
+// Math Utilities for Differentiable Volume Rendering
 // =============================================================================
 
-// TINY_VAL: threshold for "effectively zero" in divisions
-// When denominator < TINY_VAL, the ratio is undefined and we return 0
-// This is semantically correct for volume rendering where color = contrib/sigma
-// and when sigma ≈ 0, the contribution should also be ≈ 0
+// =============================================================================
+// Constants
+// =============================================================================
+
+// Threshold for "effectively zero" in divisions
+// When denominator < TINY_VAL, ratio is undefined → return 0
 static const float TINY_VAL = 1e-7f;
 
-// EXP_LIMIT: clamp exp() input to avoid overflow (exp(88) ≈ 1.6e38 ≈ FLT_MAX)
+// Clamp exp() input to avoid overflow (exp(88) ≈ 1.6e38 ≈ FLT_MAX)
 static const float EXP_LIMIT = 87.0f;
 
 // =============================================================================
-// Clipping
+// Clipping & Safe Division
 // =============================================================================
 
 [Differentiable]
@@ -36,42 +38,29 @@ float clip(float v, float minv, float maxv) {
 
 [Differentiable]
 float3 clip(float3 v, float minv, float maxv) {
-    return {
+    return float3(
         max(min(v.x, maxv), minv),
         max(min(v.y, maxv), minv),
         max(min(v.z, maxv), minv)
-    };
+    );
 }
 
 [Differentiable]
 float4 clip(float4 v, float minv, float maxv) {
-    return {
+    return float4(
         max(min(v.x, maxv), minv),
         max(min(v.y, maxv), minv),
         max(min(v.z, maxv), minv),
         max(min(v.w, maxv), minv)
-    };
+    );
 }
 
-// =============================================================================
-// Safe Division
-// =============================================================================
-//
-// Semantics: when denominator ≈ 0, the ratio is undefined → return 0
-// This is correct for volume rendering where color = contrib/sigma:
-// - when sigma ≈ 0, contrib ≈ 0 too, so color contribution is negligible
-// - returning 0 instead of a/TINY_VAL avoids gradient explosion in backward pass
-//
-// Backward: when |b| < TINY_VAL, forward returns 0 (independent of a,b)
-// so gradients w.r.t. a and b are both 0
-
+// Safe division: when |b| < TINY_VAL, return 0 (avoids gradient explosion)
 void bw_safe_div(inout DifferentialPair<float> a, inout DifferentialPair<float> b, float.Differential R) {
     if (abs(b.p) < TINY_VAL) {
-        // Forward returned 0, so no gradient flows
         a = DifferentialPair<float>(a.p, 0.0f);
         b = DifferentialPair<float>(b.p, 0.0f);
     } else {
-        // Normal case: d(a/b)/da = 1/b, d(a/b)/db = -a/b²
         a = DifferentialPair<float>(a.p, R / b.p);
         b = DifferentialPair<float>(b.p, -a.p / (b.p * b.p) * R);
     }
@@ -79,47 +68,31 @@ void bw_safe_div(inout DifferentialPair<float> a, inout DifferentialPair<float> 
 
 [BackwardDerivative(bw_safe_div)]
 float safe_div(in float a, in float b) {
-    if (abs(b) < TINY_VAL) {
-        return 0.0f;  // Ratio undefined → return 0
-    }
-    return a / b;  // No clip: let caller handle extreme values if needed
+    return abs(b) < TINY_VAL ? 0.0f : a / b;
 }
 
 [Differentiable]
 float3 safe_div(in float3 a, in float b) {
-    return {safe_div(a.x, b), safe_div(a.y, b), safe_div(a.z, b)};
+    return float3(safe_div(a.x, b), safe_div(a.y, b), safe_div(a.z, b));
 }
 
 [Differentiable]
 float4 safe_div(in float4 a, in float b) {
-    return {safe_div(a.x, b), safe_div(a.y, b), safe_div(a.z, b), safe_div(a.w, b)};
+    return float4(safe_div(a.x, b), safe_div(a.y, b), safe_div(a.z, b), safe_div(a.w, b));
 }
 
 [Differentiable]
 float3 safe_div(in float3 a, in float3 b) {
-    return {safe_div(a.x, b.x), safe_div(a.y, b.y), safe_div(a.z, b.z)};
+    return float3(safe_div(a.x, b.x), safe_div(a.y, b.y), safe_div(a.z, b.z));
 }
 
 // =============================================================================
-// Safe Square Root
+// Safe Square Root & Normalization
 // =============================================================================
 
 [Differentiable]
 float safe_sqrt(in float a) {
-    if (a < TINY_VAL) {
-        return 0.0;
-    } else {
-        return sqrt(a);
-    }
-}
-
-// =============================================================================
-// Normalization
-// =============================================================================
-
-[Differentiable]
-float4 l2_normalize(float4 x) {
-    return safe_div(x, sqrt(max(dot(x, x), TINY_VAL)));
+    return a < TINY_VAL ? 0.0f : sqrt(a);
 }
 
 [Differentiable]
@@ -127,12 +100,15 @@ float3 l2_normalize(float3 x) {
     return safe_div(x, sqrt(max(dot(x, x), TINY_VAL)));
 }
 
+[Differentiable]
+float4 l2_normalize(float4 x) {
+    return safe_div(x, sqrt(max(dot(x, x), TINY_VAL)));
+}
+
 // =============================================================================
-// Safe Exponential/Logarithm
+// Safe Exponential & Logarithm
 // =============================================================================
 
-// safe_exp: clamp INPUT only to avoid overflow, don't clamp output
-// This preserves gradient flow while preventing inf/nan
 [Differentiable]
 float safe_exp(float v) {
     return exp(clamp(v, -EXP_LIMIT, EXP_LIMIT));
@@ -148,7 +124,6 @@ float _log1p(float v) {
 }
 
 void bw_log(inout DifferentialPair<float> v, float.Differential R) {
-    // d(log(v))/dv = 1/v, protect against v ≈ 0
     if (abs(v.p) < TINY_VAL) {
         v = DifferentialPair<float>(v.p, 0.0f);
     } else {
@@ -158,7 +133,6 @@ void bw_log(inout DifferentialPair<float> v, float.Differential R) {
 
 [BackwardDerivative(bw_log)]
 float safe_log(float v) {
-    // Protect against log(≤0), but don't clip output
     return log(max(v, TINY_VAL));
 }
 
@@ -176,38 +150,99 @@ void bw_log1mexp(inout DifferentialPair<float> v, float.Differential R) {
 }
 
 // log1mexp(x) = log(1 - exp(-x)) for x > 0
-// Uses different formulas for numerical stability:
-// - x > log(2): use log1p(-exp(-x)) to avoid 1 - (value close to 1)
-// - x ≤ log(2): use log(-expm1(-x)) since expm1 is accurate for small args
+// Uses different formulas for numerical stability
 [BackwardDerivative(bw_log1mexp)]
 float log1mexp(float x) {
-    if (x > 0.6931471805599453) {  // log(2)
-        // For large x: exp(-x) is small, so 1-exp(-x) ≈ 1, use log1p for accuracy
+    static const float LOG2 = 0.6931471805599453f;
+    if (x > LOG2) {
         return _log1p(-exp(-x));
     } else {
-        // For small x: use expm1 which is accurate, then take log
-        // expm1(-x) = exp(-x) - 1, so -expm1(-x) = 1 - exp(-x)
         float arg = -safe_expm1(-x);
         return log(max(arg, TINY_VAL));
     }
 }
 
 // =============================================================================
-// Quaternion Rotation
+// Quaternion Operations
 // =============================================================================
 
-/// Rotate vector by conjugate quaternion (q = [w, x, y, z]).
 [Differentiable]
-float3 rotate_vector(float3 v, float4 q)
-{
-    let t = 2 * cross(-q.yzw, v);
-    return v + q.x * t + cross(-q.yzw, t);
+float4 quat_conjugate(float4 q) {
+    return float4(q.x, -q.yzw);
+}
+
+/// Rotate vector by quaternion q (q = [w, x, y, z]).
+/// v' = q * v * conjugate(q). Assumes q is (near) unit.
+[Differentiable]
+float3 rotate_vector(float3 v, float4 q) {
+    float3 u = q.yzw;
+    float w = q.x;
+    float3 t = 2.0f * cross(u, v);
+    return v + w * t + cross(u, t);
 }
 
 // =============================================================================
-// Integer Utilities
+// Ray-Ellipsoid Intersection
 // =============================================================================
 
-uint mod(uint a, uint b) {
-    __intrinsic_asm "$0 % $1";
+/// Intersect a ray with an arbitrarily transformed ellipsoid.
+/// Returns (t_entry, t_exit) sorted along the ray, or (-1, -1) if no hit.
+///
+/// Assumptions:
+///   - ray_dir is unit length
+///   - quat encodes ellipsoid rotation (local → world)
+///   - scale gives ellipsoid radii along its local axes
+///
+/// Method:
+///   Transform the ray into the ellipsoid's local space, scale the ellipsoid
+///   to a unit sphere, then solve the standard ray–sphere quadratic robustly.
+[Differentiable]
+float2 ray_intersect_ellipsoid(
+    in float3 ray_origin,
+    in float3 ray_dir, // unit vector
+    in float3 center,
+    in float3 scale,
+    in float4 quat,       // local → world rotation
+    in float eps = 1e-6f) // numerical tolerance (float32-safe)
+{
+    // Normalize quaternion and compute inverse (world → local rotation)
+    float4 q = l2_normalize(quat);
+    float4 qinv = quat_conjugate(q);
+
+    // Transform ray into ellipsoid local space
+    float3 ro = rotate_vector(ray_origin - center, qinv);
+    float3 rd = rotate_vector(ray_dir, qinv);
+
+    // Prevent degenerate radii (very small scale causes numeric blow-up)
+    float3 s = max(abs(scale), eps);
+    float3 inv_s = 1.0f / s;
+
+    // Map ellipsoid to unit sphere
+    float3 oc = ro * inv_s;
+    float3 d = rd * inv_s;
+
+    // Solve |oc + t*d|^2 = 1  →  a t^2 + 2 b t + c = 0
+    float a = dot(d, d);
+    float b = dot(oc, d);
+
+    // Degenerate direction after scaling → no reliable intersection
+    const float eps_a = 1e-12f;
+    if (a < eps_a) return float2(-1.0f, -1.0f);
+
+    // Stable intersection using closest-approach distance (avoids b*b - a*c)
+    float t0 = -b / a;
+    float3 p = oc + t0 * d;
+    float d2 = dot(p, p);
+
+    // Reject if closest point is outside unit sphere (with tolerance)
+    if (d2 > 1.0f + eps) return float2(-1.0f, -1.0f);
+
+    float thc = sqrt(max(1.0f - d2, 0.0f));
+    float inv_sqrt_a = rsqrt(a);
+
+    float t0_hit = t0 - thc * inv_sqrt_a;
+    float t1_hit = t0 + thc * inv_sqrt_a;
+
+    // Sort entry/exit
+    return float2(min(t0_hit, t1_hit), max(t0_hit, t1_hit));
 }

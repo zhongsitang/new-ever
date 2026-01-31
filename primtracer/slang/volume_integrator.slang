@@ -25,7 +25,7 @@
 // contribution of each ellipsoid segment along the ray.
 // =============================================================================
 
-import safe_math;
+import math_utils;
 
 // =============================================================================
 // Core Data Structures
@@ -55,6 +55,22 @@ struct SamplePoint : IDifferentiable
 {
     float t;        // Ray parameter at this sample
     float4 contrib; // (signed_density, r*signed_density, g*signed_density, b*signed_density)
+}
+
+// Numerically stable numerator for depth contribution:
+// alpha - tau * exp(-tau), where alpha = 1 - exp(-tau).
+// Uses a small-tau series to avoid catastrophic cancellation.
+[Differentiable]
+float depth_num_term(float tau)
+{
+    if (tau < 1e-3f) {
+        float t2 = tau * tau;
+        float t3 = t2 * tau;
+        float t4 = t2 * t2;
+        return 0.5f * t2 - (1.0f / 3.0f) * t3 + 0.125f * t4;
+    }
+    float e = safe_expm1(-tau); // exp(-tau) - 1 (negative)
+    return -(e + tau * (1.0f + e));
 }
 
 // =============================================================================
@@ -100,7 +116,7 @@ IntegratorState integrate_step(
     const float weight = clip(alpha * T, 0.f, 1.f);
     new_state.C.xyz = state.C.xyz + weight * color;
 
-    const float depth_term = safe_div(alpha - tau * safe_exp(-tau), sigma);
+    const float depth_term = safe_div(depth_num_term(tau), sigma);
     new_state.depth_num = state.depth_num + T * (state.t * alpha + depth_term);
 
     // --- Step 2: Update density field for next segment ---
@@ -136,7 +152,7 @@ IntegratorState invert_step(
     const float weight = clip(alpha * T, 0.f, 1.f);
     prev_state.C.xyz = new_state.C.xyz - weight * color;  // subtract
 
-    const float depth_term = safe_div(alpha - tau * safe_exp(-tau), sigma);
+    const float depth_term = safe_div(depth_num_term(tau), sigma);
     prev_state.depth_num = new_state.depth_num - T * (prev_sample.t * alpha + depth_term);  // subtract
 
     return prev_state;

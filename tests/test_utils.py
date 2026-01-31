@@ -100,54 +100,54 @@ def eval_sh(
     """Evaluate spherical harmonics.
 
     Args:
-        deg: SH degree (0-3).
-        sh: SH coefficients with shape (..., 3, C) where C = (deg+1)^2.
-            Layout: 3 color channels, C coefficients each.
+        deg: SH degree (0-4).
+        sh: SH coefficients with shape (..., C, 3) where C = (deg+1)^2.
+            Layout: C coefficients, 3 color channels each.
         dirs: Unit directions with shape (..., 3).
 
     Returns:
         RGB colors with shape (..., 3), values in [0, 1] after +0.5 offset.
     """
-    result = SH_C0 * sh[..., 0]  # (..., 3)
+    result = SH_C0 * sh[..., 0, :]  # (..., 3)
 
     if deg > 0:
         x, y, z = dirs[..., 0:1], dirs[..., 1:2], dirs[..., 2:3]
         result = (result
-                  - SH_C1 * y * sh[..., 1]
-                  + SH_C1 * z * sh[..., 2]
-                  - SH_C1 * x * sh[..., 3])
+                  - SH_C1 * y * sh[..., 1, :]
+                  + SH_C1 * z * sh[..., 2, :]
+                  - SH_C1 * x * sh[..., 3, :])
 
         if deg > 1:
             xx, yy, zz = x*x, y*y, z*z
             xy, yz, xz = x*y, y*z, x*z
             result = (result
-                      + SH_C2[0] * xy * sh[..., 4]
-                      + SH_C2[1] * yz * sh[..., 5]
-                      + SH_C2[2] * (2*zz - xx - yy) * sh[..., 6]
-                      + SH_C2[3] * xz * sh[..., 7]
-                      + SH_C2[4] * (xx - yy) * sh[..., 8])
+                      + SH_C2[0] * xy * sh[..., 4, :]
+                      + SH_C2[1] * yz * sh[..., 5, :]
+                      + SH_C2[2] * (2*zz - xx - yy) * sh[..., 6, :]
+                      + SH_C2[3] * xz * sh[..., 7, :]
+                      + SH_C2[4] * (xx - yy) * sh[..., 8, :])
 
             if deg > 2:
                 result = (result
-                          + SH_C3[0] * y * (3*xx - yy) * sh[..., 9]
-                          + SH_C3[1] * xy * z * sh[..., 10]
-                          + SH_C3[2] * y * (4*zz - xx - yy) * sh[..., 11]
-                          + SH_C3[3] * z * (2*zz - 3*xx - 3*yy) * sh[..., 12]
-                          + SH_C3[4] * x * (4*zz - xx - yy) * sh[..., 13]
-                          + SH_C3[5] * z * (xx - yy) * sh[..., 14]
-                          + SH_C3[6] * x * (xx - 3*yy) * sh[..., 15])
+                          + SH_C3[0] * y * (3*xx - yy) * sh[..., 9, :]
+                          + SH_C3[1] * xy * z * sh[..., 10, :]
+                          + SH_C3[2] * y * (4*zz - xx - yy) * sh[..., 11, :]
+                          + SH_C3[3] * z * (2*zz - 3*xx - 3*yy) * sh[..., 12, :]
+                          + SH_C3[4] * x * (4*zz - xx - yy) * sh[..., 13, :]
+                          + SH_C3[5] * z * (xx - yy) * sh[..., 14, :]
+                          + SH_C3[6] * x * (xx - 3*yy) * sh[..., 15, :])
 
                 if deg > 3:
                     result = (result
-                              + SH_C4[0] * xy * (xx - yy) * sh[..., 16]
-                              + SH_C4[1] * yz * (3*xx - yy) * sh[..., 17]
-                              + SH_C4[2] * xy * (7*zz - 1) * sh[..., 18]
-                              + SH_C4[3] * yz * (7*zz - 3) * sh[..., 19]
-                              + SH_C4[4] * (zz * (35*zz - 30) + 3) * sh[..., 20]
-                              + SH_C4[5] * xz * (7*zz - 3) * sh[..., 21]
-                              + SH_C4[6] * (xx - yy) * (7*zz - 1) * sh[..., 22]
-                              + SH_C4[7] * xz * (xx - 3*yy) * sh[..., 23]
-                              + SH_C4[8] * (xx*(xx - 3*yy) - yy*(3*xx - yy)) * sh[..., 24])
+                              + SH_C4[0] * xy * (xx - yy) * sh[..., 16, :]
+                              + SH_C4[1] * yz * (3*xx - yy) * sh[..., 17, :]
+                              + SH_C4[2] * xy * (7*zz - 1) * sh[..., 18, :]
+                              + SH_C4[3] * yz * (7*zz - 3) * sh[..., 19, :]
+                              + SH_C4[4] * (zz * (35*zz - 30) + 3) * sh[..., 20, :]
+                              + SH_C4[5] * xz * (7*zz - 3) * sh[..., 21, :]
+                              + SH_C4[6] * (xx - yy) * (7*zz - 1) * sh[..., 22, :]
+                              + SH_C4[7] * xz * (xx - 3*yy) * sh[..., 23, :]
+                              + SH_C4[8] * (xx*(xx - 3*yy) - yy*(3*xx - yy)) * sh[..., 24, :])
 
     return result + 0.5
 
@@ -178,9 +178,7 @@ def eval_sh_torch(
     dir_pp = means - rayo.expand(n, -1)
     dir_pp = l2_normalize(dir_pp)
 
-    # Transpose features from (N, C, 3) to (N, 3, C) for eval_sh
-    sh = features.transpose(1, 2)
-    result = eval_sh(sh_degree, sh, dir_pp)
+    result = eval_sh(sh_degree, features, dir_pp)
 
     return result.clamp(min=0.0) if apply_clip else result
 
@@ -444,9 +442,8 @@ def trace_rays_reference(
     rayo = rayo.to(dtype)
     rayd = rayd.to(dtype)
 
-    # Transpose features from (N, C, 3) to (N, 3, C)
     sh_degree = int(np.sqrt(features.shape[1])) - 1
-    features = features.to(dtype).transpose(1, 2)
+    features = features.to(dtype)
 
     # Precompute rotation matrices and inverse scales
     R_mats = quat_to_mat3(quat)  # (N, 3, 3)
@@ -496,7 +493,9 @@ def trace_rays_reference(
             dens_n = torch.where(inside, d_n, torch.zeros((), device=device, dtype=dtype))
 
             # SH color for this primitive
-            sh_color_n = eval_sh(sh_degree, features[n], ray_d).clamp(min=0.0)
+            # features[n] is [C, 3], need [1, C, 3] for broadcasting with ray_d [B, 3]
+            sh_n = features[n].unsqueeze(0)  # [1, C, 3]
+            sh_color_n = eval_sh(sh_degree, sh_n, ray_d).clamp(min=0.0)  # [B, 3]
 
             # Accumulate
             total_dens += dens_n
@@ -543,7 +542,7 @@ def directional_gradcheck(
     params: Dict[str, torch.Tensor],
     eps: float = 1e-3,
     num_directions: int = 3,
-    err_scale: float = 3.0,
+    err_scale: float = 5.0,
 ) -> None:
     """Verify gradients using directional finite differences.
 

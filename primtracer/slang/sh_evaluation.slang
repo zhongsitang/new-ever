@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import safe_math;
+import math_utils;
 import tensor_utils;
 import spherical_harmonics;
 

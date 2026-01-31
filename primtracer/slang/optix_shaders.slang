@@ -24,14 +24,13 @@
 //   - When buffer fills, ray is re-traced from last processed t
 //
 // Hit ID Encoding:
-//   hit_id = prim_idx * 2 + hit_type (exit=0, entry=1)
-//   Exit sorts before Entry at same t
+//   hit_id = prim_idx * 2 + hit_type (entry=0, exit=1)
+//   Entry sorts before Exit at same t (correct geometric order)
 //
 // =============================================================================
 
 import volume_integrator;
-import ellipsoid_intersect;
-import safe_math;
+import math_utils;
 import spherical_harmonics;
 
 // =============================================================================
@@ -40,7 +39,7 @@ import spherical_harmonics;
 
 #define HIT_BUFFER_SIZE 15
 
-static const float T_SENTINEL = 1e10f; // Marks empty buffer slots
+static const float T_SENTINEL = 1e6f; // Marks empty buffer slots
 
 // =============================================================================
 // Data Structures
@@ -142,7 +141,7 @@ SamplePoint create_sample(uint hit_id, float t, float3 ray_dir)
 {
     uint prim_idx = hit_id >> 1;
     float density = densities[prim_idx];
-    float signed_density = ((hit_id & 1) != 0) ? density : -density;  // entry=+, exit=-
+    float signed_density = ((hit_id & 1) == 0) ? density : -density;  // entry=+, exit=-
     float3 color = eval_color(ray_dir, get_feats(features, prim_idx, sh_degree));
     return { t, float4(signed_density, signed_density * color) };
 }
@@ -184,18 +183,13 @@ void intersect_ellipsoid()
     // Clamp entry to global tmin (for rays starting inside ellipsoid)
     float t_entry = max(t.x, max(tmin, 0.0f));
     float t_exit = min(t.y, RayTCurrent());
-    
-    // Skip if exit behind cur_t
-    if (t_exit < cur_t)
+
+    // Skip invalid intersections
+    if (t_exit - t_entry < 1e-6f || t_exit < cur_t)
         return;
 
-    // Report entry hit
+    // Report hit at t_exit
     ReportHitOptix(t_exit, 0, asuint(t_entry));
-}
-
-[shader("closesthit")]
-void closest_hit(inout HitBuffer buf, in HitAttr attr)
-{
 }
 
 [shader("anyhit")]
@@ -206,8 +200,8 @@ void collect_hits(inout HitBuffer buf, in HitAttr attr)
     float t_exit = RayTCurrent();
     float t_entry = asfloat(attr.entry_t);
 
-    uint id_entry = prim_idx * 2 + 1;
-    uint id_exit = prim_idx * 2;
+    uint id_entry = prim_idx * 2;
+    uint id_exit = prim_idx * 2 + 1;
 
     // Skip hits already processed in previous trace
     bool skip_entry = (t_entry == cur_t && id_entry < buf.next_id);

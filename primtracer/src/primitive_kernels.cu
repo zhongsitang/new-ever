@@ -5,117 +5,110 @@
 #include <cuda_runtime.h>
 #include "cuda_math.h"  // dot, length, normalize, etc.
 
-// =============================================================================
-// Constants
-// =============================================================================
-
 namespace {
-    constexpr size_t BLOCK_SIZE = 1024;
+    constexpr int   BLOCK_SIZE = 256;
+
+    // Quaternion normalization guard: if |q|^2 is tiny, treat as identity.
+    constexpr float QUAT_EPS2 = 1e-12f;
+
+    // Small padding to avoid overly tight bounds (FP error / later eps in intersection).
+    constexpr float AABB_PAD  = 1e-6f;
 }
 
 // =============================================================================
-// Mat3 (column-major)
+// AABB Computation (optimized for millions of prims)
 // =============================================================================
 
-struct mat3 {
-    float3 c0, c1, c2;
-
-    __host__ __device__ __forceinline__ mat3() {}
-
-    // From three column vectors
-    __host__ __device__ __forceinline__
-    mat3(float3 col0, float3 col1, float3 col2)
-        : c0(col0), c1(col1), c2(col2) {}
-
-    // Row-major input, column-major storage
-    __host__ __device__ __forceinline__
-    mat3(float m00, float m01, float m02,
-         float m10, float m11, float m12,
-         float m20, float m21, float m22)
-        : c0(make_float3(m00, m10, m20)),
-          c1(make_float3(m01, m11, m21)),
-          c2(make_float3(m02, m12, m22)) {}
-};
-
-__host__ __device__ __forceinline__
-float3 operator*(const mat3& M, const float3& v) {
-    return M.c0 * v.x + M.c1 * v.y + M.c2 * v.z;
-}
-
-__host__ __device__ __forceinline__
-mat3 operator*(const mat3& A, const mat3& B) {
-    return mat3{A * B.c0, A * B.c1, A * B.c2};
-}
-
-// =============================================================================
-// Transform Utilities
-// =============================================================================
-
-namespace {
-
-// Safe normalize for quaternion
-__host__ __device__ __forceinline__
-float4 safe_normalize(const float4& q) {
-    float len2 = dot(q, q);
-    return len2 > 0.f ? q * rsqrtf(len2) : make_float4(1.f, 0.f, 0.f, 0.f);
-}
-
-// Quaternion (wxyz: w=q.x, x=q.y, y=q.z, z=q.w) -> transposed rotation matrix
-__device__ __forceinline__
-mat3 quat_to_rotation_matrix_t(const float4& quat) {
-    float4 q = safe_normalize(quat);
-    float w = q.x, x = q.y, y = q.z, z = q.w;
-
-    return mat3{
-        1.f - 2.f*(y*y + z*z),  2.f*(x*y + w*z),        2.f*(x*z - w*y),
-        2.f*(x*y - w*z),        1.f - 2.f*(x*x + z*z),  2.f*(y*z + w*x),
-        2.f*(x*z + w*y),        2.f*(y*z - w*x),        1.f - 2.f*(x*x + y*y)
-    };
-}
-
-}  // namespace
-
-// =============================================================================
-// AABB Computation
-// =============================================================================
-
-__global__ void compute_primitive_bounds_kernel(
-    const float* __restrict__ means,
-    const float* __restrict__ scales,
-    const float* __restrict__ quats,
-    int num_prims,
+__global__ void compute_primitive_bounds_kernel_opt(
+    const float* __restrict__ means,   // [N*3]
+    const float* __restrict__ scales,  // [N*3]  (local radii)
+    const float* __restrict__ quats,   // [N*4]  (w,x,y,z), local -> world
+    int N,
     OptixAabb* __restrict__ aabbs)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= num_prims) return;
+    if (i >= N) return;
 
-    // Load float3 from scalar array
-    float3 center = make_float3(means[i * 3 + 0], means[i * 3 + 1], means[i * 3 + 2]);
-    float3 size = make_float3(scales[i * 3 + 0], scales[i * 3 + 1], scales[i * 3 + 2]);
-    // Load float4 quaternion from scalar array
-    float4 quat = make_float4(quats[i * 4 + 0], quats[i * 4 + 1], quats[i * 4 + 2], quats[i * 4 + 3]);
-    mat3 Rt = quat_to_rotation_matrix_t(quat);
+    // -----------------------------
+    // Coalesced-ish loads (SoA)
+    // -----------------------------
+    int m3 = i * 3;
+    float cx = means[m3 + 0];
+    float cy = means[m3 + 1];
+    float cz = means[m3 + 2];
 
-    // M = S * Rt, extents = column norms
-    mat3 S(size.x, 0.f, 0.f, 0.f, size.y, 0.f, 0.f, 0.f, size.z);
-    mat3 M = S * Rt;
+    float sx = fabsf(scales[m3 + 0]);
+    float sy = fabsf(scales[m3 + 1]);
+    float sz = fabsf(scales[m3 + 2]);
 
-    float ex = length(M.c0);
-    float ey = length(M.c1);
-    float ez = length(M.c2);
+    int q4 = i * 4;
+    float w0 = quats[q4 + 0];
+    float x0 = quats[q4 + 1];
+    float y0 = quats[q4 + 2];
+    float z0 = quats[q4 + 3];
 
-    aabbs[i] = OptixAabb{
-        center.x - ex, center.y - ey, center.z - ez,
-        center.x + ex, center.y + ey, center.z + ez
-    };
+    // -----------------------------
+    // Safe quaternion normalize (mostly branchless)
+    // -----------------------------
+    float len2 = fmaf(w0, w0, fmaf(x0, x0, fmaf(y0, y0, z0 * z0)));
+
+    // valid = 1 if len2 >= QUAT_EPS2 else 0
+    float valid = (len2 >= QUAT_EPS2) ? 1.0f : 0.0f;
+
+    // Avoid rsqrt(0); when invalid, inv_len -> 0, and we blend to identity.
+    float inv_len = rsqrtf(fmaxf(len2, QUAT_EPS2));
+
+    float w = valid * (w0 * inv_len) + (1.0f - valid) * 1.0f;
+    float x = valid * (x0 * inv_len);
+    float y = valid * (y0 * inv_len);
+    float z = valid * (z0 * inv_len);
+
+    // -----------------------------
+    // Compute |R| entries directly (R from unit quat w,x,y,z)
+    // We only need abs(R_ij) to compute extents e = |R| * s
+    // -----------------------------
+    float xx = x * x, yy = y * y, zz = z * z;
+    float xy = x * y, xz = x * z, yz = y * z;
+    float wx = w * x, wy = w * y, wz = w * z;
+
+    // R00 R01 R02
+    float r00 = 1.0f - 2.0f * (yy + zz);
+    float r01 = 2.0f * (xy - wz);
+    float r02 = 2.0f * (xz + wy);
+
+    // R10 R11 R12
+    float r10 = 2.0f * (xy + wz);
+    float r11 = 1.0f - 2.0f * (xx + zz);
+    float r12 = 2.0f * (yz - wx);
+
+    // R20 R21 R22
+    float r20 = 2.0f * (xz - wy);
+    float r21 = 2.0f * (yz + wx);
+    float r22 = 1.0f - 2.0f * (xx + yy);
+
+    // -----------------------------
+    // AABB half-extents for rotated ellipsoid:
+    // ex = |R00|*sx + |R01|*sy + |R02|*sz, etc.
+    // -----------------------------
+    float ex = fabsf(r00) * sx + fabsf(r01) * sy + fabsf(r02) * sz + AABB_PAD;
+    float ey = fabsf(r10) * sx + fabsf(r11) * sy + fabsf(r12) * sz + AABB_PAD;
+    float ez = fabsf(r20) * sx + fabsf(r21) * sy + fabsf(r22) * sz + AABB_PAD;
+
+    // Store
+    OptixAabb out;
+    out.minX = cx - ex; out.minY = cy - ey; out.minZ = cz - ez;
+    out.maxX = cx + ex; out.maxY = cy + ey; out.maxZ = cz + ez;
+    aabbs[i] = out;
 }
 
-void compute_primitive_aabbs(const Primitives& prims, OptixAabb* aabbs) {
+void compute_primitive_aabbs(const Primitives& prims, OptixAabb* aabbs)
+{
     int grid = (prims.num_prims + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    compute_primitive_bounds_kernel<<<grid, BLOCK_SIZE>>>(
+    compute_primitive_bounds_kernel_opt<<<grid, BLOCK_SIZE>>>(
         prims.means,
         prims.scales,
         prims.quats,
-        prims.num_prims, aabbs);
+        prims.num_prims,
+        aabbs);
     CUDA_SYNC_CHECK();
 }

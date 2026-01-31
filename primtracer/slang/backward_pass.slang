@@ -2,7 +2,7 @@
 // Optimizations: per-ray context caching, ping-pong hit buffer, pure backward step
 
 import tensor_utils;
-import ellipsoid_intersect;
+import math_utils;
 import volume_integrator;
 import spherical_harmonics;
 
@@ -57,7 +57,7 @@ inline int compute_sh_deg(in Primitives prims)
 // -----------------------------------------------------------------------------
 // Sample Computation
 // -----------------------------------------------------------------------------
-// Hit encoding: hit_id = prim_idx * 2 + hit_type (exit=0, entry=1)
+// Hit encoding: hit_id = prim_idx * 2 + hit_type (entry=0, exit=1)
 // Clamp rule: entry -> max(t, tmin), exit -> min(t, tmax)
 
 [Differentiable]
@@ -70,7 +70,7 @@ SamplePoint compute_sample(
     float3 color = eval_color(rayd, feat);
     float2 t_range = ray_intersect_ellipsoid(rayo, rayd, mean, scale, quat);
 
-    bool is_entry = (hit_type == 1);
+    bool is_entry = (hit_type == 0);
     float t = is_entry ? max(t_range.x, tmin) : min(t_range.y, tmax);
     float signed_density = is_entry ? density : -density;
 
