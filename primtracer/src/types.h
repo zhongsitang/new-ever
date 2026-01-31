@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optix.h>
 
@@ -21,12 +22,11 @@
 // Basic Types
 // =============================================================================
 
-/// Slang StructuredBuffer layout: {T* data, int32_t size}
-/// Using int32_t for stable cross-platform ABI with Slang
+/// Slang StructuredBuffer layout (CUDA): {T* data, size_t count}
 template <typename T>
 struct StructuredBuffer {
     T* data;
-    int32_t size;
+    size_t size;
 };
 
 // =============================================================================

@@ -163,12 +163,15 @@ void RayTracer::update_primitives(const Primitives& prims) {
     prims_ = prims;
     accel_->rebuild(prims);
 
+    const size_t num_prims_sz = prims_.num_prims;
+    const size_t feature_count_sz = prims_.feature_count();
+    
     // Update params with primitive data
-    params_.means = {prims_.means, prims_.num_prims};
-    params_.scales = {prims_.scales, prims_.num_prims};
-    params_.quats = {prims_.quats, prims_.num_prims};
-    params_.densities = {prims_.densities, prims_.num_prims};
-    params_.features = {prims_.features, prims_.feature_count()};
+    params_.means = {prims_.means, num_prims_sz};
+    params_.scales = {prims_.scales, num_prims_sz};
+    params_.quats = {prims_.quats, num_prims_sz};
+    params_.densities = {prims_.densities, num_prims_sz};
+    params_.features = {prims_.features, feature_count_sz};
     params_.sh_degree = prims_.sh_degree;
 }
 
@@ -190,22 +193,26 @@ void RayTracer::trace_rays(
 
     CUDA_CHECK(cudaSetDevice(device_));
 
+    const size_t num_rays_sz = num_rays;
+    const size_t num_prims_sz = prims_.num_prims;
+    const size_t hit_collection_sz = size_t(num_rays) * size_t(max_hits);
+
     // Ray buffers
-    params_.ray_origins = {const_cast<float*>(ray_origins), num_rays};
-    params_.ray_directions = {const_cast<float*>(ray_directions), num_rays};
-    params_.tmax = {const_cast<float*>(tmax), num_rays};
+    params_.ray_origins = {const_cast<float*>(ray_origins), num_rays_sz};
+    params_.ray_directions = {const_cast<float*>(ray_directions), num_rays_sz};
+    params_.tmax = {const_cast<float*>(tmax), num_rays_sz};
 
     // Output buffers
-    params_.image = {color_out, num_rays};
-    params_.depth = {depth_out, num_rays};
+    params_.image = {color_out, num_rays_sz};
+    params_.depth = {depth_out, num_rays_sz};
 
     // Backward state buffers
-    params_.last_state = {saved.last_state, num_rays};
-    params_.last_contrib = {saved.last_contrib, num_rays};
-    params_.last_prim = {saved.last_prim, num_rays};
-    params_.prim_hits = {saved.prim_hits, prims_.num_prims};
-    params_.ray_hits = {saved.ray_hits, num_rays};
-    params_.hit_collection = {saved.hit_collection, num_rays * max_hits};
+    params_.last_state = {saved.last_state, num_rays_sz};
+    params_.last_contrib = {saved.last_contrib, num_rays_sz};
+    params_.last_prim = {saved.last_prim, num_rays_sz};
+    params_.prim_hits = {saved.prim_hits, num_prims_sz};
+    params_.ray_hits = {saved.ray_hits, num_rays_sz};
+    params_.hit_collection = {saved.hit_collection, hit_collection_sz};
 
     // Scalar parameters
     params_.max_hits = max_hits;

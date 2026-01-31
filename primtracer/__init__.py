@@ -143,7 +143,6 @@ def trace_rays(
         (color, depth) or (color, depth, extras) if return_extras=True
     """
     INT32_MAX = 2**31 - 1
-    MAX_HIT_COLLECTION = 128 * 1024 * 1024  # 128M elements (~512MB for int32)
 
     N = mean.shape[0]
     M = rayo.shape[0]
@@ -156,10 +155,10 @@ def trace_rays(
             f"num_primitives ({N}) exceeds maximum ({max_primitives}) "
             f"for sh_count={sh_count}"
         )
-    if M * max_hits > MAX_HIT_COLLECTION:
+    if M * max_hits > INT32_MAX:
         raise ValueError(
             f"num_rays * max_hits ({M} * {max_hits} = {M * max_hits}) "
-            f"exceeds maximum ({MAX_HIT_COLLECTION})"
+            f"exceeds maximum ({INT32_MAX})"
         )
 
     if isinstance(tmax, (int, float)):
