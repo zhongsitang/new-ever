@@ -16,13 +16,15 @@
 // Volume Integrator for Ellipsoid Primitive Ray Tracing
 // =============================================================================
 //
-// This module implements volume rendering integration for ellipsoid primitives.
-// Each ellipsoid contributes to the integral when a ray passes through it:
-// - At entry point: adds +density to the accumulated density field
-// - At exit point: adds -density to the accumulated density field
+// Volume rendering following instant-ngp style:
+//   alpha = 1 - exp(-sigma * dt)      // Beer-Lambert
+//   weight = T * alpha                 // T = 1 - accumulated_alpha
+//   color += weight * rgb
+//   accumulated_alpha += weight
 //
-// The accumulated density between entry/exit points determines the opacity
-// contribution of each ellipsoid segment along the ray.
+// For ellipsoid primitives, we process boundary events:
+//   - Entry: sigma += density, weighted_rgb += density * rgb
+//   - Exit:  sigma -= density, weighted_rgb -= density * rgb
 // =============================================================================
 
 import math_utils;
@@ -31,80 +33,94 @@ import math_utils;
 // Core Data Structures
 // =============================================================================
 
-/// Volume rendering state per ray (48 bytes, 16-byte aligned)
+/// Volume rendering state per ray (instant-ngp style)
 ///
-/// Memory layout must match C++ IntegratorState in types.h
-/// Using float4 for C to avoid float3 alignment issues between C++ and Slang
+/// Memory layout: 48 bytes, 16-byte aligned
 struct IntegratorState : IDifferentiable
 {
-    float4 contrib;              // density, r*d, g*d, b*d
-    float4 C;                    // accumulated color RGB (w unused, for alignment)
-    float logT;                  // log(T) = -τ_total, always ≤ 0
-    float depth_num;             // depth numerator (divide by alpha for expected depth)
-    float t;                     // current t
-    float _pad;                  // padding to 48 bytes
+    float4 color;        // (r, g, b, accumulated_alpha)
+    float4 contrib;      // (sigma, weighted_r, weighted_g, weighted_b)
+    float t;             // current ray parameter
+    float depth_num;     // depth numerator for expected depth
+    float _pad0;
+    float _pad1;
 };
 
-/// Sample point along a ray, representing an ellipsoid boundary crossing.
+/// Sample point at ellipsoid boundary crossing.
 ///
-/// When a ray crosses an ellipsoid boundary:
-/// - Entry (hit_type=1): contrib.x = +density
-/// - Exit (hit_type=0): contrib.x = -density
-/// The RGB components are density-weighted: contrib.yzw = sign * density * color
+/// At entry: delta = (+density, +density*r, +density*g, +density*b)
+/// At exit:  delta = (-density, -density*r, -density*g, -density*b)
 struct SamplePoint : IDifferentiable
 {
-    float t;        // Ray parameter at this sample
-    float4 contrib; // (signed_density, r*signed_density, g*signed_density, b*signed_density)
+    float t;             // ray parameter at boundary
+    float4 delta;        // (delta_sigma, delta_r, delta_g, delta_b)
 }
 
 // =============================================================================
 // Volume Integration
 // =============================================================================
-//
-// Volume rendering equation (discrete form):
-//   C = Σ T_i × α_i × c_i
-//   where T_i = exp(-Σ τ_j) is transmittance, α_i = 1-exp(-τ_i) is opacity
-//
-// Key insight: We process hits in sorted order. Between consecutive hits,
-// the density field is constant (sum of overlapping ellipsoids' densities).
-// So we integrate each segment with constant density, then update density
-// at the boundary.
-//
-// =============================================================================
+
+/// Mean position offset within segment [t, t+dt] under exponential attenuation.
+///
+/// offset = dt * (1/x - 1/(e^x - 1)),  where x = sigma * dt
+///
+/// Taylor expansion for |x| < 1e-3:
+///   offset = dt * (1/2 - x/12 + x²/720 - ...)
+///
+/// Asymptotic: x → 0: dt/2,  x → ∞: dt/x = 1/sigma
+[Differentiable]
+float calc_depth_offset(float sigma, float dt)
+{
+    float x = sigma * dt;
+
+    if (abs(x) < 1e-3f) {
+        return dt * (0.5f - x * (1.0f / 12.0f) + x * x * (1.0f / 720.0f));
+    }
+
+    return dt * (1.0f / x - 1.0f / expm1(x));
+}
 
 /// Process one volume integration step at a boundary crossing.
 ///
-/// Volume rendering for segment [prev_t, curr_t] with constant density σ:
-///   τ = σ × (curr_t - prev_t)           // optical depth
-///   T_new = T_old × exp(-τ)             // transmittance update
-///   C_new = C_old + T_old × α × color   // color accumulation (α = 1-exp(-τ))
-///
-/// After processing, update contrib for next segment.
+/// For segment [state.t, sample.t] with constant density sigma:
+///   alpha = 1 - exp(-sigma * dt)
+///   weight = T * alpha, where T = 1 - accum_alpha
+///   color.rgb += weight * rgb
+///   color.a += weight
 [Differentiable]
 IntegratorState integrate_step(
     in IntegratorState state,
     in SamplePoint sample)
 {
-    IntegratorState new_state = state;
+    IntegratorState new_state;
 
-    // --- Step 1: Integrate segment [state.t, sample.t] with current density ---
-    const float dt = max(sample.t - state.t, 0.f);
-    const float sigma = state.contrib.x;
-    const float tau = max(sigma * dt, 0.f);
-    const float3 color = safe_div(state.contrib.yzw, sigma);
+    // --- Step 1: Integrate segment [state.t, sample.t] ---
+    float dt = max(sample.t - state.t, 0.0f);
 
-    new_state.logT = state.logT - tau;
+    if (dt < TINY_VAL) {
+        new_state.color = state.color;
+        new_state.depth_num = state.depth_num;
+    } else {
+        // Segment properties
+        float sigma = state.contrib.x;
+        float3 rgb = safe_div(state.contrib.yzw, sigma);
+        float alpha = -expm1(-sigma * dt);  // 1 - exp(-sigma * dt)
 
-    const float alpha = -safe_expm1(-tau);
-    const float T = safe_exp(state.logT);
-    const float weight = clip(alpha * T, 0.f, 1.f);
-    new_state.C.xyz = state.C.xyz + weight * color;
+        // Transmittance T = 1 - accum_alpha
+        float T = 1.0f - state.color.a;
+        float weight = T * alpha;
 
-    const float depth_term = safe_div(alpha - tau * safe_exp(-tau), sigma);
-    new_state.depth_num = state.depth_num + T * (state.t * alpha + depth_term);
+        // Accumulate color and alpha
+        new_state.color.rgb = state.color.rgb + weight * rgb;
+        new_state.color.a = state.color.a + weight;
+
+        // Depth accumulation (exact mean position within segment)
+        float t_mean = state.t + calc_depth_offset(sigma, dt);
+        new_state.depth_num = state.depth_num + weight * t_mean;
+    }
 
     // --- Step 2: Update density field for next segment ---
-    new_state.contrib = state.contrib + sample.contrib;
+    new_state.contrib = state.contrib + sample.delta;
     new_state.t = sample.t;
 
     return new_state;
@@ -112,32 +128,49 @@ IntegratorState integrate_step(
 
 /// Reconstruct previous state from current state (inverse of integrate_step).
 /// Used in backward pass to recover intermediate states without storing them.
+///
+/// Forward pass:
+///   weight = T_prev * alpha
+///   T_new = T_prev - weight = T_prev * (1 - alpha)
+///
+/// Inverse (solve for T_prev):
+///   T_prev = T_new / (1 - alpha)
+///   weight = T_prev * alpha
 IntegratorState invert_step(
     in IntegratorState new_state,
     in SamplePoint new_sample,
     in SamplePoint prev_sample)
 {
-    IntegratorState prev_state = new_state;
+    IntegratorState prev_state;
 
     // --- Undo Step 2: Recover previous contrib and t ---
-    prev_state.contrib = new_state.contrib - new_sample.contrib;  // subtract instead of add
+    prev_state.contrib = new_state.contrib - new_sample.delta;
     prev_state.t = prev_sample.t;
 
     // --- Undo Step 1: Subtract segment's contribution ---
-    const float dt = max(new_sample.t - prev_sample.t, 0.f);
-    const float sigma = prev_state.contrib.x;
-    const float tau = max(sigma * dt, 0.f);
-    const float3 color = safe_div(prev_state.contrib.yzw, sigma);
+    float dt = max(new_sample.t - prev_sample.t, 0.0f);
 
-    prev_state.logT = min(new_state.logT + tau, 0.f);  // add tau, clamp to ≤0
+    if (dt < TINY_VAL) {
+        prev_state.color = new_state.color;
+        prev_state.depth_num = new_state.depth_num;
+    } else {
+        // Segment properties
+        float sigma = prev_state.contrib.x;
+        float3 rgb = safe_div(prev_state.contrib.yzw, sigma);
+        float alpha = -expm1(-sigma * dt);
 
-    const float alpha = -safe_expm1(-tau);
-    const float T = safe_exp(prev_state.logT);  // use recovered logT
-    const float weight = clip(alpha * T, 0.f, 1.f);
-    prev_state.C.xyz = new_state.C.xyz - weight * color;  // subtract
+        // Recover weight
+        float T_new = 1.0f - new_state.color.a;
+        float T_prev = safe_div(T_new, 1.0f - alpha);
+        float weight = T_prev * alpha;
 
-    const float depth_term = safe_div(alpha - tau * safe_exp(-tau), sigma);
-    prev_state.depth_num = new_state.depth_num - T * (prev_sample.t * alpha + depth_term);  // subtract
+        // Subtract segment contribution
+        prev_state.color.rgb = new_state.color.rgb - weight * rgb;
+        prev_state.color.a = new_state.color.a - weight;
+
+        float t_mean = prev_sample.t + calc_depth_offset(sigma, dt);
+        prev_state.depth_num = new_state.depth_num - weight * t_mean;
+    }
 
     return prev_state;
 }
@@ -149,23 +182,18 @@ IntegratorState invert_step(
 /// Final rendered output for a ray.
 struct RenderOutput : IDifferentiable
 {
-    float3 C;    // Accumulated color
-    float alpha; // Opacity (1 - transmittance)
-    float depth; // Expected depth
+    float4 color; // (r, g, b, alpha)
+    float depth;  // Expected depth
 };
 
 /// Extract final render output from volume integration state.
-///
-/// Computes:
-///   - alpha = 1 - T (opacity from transmittance)
-///   - depth = E[t] = depth_num / alpha (expected depth, or 0 if transparent)
 [Differentiable]
 RenderOutput extract_output(in IntegratorState state)
 {
     const float ALPHA_THRESHOLD = 1e-6f;
 
-    float alpha = -safe_expm1(state.logT);  // 1 - exp(logT)
+    float alpha = state.color.a;
     float depth = (alpha < ALPHA_THRESHOLD) ? 0.0f : safe_div(state.depth_num, alpha);
 
-    return { state.C.xyz, alpha, depth };
+    return { state.color, depth };
 }

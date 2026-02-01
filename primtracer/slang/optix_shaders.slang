@@ -142,8 +142,11 @@ SamplePoint create_sample(uint hit_id, float t, float3 ray_dir)
     uint prim_idx = hit_id >> 1;
     float density = densities[prim_idx];
     float signed_density = ((hit_id & 1) == 0) ? density : -density;  // entry=+, exit=-
-    float3 color = eval_color(ray_dir, get_feats(features, prim_idx, sh_degree));
-    return { t, float4(signed_density, signed_density * color) };
+    float3 rgb = eval_color(ray_dir, get_feats(features, prim_idx, sh_degree));
+    SamplePoint sample;
+    sample.t = t;
+    sample.delta = float4(signed_density, signed_density * rgb);
+    return sample;
 }
 
 /// Insert hit maintaining (t, hit_id) order.
@@ -228,7 +231,7 @@ void render_volume()
     uint num_rays_dim = DispatchRaysDimensions().x;
 
     float3 ray_origin = load_float3(ray_origins, ray_idx);
-    float3 ray_dir = l2_normalize(load_float3(ray_directions, ray_idx));
+    float3 ray_dir = normalize(load_float3(ray_directions, ray_idx));
     float ray_tmin = max(tmin, 0.0f);
     float ray_tmax = tmax[ray_idx];
 
@@ -240,7 +243,11 @@ void render_volume()
     uint hit_id = 0;
     uint next_id = 0;
 
-    while (state.logT > min_logT && iter < max_hits)
+    // Early termination: stop when transmittance T = 1 - alpha drops below threshold
+    // min_logT = log(min_transmittance), so max_alpha = 1 - exp(min_logT)
+    float max_alpha = 1.0f - exp(min_logT);
+
+    while (state.color.a < max_alpha && iter < max_hits)
     {
         HitBuffer buf = init_hit_buffer(next_id);
         TraceRay(traversable, RAY_FLAG_NONE, 0xff, 0, 0, 0,
@@ -267,7 +274,7 @@ void render_volume()
             hit_collection[ray_idx + iter * num_rays_dim] = hit_id;
             iter++;
 
-            if (!(state.logT > min_logT && iter < max_hits))
+            if (!(state.color.a < max_alpha && iter < max_hits))
                 break;
         }
         if (done)
@@ -276,12 +283,12 @@ void render_volume()
 
     // Output
     let output = extract_output(state);
-    store_float4(image, ray_idx, float4(output.C, output.alpha));
+    store_float4(image, ray_idx, output.color);
     depth[ray_idx] = output.depth;
 
     // Save for backward pass
     last_state[ray_idx] = state;
     last_prim[ray_idx] = hit_id;
     ray_hits[ray_idx] = iter;
-    store_float4(last_contrib, ray_idx, sample.contrib);
+    store_float4(last_contrib, ray_idx, sample.delta);
 }

@@ -55,19 +55,23 @@ float4 clip(float4 v, float minv, float maxv) {
     );
 }
 
-// Safe division: when |b| < TINY_VAL, return 0 (avoids gradient explosion)
+// Safe division with correct gradients
+// When |b| < TINY_VAL: return 0, gradient = 0 (avoid explosion)
+// Otherwise: return a/b with standard gradients
 void bw_safe_div(inout DifferentialPair<float> a, inout DifferentialPair<float> b, float.Differential R) {
     if (abs(b.p) < TINY_VAL) {
-        a = DifferentialPair<float>(a.p, 0.0f);
-        b = DifferentialPair<float>(b.p, 0.0f);
+        // Zero output, zero gradient
+        a = diffPair(a.p, 0.0f);
+        b = diffPair(b.p, 0.0f);
     } else {
-        a = DifferentialPair<float>(a.p, R / b.p);
-        b = DifferentialPair<float>(b.p, -a.p / (b.p * b.p) * R);
+        // Standard: d(a/b)/da = 1/b, d(a/b)/db = -a/b²
+        a = diffPair(a.p, R / b.p);
+        b = diffPair(b.p, -a.p * R / (b.p * b.p));
     }
 }
 
 [BackwardDerivative(bw_safe_div)]
-float safe_div(in float a, in float b) {
+float safe_div(float a, float b) {
     return abs(b) < TINY_VAL ? 0.0f : a / b;
 }
 
@@ -86,23 +90,9 @@ float3 safe_div(in float3 a, in float3 b) {
     return float3(safe_div(a.x, b.x), safe_div(a.y, b.y), safe_div(a.z, b.z));
 }
 
-// =============================================================================
-// Safe Square Root & Normalization
-// =============================================================================
-
 [Differentiable]
 float safe_sqrt(in float a) {
     return a < TINY_VAL ? 0.0f : sqrt(a);
-}
-
-[Differentiable]
-float3 l2_normalize(float3 x) {
-    return safe_div(x, sqrt(max(dot(x, x), TINY_VAL)));
-}
-
-[Differentiable]
-float4 l2_normalize(float4 x) {
-    return safe_div(x, sqrt(max(dot(x, x), TINY_VAL)));
 }
 
 // =============================================================================
@@ -119,11 +109,11 @@ void bw_log1p(inout DifferentialPair<float> v, float.Differential R) {
 }
 
 [BackwardDerivative(bw_log1p)]
-float _log1p(float v) {
+float log1p(float v) {
     __intrinsic_asm "log1p(($0))";
 }
 
-void bw_log(inout DifferentialPair<float> v, float.Differential R) {
+void bw_safe_log(inout DifferentialPair<float> v, float.Differential R) {
     if (abs(v.p) < TINY_VAL) {
         v = DifferentialPair<float>(v.p, 0.0f);
     } else {
@@ -131,7 +121,7 @@ void bw_log(inout DifferentialPair<float> v, float.Differential R) {
     }
 }
 
-[BackwardDerivative(bw_log)]
+[BackwardDerivative(bw_safe_log)]
 float safe_log(float v) {
     return log(max(v, TINY_VAL));
 }
@@ -141,12 +131,12 @@ void bw_expm1(inout DifferentialPair<float> v, float.Differential R) {
 }
 
 [BackwardDerivative(bw_expm1)]
-float safe_expm1(float v) {
+float expm1(float v) {
     __intrinsic_asm "expm1($0)";
 }
 
 void bw_log1mexp(inout DifferentialPair<float> v, float.Differential R) {
-    v = DifferentialPair<float>(v.p, safe_div(R, safe_expm1(v.p)));
+    v = DifferentialPair<float>(v.p, safe_div(R, expm1(v.p)));
 }
 
 // log1mexp(x) = log(1 - exp(-x)) for x > 0
@@ -155,9 +145,9 @@ void bw_log1mexp(inout DifferentialPair<float> v, float.Differential R) {
 float log1mexp(float x) {
     static const float LOG2 = 0.6931471805599453f;
     if (x > LOG2) {
-        return _log1p(-exp(-x));
+        return log1p(-exp(-x));
     } else {
-        float arg = -safe_expm1(-x);
+        float arg = -expm1(-x);
         return log(max(arg, TINY_VAL));
     }
 }
@@ -182,67 +172,78 @@ float3 rotate_vector(float3 v, float4 q) {
 }
 
 // =============================================================================
-// Ray-Ellipsoid Intersection
+// Ray-Sphere/Ellipsoid Intersection
 // =============================================================================
 
+/// Intersect ray with axis-aligned ellipsoid at origin.
+/// Ellipsoid: (x/radii.x)² + (y/radii.y)² + (z/radii.z)² = 1
+///
+/// Returns (t0, t1) unsorted, or (-1, -1) if no hit.
+/// Uses closest-point form for discriminant to handle grazing rays.
+[Differentiable]
+float2 isect_ellipsoid(float3 origin, float3 dir, float3 radii)
+{
+    const float2 NO_HIT = float2(-1.0f, -1.0f);
+
+    // Reject degenerate ellipsoids
+    if (!all(abs(radii) > TINY_VAL)) return NO_HIT;
+
+    // Transform to unit sphere space
+    float3 o = origin / radii;
+    float3 d = dir / radii;
+
+    // Quadratic: |o + t*d|² = 1  →  a*t² - 2*b*t + c = 0
+    float a = dot(d, d);
+    if (a < TINY_VAL) return NO_HIT;
+
+    float b = -dot(o, d);  // negated half-b
+    float c = dot(o, o) - 1.0f;
+
+    // Discriminant (closest-point form for stability)
+    float k = b / a;
+    float3 p = o + k * d;
+    float disc = a * (1.0f - dot(p, p));
+    if (disc < 0.0f) return NO_HIT;
+
+    float s = sqrt(disc);
+
+    // Citardauq formula: q = b + sign(b)*√disc
+    float q = b + copysign(s, b);
+
+    // Compute roots with branch for numerical safety
+    if (abs(q) < TINY_VAL) {
+        float t = b / a;
+        return float2(t, t);
+    }
+    return float2(c / q, q / a);
+}
+
 /// Intersect a ray with an arbitrarily transformed ellipsoid.
-/// Returns (t_entry, t_exit) sorted along the ray, or (-1, -1) if no hit.
+/// Returns (t_near, t_far) sorted along the ray, or (-1, -1) if no hit.
 ///
-/// Assumptions:
-///   - ray_dir is unit length
-///   - quat encodes ellipsoid rotation (local → world)
-///   - scale gives ellipsoid radii along its local axes
-///
-/// Method:
-///   Transform the ray into the ellipsoid's local space, scale the ellipsoid
-///   to a unit sphere, then solve the standard ray–sphere quadratic robustly.
+/// Parameters:
+///   - ray_origin, ray_dir: ray in world space (ray_dir should be unit length)
+///   - center: ellipsoid center in world space
+///   - scale: ellipsoid radii along its local axes
+///   - quat: rotation quaternion (local → world)
 [Differentiable]
 float2 ray_intersect_ellipsoid(
     in float3 ray_origin,
-    in float3 ray_dir, // unit vector
+    in float3 ray_dir,
     in float3 center,
     in float3 scale,
-    in float4 quat,       // local → world rotation
-    in float eps = 1e-6f) // numerical tolerance (float32-safe)
+    in float4 quat)
 {
-    // Normalize quaternion and compute inverse (world → local rotation)
-    float4 q = l2_normalize(quat);
+    // Normalize quaternion
+    float4 q = length(quat) < TINY_VAL ? float4(1, 0, 0, 0) : normalize(quat);
     float4 qinv = quat_conjugate(q);
 
     // Transform ray into ellipsoid local space
     float3 ro = rotate_vector(ray_origin - center, qinv);
     float3 rd = rotate_vector(ray_dir, qinv);
 
-    // Prevent degenerate radii (very small scale causes numeric blow-up)
-    float3 s = max(abs(scale), eps);
-    float3 inv_s = 1.0f / s;
-
-    // Map ellipsoid to unit sphere
-    float3 oc = ro * inv_s;
-    float3 d = rd * inv_s;
-
-    // Solve |oc + t*d|^2 = 1  →  a t^2 + 2 b t + c = 0
-    float a = dot(d, d);
-    float b = dot(oc, d);
-
-    // Degenerate direction after scaling → no reliable intersection
-    const float eps_a = 1e-12f;
-    if (a < eps_a) return float2(-1.0f, -1.0f);
-
-    // Stable intersection using closest-approach distance (avoids b*b - a*c)
-    float t0 = -b / a;
-    float3 p = oc + t0 * d;
-    float d2 = dot(p, p);
-
-    // Reject if closest point is outside unit sphere (with tolerance)
-    if (d2 > 1.0f + eps) return float2(-1.0f, -1.0f);
-
-    float thc = sqrt(max(1.0f - d2, 0.0f));
-    float inv_sqrt_a = rsqrt(a);
-
-    float t0_hit = t0 - thc * inv_sqrt_a;
-    float t1_hit = t0 + thc * inv_sqrt_a;
+    float2 t = isect_ellipsoid(ro, rd, scale);
 
     // Sort entry/exit
-    return float2(min(t0_hit, t1_hit), max(t0_hit, t1_hit));
+    return float2(min(t.x, t.y), max(t.x, t.y));
 }

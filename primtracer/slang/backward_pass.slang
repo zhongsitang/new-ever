@@ -67,14 +67,17 @@ SamplePoint compute_sample(
     float density, Features feat,
     no_diff int hit_type, no_diff float tmin, no_diff float tmax)
 {
-    float3 color = eval_color(rayd, feat);
+    float3 rgb = eval_color(rayd, feat);
     float2 t_range = ray_intersect_ellipsoid(rayo, rayd, mean, scale, quat);
 
     bool is_entry = (hit_type == 0);
     float t = is_entry ? max(t_range.x, tmin) : min(t_range.y, tmax);
     float signed_density = is_entry ? density : -density;
 
-    return { t, float4(signed_density, signed_density * color) };
+    SamplePoint sample;
+    sample.t = t;
+    sample.delta = float4(signed_density, signed_density * rgb);
+    return sample;
 }
 
 // -----------------------------------------------------------------------------
@@ -181,8 +184,7 @@ void bw_trace_rays(
     var dp_state = diffPair(state, {});
 
     RenderOutput.Differential dL_out;
-    dL_out.C = float3(dL_doutputs[ray_idx, 0], dL_doutputs[ray_idx, 1], dL_doutputs[ray_idx, 2]);
-    dL_out.alpha = dL_doutputs[ray_idx, 3];
+    dL_out.color = float4(dL_doutputs[ray_idx, 0], dL_doutputs[ray_idx, 1], dL_doutputs[ray_idx, 2], dL_doutputs[ray_idx, 3]);
     dL_out.depth = dL_doutputs[ray_idx, 4];
     bwd_diff(extract_output)(dp_state, dL_out);
 
@@ -211,7 +213,7 @@ void bw_trace_rays(
         else
         {
             sampBuf[prev].t = ray.tmin;
-            sampBuf[prev].contrib = float4(0.f);
+            sampBuf[prev].delta = float4(0.f);
         }
 
         // Compute previous state and run backward step

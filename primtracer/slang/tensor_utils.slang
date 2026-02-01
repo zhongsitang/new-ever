@@ -89,12 +89,12 @@ void add_float3(TensorView<float> view, uint i, uint j, float3 val) {
 /// Load IntegratorState from TensorView (48 bytes = 12 floats).
 IntegratorState get_state(TensorView<float> view, uint idx) {
     IntegratorState state;
-    state.contrib = float4(view[idx, 0], view[idx, 1], view[idx, 2], view[idx, 3]);
-    state.C = float4(view[idx, 4], view[idx, 5], view[idx, 6], view[idx, 7]);
-    state.logT = view[idx, 8];
+    state.color = float4(view[idx, 0], view[idx, 1], view[idx, 2], view[idx, 3]);
+    state.contrib = float4(view[idx, 4], view[idx, 5], view[idx, 6], view[idx, 7]);
+    state.t = view[idx, 8];
     state.depth_num = view[idx, 9];
-    state.t = view[idx, 10];
-    state._pad = view[idx, 11];
+    state._pad0 = view[idx, 10];
+    state._pad1 = view[idx, 11];
     return state;
 }
 

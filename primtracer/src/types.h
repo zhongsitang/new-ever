@@ -55,14 +55,14 @@ struct Primitives {
 // =============================================================================
 
 /// Per-ray volume integrator state (48 bytes, 16-byte aligned).
-/// Using float4 for C to avoid float3 alignment issues with Slang.
+/// instant-ngp style: stores accumulated color and alpha directly.
 struct IntegratorState {
-    float4 contrib;  // (density, r*d, g*d, b*d)
-    float4 C;                    // accumulated color RGB (w unused, for alignment)
-    float logT;                  // log(T) = -τ_total, always ≤ 0
-    float depth_num;             // depth numerator (divide by alpha for expected depth)
-    float t;                     // current ray parameter
-    float _pad;                  // padding to 48 bytes
+    float4 color;        // (r, g, b, accumulated_alpha)
+    float4 contrib;      // (sigma, weighted_r, weighted_g, weighted_b)
+    float t;             // current ray parameter
+    float depth_num;     // depth numerator for expected depth
+    float _pad0;
+    float _pad1;
 };
 
 static_assert(sizeof(IntegratorState) == 48);
