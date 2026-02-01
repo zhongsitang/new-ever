@@ -44,12 +44,12 @@ SH_C0 = 0.28209479177387814
 OUTPUT_DIR = Path(__file__).parent / "output"
 
 
-def _trace(scene, max_hits=500, tmin=None, tmax=None, min_logT=None,
+def _trace(scene, max_hits=500, tmin=None, tmax=None, min_T=None,
            return_extras=False):
     """Wrapper for primtracer.trace_rays with scene dict."""
     tmin_val = scene["tmin"] if tmin is None else tmin
     tmax_val = scene["tmax"] if tmax is None else tmax
-    min_logT_val = math.log(2e-9) if min_logT is None else min_logT
+    min_T_val = 2e-9 if min_T is None else min_T
     return primtracer.trace_rays(
         scene["mean"],
         scene["scale"],
@@ -60,7 +60,7 @@ def _trace(scene, max_hits=500, tmin=None, tmax=None, min_logT=None,
         scene["rayd"],
         tmin=tmin_val,
         tmax=tmax_val,
-        min_logT=min_logT_val,
+        min_T=min_T_val,
         max_hits=max_hits,
         return_extras=return_extras,
     )

@@ -84,7 +84,7 @@ RWStructuredBuffer<int> hit_collection;
 // Scalars (order must match C++ LaunchParams)
 int sh_degree;
 int max_hits;
-float min_logT;
+float min_T;
 float tmin;
 
 // Acceleration structure
@@ -244,8 +244,8 @@ void render_volume()
     uint next_id = 0;
 
     // Early termination: stop when transmittance T = 1 - alpha drops below threshold
-    // min_logT = log(min_transmittance), so max_alpha = 1 - exp(min_logT)
-    float max_alpha = 1.0f - exp(min_logT);
+    // min_T = minimum transmittance, so max_alpha = 1 - min_T
+    float max_alpha = 1.0f - min_T;
 
     while (state.color.a < max_alpha && iter < max_hits)
     {

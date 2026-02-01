@@ -181,7 +181,7 @@ void RayTracer::trace_rays(
     const float* tmax,
     float tmin,
     int32_t num_rays,
-    float min_logT,
+    float min_T,
     int32_t max_hits,
     float* color_out,
     float* depth_out,
@@ -216,7 +216,7 @@ void RayTracer::trace_rays(
 
     // Scalar parameters
     params_.max_hits = max_hits;
-    params_.min_logT = min_logT;
+    params_.min_T = min_T;
     params_.tmin = tmin;
 
     params_.handle = accel_->handle();
