@@ -188,7 +188,7 @@ void intersect_ellipsoid()
     float t_exit = min(t.y, RayTCurrent());
 
     // Skip invalid intersections
-    if (t_exit - t_entry < 1e-6f || t_exit < cur_t)
+    if (t_exit - t_entry < TINY_VAL || t_exit < cur_t)
         return;
 
     // Report hit at t_exit

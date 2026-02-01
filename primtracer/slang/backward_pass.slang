@@ -174,7 +174,7 @@ void bw_trace_rays(
     // Load per-ray context
     RayCtx ray;
     ray.rayo = get_float3(rays.origins, ray_idx);
-    ray.rayd = get_float3(rays.directions, ray_idx);
+    ray.rayd = normalize(get_float3(rays.directions, ray_idx));
     ray.tmin = rays.tmin;
     ray.tmax = rays.tmax[ray_idx];
     ray.sh_deg = compute_sh_deg(prims);

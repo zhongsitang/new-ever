@@ -33,6 +33,10 @@ import math_utils;
 // Core Data Structures
 // =============================================================================
 
+// Clamp sigma*dt upper bound to avoid exp overflow and 1-alpha underflow.
+// exp(-16) ≈ 1.1e-7, close to TINY_VAL.
+static const float SIGMA_DT_MAX = 16.0f;
+
 /// Volume rendering state per ray (instant-ngp style)
 ///
 /// Memory layout: 48 bytes, 16-byte aligned
@@ -71,7 +75,7 @@ struct SamplePoint : IDifferentiable
 [Differentiable]
 float calc_depth_offset(float sigma, float dt)
 {
-    float x = sigma * dt;
+    float x = min(sigma * dt, SIGMA_DT_MAX);
 
     if (abs(x) < 1e-3f) {
         return dt * (0.5f - x * (1.0f / 12.0f) + x * x * (1.0f / 720.0f));
@@ -104,7 +108,8 @@ IntegratorState integrate_step(
         // Segment properties
         float sigma = state.contrib.x;
         float3 rgb = safe_div(state.contrib.yzw, sigma);
-        float alpha = -expm1(-sigma * dt);  // 1 - exp(-sigma * dt)
+        float sigma_dt = min(sigma * dt, SIGMA_DT_MAX);
+        float alpha = -expm1(-sigma_dt);  // 1 - exp(-sigma * dt)
 
         // Transmittance T = 1 - accum_alpha
         float T = 1.0f - state.color.a;
@@ -157,7 +162,8 @@ IntegratorState invert_step(
         // Segment properties
         float sigma = prev_state.contrib.x;
         float3 rgb = safe_div(prev_state.contrib.yzw, sigma);
-        float alpha = -expm1(-sigma * dt);
+        float sigma_dt = min(sigma * dt, SIGMA_DT_MAX);
+        float alpha = -expm1(-sigma_dt);
 
         // Recover weight
         float T_new = 1.0f - new_state.color.a;
